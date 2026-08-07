@@ -100,6 +100,9 @@ class MacOSIntegrationTests(unittest.TestCase):
         )
         self.assertIn("/Library/Input Methods/YunPin.app", sources)
         self.assertIn('"Application Support", "YunPin", "Rime"', sources)
+        self.assertIn("SquirrelApp.userDir.path(percentEncoded: false)", sources)
+        self.assertIn("SquirrelApp.logDir.path(percentEncoded: false)", sources)
+        self.assertNotIn("SquirrelApp.userDir.path()", sources)
         self.assertNotIn("rime.github.io/release/squirrel", sources)
         self.assertIn("encrypted sync is not connected", sources)
 
@@ -172,6 +175,19 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('mktemp -d "$build_root/.source-archive.XXXXXX"', archive)
         self.assertNotIn('${TMPDIR:-/tmp}/yunpin-source', archive)
 
+    def test_installer_is_rooted_and_cannot_relocate_to_a_build_copy(self) -> None:
+        package = (MACOS_DIR / "scripts" / "package-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"$package_root/Library/Input Methods/YunPin.app"', package)
+        self.assertIn('mktemp "$build_root/.package-components.XXXXXX"', package)
+        self.assertNotIn(".package-components.XXXXXX.plist", package)
+        self.assertIn("Set :0:BundleIsRelocatable false", package)
+        self.assertIn('--root "$package_root"', package)
+        self.assertIn('--component-plist "$component_plist"', package)
+        self.assertNotIn('--component "$app"', package)
+        self.assertNotIn('--install-location "/Library/Input Methods"', package)
+
     def test_public_lunar_database_is_the_only_database_exception(self) -> None:
         verify = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(encoding="utf-8")
         self.assertIn('public_lunar_db="$shared_support/lua/lunar.db"', verify)
@@ -196,6 +212,12 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertEqual("preserve-me\n", default.read_text(encoding="utf-8"))
             run(script, "--force", env=env)
             self.assertIn("schema_list", default.read_text(encoding="utf-8"))
+
+    def test_installer_stages_the_locked_public_lunar_database(self) -> None:
+        postinstall = (MACOS_DIR / "package" / "postinstall").read_text(encoding="utf-8")
+        self.assertIn('install -d -m 700 -o "$login_user" "$user_rime/lua"', postinstall)
+        self.assertIn('"$shared/lua/lunar.db" "$user_rime/lua/lunar.db"', postinstall)
+        self.assertIn('install -m 600 -o "$login_user"', postinstall)
 
     def test_shell_scripts_parse(self) -> None:
         scripts = sorted((MACOS_DIR / "scripts").glob("*.sh"))

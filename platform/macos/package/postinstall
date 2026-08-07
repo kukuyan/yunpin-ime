@@ -14,6 +14,8 @@ fi
 user_home="$(/usr/bin/dscl . -read "/Users/$login_user" NFSHomeDirectory | /usr/bin/awk '{print $2}')"
 user_rime="$user_home/Library/Application Support/YunPin/Rime"
 /usr/bin/install -d -m 700 -o "$login_user" "$user_rime"
+/usr/bin/install -d -m 700 -o "$login_user" "$user_rime/lua"
+/usr/bin/install -m 600 -o "$login_user" "$shared/lua/lunar.db" "$user_rime/lua/lunar.db"
 
 for overlay in default.custom.yaml squirrel.custom.yaml rime_ice.custom.yaml; do
   if [[ ! -e "$user_rime/$overlay" ]]; then

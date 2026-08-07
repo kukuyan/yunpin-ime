@@ -13,9 +13,23 @@ package="$output_dir/YunPin-IME-development-preview.pkg"
 
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
 mkdir -p "$output_dir"
+package_root="$(mktemp -d "$build_root/.package-root.XXXXXX")"
+component_plist="$(mktemp "$build_root/.package-components.XXXXXX")"
+cleanup_package_staging() {
+  rm -rf "$package_root"
+  rm -f "$component_plist"
+}
+trap cleanup_package_staging EXIT
+mkdir -p "$package_root/Library/Input Methods"
+ditto "$app" "$package_root/Library/Input Methods/YunPin.app"
+codesign --verify --deep --strict "$package_root/Library/Input Methods/YunPin.app"
+pkgbuild --analyze --root "$package_root" "$component_plist"
+/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$component_plist"
+[[ "$(plutil -extract 0.BundleIsRelocatable raw -o - "$component_plist")" == false ]] || \
+  die "YunPin installer component must not be relocatable"
 pkgbuild \
-  --component "$app" \
-  --install-location "/Library/Input Methods" \
+  --root "$package_root" \
+  --component-plist "$component_plist" \
   --identifier "$YUNPIN_BUNDLE_ID" \
   --version "0.1.0" \
   --scripts "${MACOS_DIR}/package" \

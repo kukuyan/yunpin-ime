@@ -427,8 +427,10 @@ index c603760..3c7c590 100644
          }
 @@ -135,10 +134,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
      squirrelTraits.setCString(Bundle.main.sharedSupportPath!, to: \.shared_data_dir)
-     squirrelTraits.setCString(SquirrelApp.userDir.path(), to: \.user_data_dir)
-     squirrelTraits.setCString(SquirrelApp.logDir.path(), to: \.log_dir)
+-    squirrelTraits.setCString(SquirrelApp.userDir.path(), to: \.user_data_dir)
+-    squirrelTraits.setCString(SquirrelApp.logDir.path(), to: \.log_dir)
++    squirrelTraits.setCString(SquirrelApp.userDir.path(percentEncoded: false), to: \.user_data_dir)
++    squirrelTraits.setCString(SquirrelApp.logDir.path(percentEncoded: false), to: \.log_dir)
 -    squirrelTraits.setCString("Squirrel", to: \.distribution_code_name)
 -    squirrelTraits.setCString("鼠鬚管", to: \.distribution_name)
 +    squirrelTraits.setCString("YunPin", to: \.distribution_code_name)
