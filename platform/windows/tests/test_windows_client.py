@@ -222,6 +222,9 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("boost_1_84_0.7z", package)
         self.assertIn("SOURCE-MANIFEST.sha256", package)
         self.assertIn("Write-SourceCommitMarker", package)
+        self.assertIn("Export-GitSubtree", package)
+        self.assertIn('-Tree "platform/windows"', package)
+        self.assertIn('-Tree "librime-yunpin"', package)
         self.assertIn("privateCandidateSnapshotEnabled = $false", package)
 
     def test_runtime_rename_map_has_no_stock_identity(self) -> None:

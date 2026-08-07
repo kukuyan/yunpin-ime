@@ -74,6 +74,22 @@ function Export-GitTree {
     Remove-Item -LiteralPath $archive -Force
 }
 
+function Export-GitSubtree {
+    param(
+        [Parameter(Mandatory = $true)][string]$Checkout,
+        [Parameter(Mandatory = $true)][string]$Tree,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$ScratchRoot
+    )
+    Reset-GeneratedDirectory -Path $Destination -AllowedParent (Split-Path $Destination -Parent)
+    $archive = Join-Path $ScratchRoot (([IO.Path]::GetFileName($Destination)) + "-" + [guid]::NewGuid().ToString("N") + ".tar")
+    Invoke-Checked -FilePath "git" -ArgumentList @(
+        "-C", $Checkout, "archive", "--format=tar", "--output=$archive", ("HEAD:" + $Tree)
+    )
+    Invoke-Checked -FilePath "tar.exe" -ArgumentList @("-xf", $archive, "-C", $Destination)
+    Remove-Item -LiteralPath $archive -Force
+}
+
 function Write-ZipArchive {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
@@ -235,7 +251,7 @@ foreach ($dependency in $lock.librime.dependencies.PSObject.Properties) {
 }
 Export-GitTree -Checkout (Join-Path $repoRoot "third_party\rime-ice") -Destination (Join-Path $sourceRoot "third_party\rime-ice") -ScratchRoot $scratchRoot
 Write-SourceCommitMarker -Path (Join-Path $sourceRoot "third_party\rime-ice") -Commit $lock.rimeIce.commit
-Copy-TreeContent -Source (Join-Path $repoRoot "librime-yunpin") -Destination (Join-Path $sourceRoot "librime-yunpin")
+Export-GitSubtree -Checkout $repoRoot -Tree "librime-yunpin" -Destination (Join-Path $sourceRoot "librime-yunpin") -ScratchRoot $scratchRoot
 $sourceEngine = Join-Path $sourceRoot "engine"
 New-Item -ItemType Directory -Path $sourceEngine -Force | Out-Null
 foreach ($directory in @("include", "src", "tests")) {
@@ -244,9 +260,9 @@ foreach ($directory in @("include", "src", "tests")) {
 foreach ($file in @(".gitignore", "CMakeLists.txt", "Makefile", "README.md")) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $repoRoot "engine") $file) -Destination $sourceEngine -Force
 }
-Copy-TreeContent -Source (Join-Path $repoRoot "platform\windows") -Destination (Join-Path $sourceRoot "platform\windows")
-Copy-TreeContent -Source (Join-Path $repoRoot "platform\rime") -Destination (Join-Path $sourceRoot "platform\rime")
-Copy-TreeContent -Source (Join-Path $repoRoot "platform\patches\weasel") -Destination (Join-Path $sourceRoot "platform\patches\weasel")
+Export-GitSubtree -Checkout $repoRoot -Tree "platform/windows" -Destination (Join-Path $sourceRoot "platform\windows") -ScratchRoot $scratchRoot
+Export-GitSubtree -Checkout $repoRoot -Tree "platform/rime" -Destination (Join-Path $sourceRoot "platform\rime") -ScratchRoot $scratchRoot
+Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/weasel" -Destination (Join-Path $sourceRoot "platform\patches\weasel") -ScratchRoot $scratchRoot
 foreach ($file in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $file) -Destination $sourceRoot -Force
 }
