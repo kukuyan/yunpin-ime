@@ -5,4 +5,4 @@ schema_list:
   - schema: yunpin_e2e
 
 menu:
-  page_size: 5
+  page_size: 8

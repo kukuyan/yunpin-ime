@@ -4,5 +4,5 @@
 patch:
   "schema_list":
     - schema: rime_ice
-  "menu/page_size": 5
-  "menu/alternative_select_keys": "12345"
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"

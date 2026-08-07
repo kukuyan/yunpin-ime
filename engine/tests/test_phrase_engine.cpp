@@ -152,7 +152,7 @@ void TestSourcePrecedenceAndFirstPageQuota() {
       Entry("base", "基础公司", "gong si", PhraseOrigin::kBase, 0, 500),
   });
 
-  const auto candidates = index.Query("gongsi", 7);
+  const auto candidates = index.Query("gongsi", 8);
   Check(candidates.size() == 7, "all seven matching candidates should return");
   Check(candidates[0].id == "pinned", "manual pin must be first");
   Check(candidates[1].id == "imported",
@@ -161,13 +161,14 @@ void TestSourcePrecedenceAndFirstPageQuota() {
             candidates[3].origin == PhraseOrigin::kPublic &&
             candidates[4].origin == PhraseOrigin::kBase,
         "public then base candidates must fill the first-page quota");
+  const std::size_t first_page_limit = std::min<std::size_t>(8, candidates.size());
   const std::size_t first_page_personal = static_cast<std::size_t>(
-      std::count_if(candidates.begin(), candidates.begin() + 5,
+      std::count_if(candidates.begin(), candidates.begin() + first_page_limit,
                     [](const Candidate& candidate) {
                       return candidate.is_personal();
                     }));
   Check(first_page_personal == 2,
-        "the first five candidates must contain at most two personal items");
+        "the first eight candidates must contain at most two personal items");
   Check(candidates[5].id == "history" && candidates[6].id == "personal",
         "deferred personal candidates must retain deterministic frequency order");
 }

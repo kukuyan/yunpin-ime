@@ -14,7 +14,7 @@ Implemented policy:
 3. personal, migrated, and locally extracted history phrases are ranked by
    device-merged usage count and then static weight;
 4. reviewed public phrases precede the Rime base layer;
-5. the first five candidates contain no more than two personal items;
+5. the first eight candidates contain no more than two personal items;
 6. a pinned phrase with four or more syllables is treated as long and recalled
    after two complete full-pinyin syllables or four initials; two- and
    three-syllable pins retain ordinary two-initial recall;

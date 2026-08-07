@@ -683,7 +683,10 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     return left.id < right.id;
   });
 
-  const std::size_t first_page_target = std::min<std::size_t>(5, limit);
+  // Keep the on-screen quota consistent with menu/page_size defaults.
+  constexpr std::size_t kFirstPageCandidateCount = 8;
+  const std::size_t first_page_target =
+      std::min<std::size_t>(kFirstPageCandidateCount, limit);
   std::vector<Candidate> result;
   result.reserve(std::min(limit, ranked.size()));
   std::vector<bool> selected(ranked.size(), false);

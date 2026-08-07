@@ -116,10 +116,10 @@ class PhraseIndex {
   explicit PhraseIndex(std::vector<PhraseEntry> entries);
   PhraseIndex(std::vector<PhraseEntry> entries, FuzzyConfig fuzzy_config);
 
-  // Returns at most limit candidates. The first five positions contain at most
+  // Returns at most limit candidates. The first eight positions contain at most
   // two personal/history/import candidates. If there are not enough public/base
   // candidates to fill that page, the result deliberately contains fewer than
-  // five entries rather than violating the privacy/pollution quota.
+  // eight entries rather than violating the privacy/pollution quota.
   [[nodiscard]] std::vector<Candidate> Query(std::string_view input,
                                              std::size_t limit = 9) const;
 

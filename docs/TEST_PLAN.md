@@ -5,7 +5,7 @@
 - Full Pinyin, compact Pinyin, explicit apostrophe boundaries, and ambiguous segmentation (`xian` versus `xi'an`).
 - Initials and common fuzzy pairs, with negative checks that one to three initials cannot promote a pinned long phrase.
 - Pinned, demoted, learned-once, learned-twice, imported, public, base, and tombstoned candidates.
-- At most two personal entries among the first five.
+- At most two personal entries among the first eight.
 - `中国石化销售股份有限公司河北石家庄石油分公司` is top three for `zhongguo...`, `zhongguoshihua...`, and `zgsh...`, and first for the complete Pinyin.
 - 50,000 synthetic personal phrases, warm P95 no more than 20 ms.
 

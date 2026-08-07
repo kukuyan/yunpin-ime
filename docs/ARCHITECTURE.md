@@ -21,7 +21,7 @@ The current shared engine provides Pinyin segmentation, full-Pinyin prefix and i
 
 ## Candidate policy
 
-The first page contains five entries. At most two are personal. Within the merged stream:
+The first page contains eight entries. At most two are personal. Within the merged stream:
 
 1. Explicitly pinned personal phrases.
 2. Eligible high-frequency personal, historical, or imported phrases.

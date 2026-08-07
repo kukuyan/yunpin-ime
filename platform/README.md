@@ -26,7 +26,7 @@ checkout must verify each commit before applying the ordered patches described
 in `patches/README.md`. The repository contains no proprietary Sogou resource,
 skin, icon, dictionary, or code.
 
-The Rime overlays provide a compact horizontal, numbered five-candidate panel
+The Rime overlays provide a compact horizontal, numbered eight-candidate panel
 with independent light and dark palettes. It is an original YunPin appearance,
 not a copy of a Sogou skin.
 
