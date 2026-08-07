@@ -175,6 +175,13 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('mktemp -d "$build_root/.source-archive.XXXXXX"', archive)
         self.assertNotIn('${TMPDIR:-/tmp}/yunpin-source', archive)
 
+    def test_corresponding_source_exports_only_committed_project_files(self) -> None:
+        archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('git -C "$REPO_ROOT" archive HEAD --', archive)
+        self.assertNotIn('cp -R "${REPO_ROOT}/$path"', archive)
+
     def test_installer_is_rooted_and_cannot_relocate_to_a_build_copy(self) -> None:
         package = (MACOS_DIR / "scripts" / "package-preview.sh").read_text(
             encoding="utf-8"

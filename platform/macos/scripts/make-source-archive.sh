@@ -27,15 +27,15 @@ tar -C "$source_dir" \
   --exclude='librime/dist-yunpin' \
   -cf - . | tar -C "$staging/YunPin-IME/Squirrel" -xf -
 
-for path in \
+# Export only committed files.  A recursive worktree copy also picks up ignored
+# compiler output (for example engine/build after `make test`), which is neither
+# corresponding source nor appropriate release material.
+git -C "$REPO_ROOT" archive HEAD -- \
   LICENSE NOTICE THIRD_PARTY_NOTICES.md \
   platform/LICENSE-BOUNDARIES.md platform/upstream-lock.json \
   platform/macos platform/rime platform/patches/squirrel \
-  engine librime-yunpin; do
-  parent="$staging/YunPin-IME/YunPin/$(dirname "$path")"
-  mkdir -p "$parent"
-  cp -R "${REPO_ROOT}/$path" "$parent/"
-done
+  engine librime-yunpin | \
+  tar -C "$staging/YunPin-IME/YunPin" -xf -
 
 mkdir -p "$staging/YunPin-IME/YunPin/third_party/rime-ice"
 git -C "${REPO_ROOT}/third_party/rime-ice" archive HEAD | \
