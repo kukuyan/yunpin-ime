@@ -173,21 +173,56 @@ foreach ($patchEntry in $lock.weasel.patches) {
 Reset-GeneratedDirectory -Path $weaselSource -AllowedParent $OutputRoot
 Export-GitTree -Checkout $weaselCheckout -Destination $weaselSource -ScratchRoot $scratchRoot
 
-foreach ($patchEntry in $lock.weasel.patches) {
-    $patchPath = Join-Path $repoRoot $patchEntry.path
-    Push-Location $weaselSource
-    try {
-        Invoke-Checked -FilePath "git" -ArgumentList @(
-            "-c", "core.whitespace=cr-at-eol", "apply", "--check",
-            "--ignore-space-change", "--whitespace=error-all", $patchPath
-        )
-        Invoke-Checked -FilePath "git" -ArgumentList @(
-            "-c", "core.whitespace=cr-at-eol", "apply",
-            "--ignore-space-change", "--whitespace=error-all", $patchPath
-        )
-    } finally {
-        Pop-Location
+$previousGitCeilingDirectories = $env:GIT_CEILING_DIRECTORIES
+try {
+    # The generated tree normally lives below the repository in an ignored
+    # build directory.  Without a ceiling, git apply discovers the parent
+    # repository and can return success while silently ignoring these files.
+    # Force standalone patch mode so the generated Weasel tree is the target.
+    $env:GIT_CEILING_DIRECTORIES = $repoRoot
+    foreach ($patchEntry in $lock.weasel.patches) {
+        $patchPath = Join-Path $repoRoot $patchEntry.path
+        Push-Location $weaselSource
+        try {
+            Invoke-Checked -FilePath "git" -ArgumentList @(
+                "-c", "core.whitespace=cr-at-eol", "apply", "--check",
+                "--ignore-space-change", "--whitespace=error-all", $patchPath
+            )
+            Invoke-Checked -FilePath "git" -ArgumentList @(
+                "-c", "core.whitespace=cr-at-eol", "apply",
+                "--ignore-space-change", "--whitespace=error-all", $patchPath
+            )
+        } finally {
+            Pop-Location
+        }
     }
+} finally {
+    if ($null -eq $previousGitCeilingDirectories) {
+        Remove-Item Env:GIT_CEILING_DIRECTORIES -ErrorAction SilentlyContinue
+    } else {
+        $env:GIT_CEILING_DIRECTORIES = $previousGitCeilingDirectories
+    }
+}
+
+$stagedConstants = Get-Content -LiteralPath (Join-Path $weaselSource "include\WeaselConstants.h") -Raw
+$stagedSetup = Get-Content -LiteralPath (Join-Path $weaselSource "WeaselSetup\imesetup.cpp") -Raw
+$stagedGlobals = Get-Content -LiteralPath (Join-Path $weaselSource "WeaselTSF\Globals.cpp") -Raw
+$stagedServer = Get-Content -LiteralPath (Join-Path $weaselSource "WeaselServer\WeaselServerApp.cpp") -Raw
+$requiredIdentities = @(
+    [pscustomobject]@{ Text = $stagedConstants; Marker = '#define WEASEL_CODE_NAME "YunPin"' }
+    [pscustomobject]@{ Text = $stagedConstants; Marker = 'Software\\YunPin\\IME' }
+    [pscustomobject]@{ Text = $stagedSetup; Marker = 'std::wstring srcFileName = L"yunpin"' }
+    [pscustomobject]@{ Text = $stagedSetup; Marker = 'sysPath + L"\\yunpin.dll"' }
+    [pscustomobject]@{ Text = $stagedGlobals; Marker = '0x1c4fbfe5' }
+    [pscustomobject]@{ Text = $stagedServer; Marker = 'YunPinDeployer.exe' }
+)
+foreach ($requiredIdentity in $requiredIdentities) {
+    if (-not ([string]$requiredIdentity.Text).Contains([string]$requiredIdentity.Marker)) {
+        throw "Generated Weasel source is missing YunPin patch marker: $($requiredIdentity.Marker)"
+    }
+}
+if ($stagedServer.Contains('win_sparkle_init')) {
+    throw "Generated Weasel source still enables WinSparkle"
 }
 
 $generatedIcon = Join-Path $weaselSource "resource\yunpin.ico"
@@ -359,6 +394,19 @@ foreach ($requiredOutput in @(
     if (-not (Test-Path $path)) {
         throw "Expected Windows build output is missing: $requiredOutput"
     }
+}
+
+$setupBinaryText = [Text.Encoding]::Unicode.GetString(
+    [IO.File]::ReadAllBytes((Join-Path $weaselSource "output\WeaselSetup.exe"))
+)
+if (-not $setupBinaryText.Contains("yunpin.dll") -or $setupBinaryText.Contains("weasel.dll")) {
+    throw "Built setup binary does not carry the isolated YunPin runtime identity"
+}
+$serverBinaryText = [Text.Encoding]::Unicode.GetString(
+    [IO.File]::ReadAllBytes((Join-Path $weaselSource "output\WeaselServer.exe"))
+)
+if (-not $serverBinaryText.Contains("YunPinDeployer.exe") -or $serverBinaryText.Contains("WeaselDeployer.exe")) {
+    throw "Built server binary does not carry the isolated YunPin runtime identity"
 }
 
 if (-not $SkipPackage) {

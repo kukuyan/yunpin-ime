@@ -143,6 +143,9 @@ class WindowsClientTests(unittest.TestCase):
             'Boost build did not produce required x86/x64 libraries',
             'Join-Path $boostRoot "bin.v2"',
             'Join-Path $boostRoot "stage"',
+            'GIT_CEILING_DIRECTORIES',
+            'Generated Weasel source is missing YunPin patch marker',
+            'Built setup binary does not carry the isolated YunPin runtime identity',
             'Merged librime build did not produce',
             '"weasel.sln", "/m:1"',
             '"/p:Platform=x64"',
@@ -226,6 +229,9 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('-Tree "platform/windows"', package)
         self.assertIn('-Tree "librime-yunpin"', package)
         self.assertIn("privateCandidateSnapshotEnabled = $false", package)
+        self.assertIn("Packaged setup binary has the wrong runtime identity", (
+            WINDOWS / "scripts" / "Test-Package.ps1"
+        ).read_text(encoding="utf-8"))
 
     def test_runtime_rename_map_has_no_stock_identity(self) -> None:
         mapping = self.lock["package"]["runtimeFiles"]

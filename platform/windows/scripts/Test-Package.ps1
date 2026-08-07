@@ -89,6 +89,19 @@ foreach ($entry in $expectedMachines.GetEnumerator()) {
     }
 }
 
+$setupBinaryText = [Text.Encoding]::Unicode.GetString(
+    [IO.File]::ReadAllBytes((Join-Path $runtime "YunPinSetup.exe"))
+)
+if (-not $setupBinaryText.Contains("yunpin.dll") -or $setupBinaryText.Contains("weasel.dll")) {
+    throw "Packaged setup binary has the wrong runtime identity"
+}
+$serverBinaryText = [Text.Encoding]::Unicode.GetString(
+    [IO.File]::ReadAllBytes((Join-Path $runtime "YunPinServer.exe"))
+)
+if (-not $serverBinaryText.Contains("YunPinDeployer.exe") -or $serverBinaryText.Contains("WeaselDeployer.exe")) {
+    throw "Packaged server binary has the wrong runtime identity"
+}
+
 $forbiddenRuntime = @(
     "WinSparkle.dll", "weasel.dll", "weaselx64.dll", "WeaselServer.exe",
     "WeaselDeployer.exe", "WeaselSetup.exe", "install.nsi", "install.bat"
