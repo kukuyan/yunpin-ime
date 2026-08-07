@@ -125,6 +125,7 @@ class WindowsClientTests(unittest.TestCase):
         for required in (
             '"plugins\\librime-yunpin"',
             '$env:RIME_PLUGINS = "librime-yunpin"',
+            'exit code ${LASTEXITCODE}:',
             'Join-Path $engineRoot "include"',
             'Join-Path $engineRoot "src"',
             '".yunpin-source-commit"',
@@ -138,6 +139,7 @@ class WindowsClientTests(unittest.TestCase):
             '"/p:Platform=Win32"',
         ):
             self.assertIn(required, build)
+        self.assertNotIn("exit code $LASTEXITCODE:", build)
         self.assertTrue((ROOT / "librime-yunpin" / "src" / "yunpin_module.cpp").is_file())
         self.assertTrue((ROOT / "engine" / "src" / "phrase_engine.cpp").is_file())
 
