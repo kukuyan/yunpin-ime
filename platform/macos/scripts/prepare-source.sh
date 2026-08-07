@@ -22,8 +22,7 @@ for patch_file in "$patch_dir"/*.patch; do
   git -C "$output" apply --whitespace=error-all "$patch_file"
 done
 
-mv "$output/Rime.icon" "$output/YunPin.icon"
-cp "${MACOS_DIR}/assets/yunpin-mark.svg" "$output/YunPin.icon/Assets/logo.svg"
+cp "${MACOS_DIR}/assets/yunpin-mark.svg" "$output/Rime.icon/Assets/logo.svg"
 cp "${REPO_ROOT}/platform/rime/squirrel/default.custom.yaml" "$output/data/default.custom.yaml"
 cp "${REPO_ROOT}/platform/rime/squirrel/squirrel.custom.yaml" "$output/data/squirrel.custom.yaml"
 cp "${REPO_ROOT}/platform/rime/squirrel/rime_ice.custom.yaml" "$output/data/rime_ice.custom.yaml"
