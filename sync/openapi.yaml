@@ -1,0 +1,642 @@
+# SPDX-License-Identifier: Apache-2.0
+openapi: 3.1.0
+info:
+  title: YunPin encrypted sync relay API
+  version: 1.0.0-dev
+  description: >-
+    A content-blind relay for end-to-end encrypted YunPin state. All byte fields
+    use unpadded base64url unless explicitly documented as 32-character hex IDs.
+servers:
+  - url: http://localhost:8080
+    description: Local development
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: SQLite is reachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    const: ok
+        "503":
+          $ref: "#/components/responses/Error"
+  /v1/accounts:
+    post:
+      operationId: createAccount
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRegistration"
+      responses:
+        "201":
+          description: Account and first device created. Secrets are returned once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountCreated"
+        "400":
+          $ref: "#/components/responses/Error"
+  /v1/accounts/{accountId}/recover:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    post:
+      operationId: recoverAccount
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountRegistration"
+      responses:
+        "201":
+          description: Recovery device created.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [account_id, device_id, device_token]
+                properties:
+                  account_id:
+                    $ref: "#/components/schemas/HexId"
+                  device_id:
+                    $ref: "#/components/schemas/HexId"
+                  device_token:
+                    $ref: "#/components/schemas/OneTimeSecret"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/pairings:
+    post:
+      operationId: createPairing
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "201":
+          description: One-time pairing created for ten minutes.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [pairing_id, pairing_secret, creator_x25519_public_key, expires_at]
+                properties:
+                  pairing_id:
+                    $ref: "#/components/schemas/HexId"
+                  pairing_secret:
+                    $ref: "#/components/schemas/OneTimeSecret"
+                  creator_x25519_public_key:
+                    allOf:
+                      - $ref: "#/components/schemas/Base64Url"
+                    description: Creator public key included in the one-time pairing QR.
+                  expires_at:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/pairings/{pairingId}:
+    parameters:
+      - $ref: "#/components/parameters/PairingId"
+    get:
+      operationId: getPairing
+      description: >-
+        Returns pairing state to the authenticated creating device. After join,
+        the pending device's encrypted display name and public keys are exposed
+        so the creator can derive the X25519 pairing box before approval.
+      responses:
+        "200":
+          description: Pairing state and pending public material.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingStatus"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: joinPairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/DeviceRegistrationFields"
+                - type: object
+                  properties:
+                    pairing_secret:
+                      $ref: "#/components/schemas/SecretInput"
+              unevaluatedProperties: false
+              required: [pairing_secret, device_name_ciphertext, ed25519_public_key, x25519_public_key]
+      responses:
+        "200":
+          description: New device public keys submitted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingState"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/pairings/{pairingId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/PairingId"
+    post:
+      operationId: approvePairing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [encrypted_keyring]
+              properties:
+                encrypted_keyring:
+                  $ref: "#/components/schemas/SealedBoxWire"
+      responses:
+        "200":
+          description: Pairing approved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingState"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/pairings/{pairingId}/claim:
+    parameters:
+      - $ref: "#/components/parameters/PairingId"
+    post:
+      operationId: claimPairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [pairing_secret]
+              properties:
+                pairing_secret:
+                  $ref: "#/components/schemas/SecretInput"
+      responses:
+        "201":
+          description: Device token and encrypted keyring claimed once.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [account_id, device_id, device_token, encrypted_keyring]
+                properties:
+                  account_id:
+                    $ref: "#/components/schemas/HexId"
+                  device_id:
+                    $ref: "#/components/schemas/HexId"
+                  device_token:
+                    $ref: "#/components/schemas/OneTimeSecret"
+                  encrypted_keyring:
+                    $ref: "#/components/schemas/SealedBoxWire"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/sync:
+    post:
+      operationId: sync
+      description: >-
+        Uploads at most 256 signed opaque envelopes and downloads records after
+        cursor. The account and upload device IDs are inferred from the bearer
+        token. Exact sequence replays are idempotent; conflicts and chain gaps
+        are reported per sequence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncRequest"
+      responses:
+        "200":
+          description: Incremental exchange completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/devices:
+    get:
+      operationId: listDevices
+      responses:
+        "200":
+          description: Devices, including revoked records.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [devices]
+                properties:
+                  devices:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/devices/{deviceId}:
+    parameters:
+      - $ref: "#/components/parameters/DeviceId"
+    delete:
+      operationId: revokeDevice
+      responses:
+        "204":
+          description: Device revoked.
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/keyring:
+    get:
+      operationId: getKeyring
+      responses:
+        "200":
+          description: Client-encrypted key epochs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keyrings]
+                properties:
+                  keyrings:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Keyring"
+        "401":
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putKeyring
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [epoch, ciphertext]
+              properties:
+                epoch:
+                  type: integer
+                  format: int64
+                  minimum: 1
+                ciphertext:
+                  $ref: "#/components/schemas/SealedBoxWire"
+      responses:
+        "200":
+          description: Immutable epoch stored or replayed idempotently.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [epoch]
+                properties:
+                  epoch:
+                    type: integer
+                    format: int64
+                    minimum: 1
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-device-token
+  parameters:
+    AccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/HexId"
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/HexId"
+    PairingId:
+      name: pairingId
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/HexId"
+  responses:
+    Error:
+      description: Stable machine-readable error code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    HexId:
+      type: string
+      pattern: "^[0-9a-f]{32}$"
+      examples: ["00112233445566778899aabbccddeeff"]
+    Base64Url:
+      type: string
+      pattern: "^[A-Za-z0-9_-]+$"
+    SecretInput:
+      allOf:
+        - $ref: "#/components/schemas/Base64Url"
+      writeOnly: true
+    OneTimeSecret:
+      allOf:
+        - $ref: "#/components/schemas/Base64Url"
+      readOnly: true
+    Ciphertext:
+      allOf:
+        - $ref: "#/components/schemas/Base64Url"
+    SealedBoxWire:
+      allOf:
+        - $ref: "#/components/schemas/Base64Url"
+      maxLength: 349526
+      description: >-
+        One complete protocol v1 YPBX sealed-box wire blob, unpadded base64url;
+        decoded size is at most 262144 bytes and includes its 33-byte framing.
+    DeviceRegistrationFields:
+      type: object
+      properties:
+        device_name_ciphertext:
+          $ref: "#/components/schemas/Ciphertext"
+        ed25519_public_key:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Exactly 32 bytes after base64url decoding.
+        x25519_public_key:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Exactly 32 bytes after base64url decoding.
+    DeviceRegistration:
+      allOf:
+        - $ref: "#/components/schemas/DeviceRegistrationFields"
+      unevaluatedProperties: false
+      required: [device_name_ciphertext, ed25519_public_key, x25519_public_key]
+    AccountRegistration:
+      allOf:
+        - $ref: "#/components/schemas/DeviceRegistrationFields"
+        - type: object
+          properties:
+            recovery_authentication:
+              allOf:
+                - $ref: "#/components/schemas/SecretInput"
+              description: >-
+                Exactly 32 decoded bytes derived client-side with
+                HKDF-SHA-256 using yunpin-recovery-authentication-v1. This is
+                not the yprec1 recovery key; the relay stores only its SHA-256.
+      unevaluatedProperties: false
+      required: [recovery_authentication, device_name_ciphertext, ed25519_public_key, x25519_public_key]
+    AccountCreated:
+      type: object
+      additionalProperties: false
+      required: [account_id, device_id, device_token]
+      properties:
+        account_id:
+          $ref: "#/components/schemas/HexId"
+        device_id:
+          $ref: "#/components/schemas/HexId"
+        device_token:
+          $ref: "#/components/schemas/OneTimeSecret"
+    PairingState:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [joined, approved]
+    PairingStatus:
+      type: object
+      additionalProperties: false
+      required: [pairing_id, state, expires_at, expired]
+      properties:
+        pairing_id:
+          $ref: "#/components/schemas/HexId"
+        state:
+          type: string
+          enum: [created, joined, approved, claimed]
+        expires_at:
+          type: string
+          format: date-time
+        expired:
+          type: boolean
+        device_name_ciphertext:
+          $ref: "#/components/schemas/Ciphertext"
+        ed25519_public_key:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Present after the pending device joins; exactly 32 decoded bytes.
+        x25519_public_key:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Present after the pending device joins; exactly 32 decoded bytes.
+    EnvelopeWire:
+      type: object
+      properties:
+        version:
+          const: 1
+        device_seq:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775807
+        object_id:
+          $ref: "#/components/schemas/HexId"
+        key_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9223372036854775807
+        previous_hash:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Absent for sequence 1; exactly 32 decoded bytes otherwise.
+        nonce:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Exactly 24 decoded bytes.
+        ciphertext:
+          allOf:
+            - $ref: "#/components/schemas/Ciphertext"
+          description: >-
+            One or more 512-byte padded buckets plus a 16-byte AEAD tag;
+            decoded length is at most 524816 bytes.
+        signature:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Ed25519 signature over canonical-header-CBOR concatenated with ciphertext.
+    EnvelopeUpload:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeWire"
+      unevaluatedProperties: false
+      required: [version, device_seq, object_id, key_epoch, nonce, ciphertext, signature]
+    EnvelopeDownload:
+      allOf:
+        - $ref: "#/components/schemas/EnvelopeWire"
+        - type: object
+          properties:
+            device_id:
+              $ref: "#/components/schemas/HexId"
+            cursor:
+              type: integer
+              format: int64
+              minimum: 1
+      unevaluatedProperties: false
+      required: [version, device_id, device_seq, object_id, key_epoch, nonce, ciphertext, signature, cursor]
+    SyncRequest:
+      type: object
+      additionalProperties: false
+      required: [cursor, ack_cursor]
+      properties:
+        cursor:
+          type: integer
+          format: int64
+          minimum: 0
+        ack_cursor:
+          type: integer
+          format: int64
+          minimum: 0
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 256
+          default: 256
+        envelopes:
+          type: array
+          maxItems: 256
+          items:
+            $ref: "#/components/schemas/EnvelopeUpload"
+    SyncRejection:
+      type: object
+      additionalProperties: false
+      required: [device_seq, code]
+      properties:
+        device_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        code:
+          type: string
+          enum: [sequence_conflict, sequence_gap, previous_hash_mismatch]
+    SyncResponse:
+      type: object
+      additionalProperties: false
+      required: [accepted_sequences, rejected_sequences, envelopes, next_cursor, has_more, current_key_epoch]
+      properties:
+        accepted_sequences:
+          type: array
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+        rejected_sequences:
+          type: array
+          items:
+            $ref: "#/components/schemas/SyncRejection"
+        envelopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnvelopeDownload"
+        next_cursor:
+          type: integer
+          format: int64
+          minimum: 0
+        has_more:
+          type: boolean
+        current_key_epoch:
+          type: integer
+          format: int64
+          minimum: 0
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, name_ciphertext, ed25519_public_key, x25519_public_key, created_at, current, revoked]
+      properties:
+        id:
+          $ref: "#/components/schemas/HexId"
+        name_ciphertext:
+          $ref: "#/components/schemas/Ciphertext"
+        ed25519_public_key:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Public verification key for downloaded envelopes; exactly 32 decoded bytes.
+        x25519_public_key:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Public pairing key; exactly 32 decoded bytes.
+        created_at:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+        revoked:
+          type: boolean
+        revoked_at:
+          type: string
+          format: date-time
+    Keyring:
+      type: object
+      additionalProperties: false
+      required: [epoch, ciphertext, writer_device_id, created_at]
+      properties:
+        epoch:
+          type: integer
+          format: int64
+          minimum: 1
+        ciphertext:
+          $ref: "#/components/schemas/SealedBoxWire"
+        writer_device_id:
+          $ref: "#/components/schemas/HexId"
+        created_at:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string

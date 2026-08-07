@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-08-06",
+  "components": [
+    {
+      "name": "Weasel",
+      "repository": "https://github.com/rime/weasel",
+      "tag": "0.17.4",
+      "commit": "9cc96e20dc71b80876b12f689bb5863c76c2a7ed",
+      "license": "GPL-3.0",
+      "role": "Windows TSF frontend and x64 input service"
+    },
+    {
+      "name": "Squirrel",
+      "repository": "https://github.com/rime/squirrel",
+      "tag": "1.1.2",
+      "commit": "876adebaf2f612951dcdca8a591de65401222b9a",
+      "license": "GPL-3.0",
+      "role": "macOS InputMethodKit frontend"
+    },
+    {
+      "name": "librime",
+      "repository": "https://github.com/rime/librime",
+      "tag": "1.17.0",
+      "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4",
+      "license": "BSD-3-Clause",
+      "role": "Rime engine dependency"
+    },
+    {
+      "name": "ImeWlConverter",
+      "repository": "https://github.com/studyzy/imewlconverter",
+      "tag": "v3.4.3",
+      "commit": "192fd20b04a060f2574943880160b8e6f13024fa",
+      "license": "GPL-3.0",
+      "role": "optional, separately executed offline SCEL/BIN converter",
+      "releaseAssets": {
+        "imewlconverter_linux-arm64.tar.gz": "sha256:e1a1f66266a3591011c8ad65c14dab6e8f6db7cf8d0cfcf96c7cc6f21c6eb81a",
+        "imewlconverter_linux-x64.tar.gz": "sha256:199a50dcff7358d073785b436308f2c7149513bf34e5eae24686853d49c60e72",
+        "imewlconverter_osx-arm64_cli.tar.gz": "sha256:8103b6fb693decd4465ab6d3fddbd069932ae275b7cbdb9eada8ce92555eb339",
+        "imewlconverter_osx-x64_cli.tar.gz": "sha256:3f80d76fcc9822b24f4ddea138af309808aa3750c087b3659d6e0f906c854eb4",
+        "imewlconverter_win-x64.zip": "sha256:17f2d8113205b5d111ec9704a56e026845ab419515942f8707f18549c91c6a43",
+        "imewlconverter_win-x86.zip": "sha256:395b2837878b33c8f523238e17934c8c2dd03b256f1272898aeeb9da4ad147a1"
+      }
+    }
+  ]
+}

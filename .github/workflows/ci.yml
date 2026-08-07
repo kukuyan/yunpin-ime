@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-and-license:
+    name: privacy-and-license
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: bash scripts/check_private_data.sh
+      - run: python3 scripts/check_licenses.py
+      - run: python3 scripts/check_supply_chain.py
+      - run: ruby scripts/check_yaml.rb
+      - run: docker compose config --quiet
+      - run: python3 scripts/check_submodule_locks.py
+
+  engine:
+    name: engine-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: make -C engine test benchmark
+
+  engine-windows:
+    name: engine-windows
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: cmake -S engine -B build/engine -A x64
+      - run: cmake --build build/engine --config Release --parallel
+      - run: ctest --test-dir build/engine -C Release --output-on-failure
+
+  importer:
+    name: importer-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s tests -p "test_*.py" -v
+        working-directory: tools/importer
+      - run: python -m unittest discover -s tests -p "test_*.py" -v
+        working-directory: tools/public_pack
+
+  sync:
+    name: sync
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: sync/go.mod
+          cache-dependency-path: sync/go.sum
+      - run: go mod verify
+        working-directory: sync
+      - run: go vet ./...
+        working-directory: sync
+      - run: go test -race ./...
+        working-directory: sync
+      - run: docker build --target test -t yunpin-sync:test ./sync
+      - run: docker build --target test -f integration/Dockerfile -t yunpin-integration:test .
+      - run: docker build --target runtime -t yunpin-sync:runtime ./sync
+      - run: sh sync/scripts/smoke-container.sh yunpin-sync:runtime
+
+  protocol:
+    name: protocol
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: protocol/go.mod
+          cache-dependency-path: protocol/go.sum
+      - run: go mod verify
+        working-directory: protocol
+      - run: go vet ./...
+        working-directory: protocol
+      - run: go test -race ./...
+        working-directory: protocol
+
+  localstore:
+    name: localstore
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: localstore/go.mod
+          cache-dependency-path: |
+            localstore/go.sum
+            protocol/go.sum
+      - run: go mod verify
+        working-directory: localstore
+      - run: go vet ./...
+        working-directory: localstore
+      - run: go test -race ./...
+        working-directory: localstore
+
+  required:
+    name: required
+    if: always()
+    needs: [privacy-and-license, engine, engine-windows, importer, localstore, protocol, sync]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify required jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: test "$RESULTS" = "success success success success success success success"

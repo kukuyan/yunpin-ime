@@ -1,0 +1,32 @@
+[submodule "third_party/librime"]
+	path = third_party/librime
+	url = https://github.com/rime/librime.git
+	shallow = true
+[submodule "third_party/weasel"]
+	path = third_party/weasel
+	url = https://github.com/rime/weasel.git
+	shallow = true
+[submodule "third_party/squirrel"]
+	path = third_party/squirrel
+	url = https://github.com/rime/squirrel.git
+	shallow = true
+[submodule "third_party/rime-ice"]
+	path = third_party/rime-ice
+	url = https://github.com/iDvel/rime-ice.git
+	shallow = true
+[submodule "third_party/rime-essay"]
+	path = third_party/rime-essay
+	url = https://github.com/rime/rime-essay.git
+	shallow = true
+[submodule "third_party/THUOCL"]
+	path = third_party/THUOCL
+	url = https://github.com/thunlp/THUOCL.git
+	shallow = true
+[submodule "third_party/phrase-pinyin-data"]
+	path = third_party/phrase-pinyin-data
+	url = https://github.com/mozillazg/phrase-pinyin-data.git
+	shallow = true
+[submodule "third_party/imewlconverter"]
+	path = third_party/imewlconverter
+	url = https://github.com/studyzy/imewlconverter.git
+	shallow = true

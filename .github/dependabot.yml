@@ -1,0 +1,47 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /sync
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: gomod
+    directory: /protocol
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: gomod
+    directory: /localstore
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: gomod
+    directory: /integration
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: docker
+    directory: /sync
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: docker
+    directory: /protocol
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: docker
+    directory: /localstore
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: docker
+    directory: /integration
+    schedule:
+      interval: weekly
+    target-branch: main
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: main
