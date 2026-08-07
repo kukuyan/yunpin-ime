@@ -7,7 +7,7 @@
     "patches": [
       {
         "path": "platform/patches/weasel/0001-yunpin-isolate-preview-identity-and-IPC.patch",
-        "sha256": "3d656297595ee6bb440ee3f57ef5294c62baa27065040f261dfc31e4649b95f9"
+        "sha256": "51a22158c131f7c62a721547ad2a54769ee0224623ad668011a6aa010a26ab4e"
       },
       {
         "path": "platform/patches/weasel/0002-yunpin-remove-winsparkle-link.patch",

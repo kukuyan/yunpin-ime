@@ -879,6 +879,12 @@ diff --git a/include/WeaselUtility.h b/include/WeaselUtility.h
 index 54f840f..b58bf3f 100755
 --- a/include/WeaselUtility.h
 +++ b/include/WeaselUtility.h
+@@ -1,4 +1,5 @@
+ ﻿#pragma once
++#include <WeaselConstants.h>
+ #include <filesystem>
+ #include <string>
+ #include <sstream>
 @@ -37,7 +37,7 @@ std::filesystem::path WeaselUserDataPath();
  inline fs::path WeaselLogPath() {
    WCHAR _path[MAX_PATH] = {0};

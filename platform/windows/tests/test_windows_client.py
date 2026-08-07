@@ -104,6 +104,9 @@ class WindowsClientTests(unittest.TestCase):
             security = (target / "WeaselIPCServer" / "SecurityAttribute.cpp").read_text(
                 encoding="utf-8-sig"
             )
+            utility = (target / "include" / "WeaselUtility.h").read_text(
+                encoding="utf-8-sig"
+            )
             server = (target / "WeaselServer" / "WeaselServerApp.cpp").read_text(
                 encoding="utf-8-sig"
             )
@@ -116,6 +119,7 @@ class WindowsClientTests(unittest.TestCase):
             self.assertNotIn("0xa3f4cded", globals_cpp.lower())
             self.assertNotIn("EVERYONE_FILE_ACCESS", security)
             self.assertIn("TOKEN_USER", security)
+            self.assertIn("#include <WeaselConstants.h>", utility)
             self.assertNotIn("win_sparkle_init", server)
             self.assertNotIn("winsparkle.h", server_main.lower())
             self.assertIn("YunPinDeployer.exe", server)
