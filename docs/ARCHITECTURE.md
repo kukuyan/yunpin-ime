@@ -38,6 +38,27 @@ The reference local store uses record-level encrypted SQLite and an encrypted ou
 
 The Go service stores opaque signed envelopes in SQLite WAL. It has no phrase decryption key. `/v1/sync` performs idempotent exchange by `(device_id, device_seq)` and cursor. Network failure only grows a local outbox; input remains available.
 
+## Clipboard sync (Preview 0.2)
+
+Clipboard sync uses the existing account/device trust graph but a separate
+`clipboard.v1` envelope type and a domain-separated key derived from the account
+root. The encrypted payload contains the UTF-8 text, origin device and sequence,
+HLC timestamp, expiry, content fingerprint and a random event identifier. The
+server can route and expire the opaque envelope but cannot read the text or its
+fingerprint.
+
+Windows and macOS clipboard agents observe local changes, apply local sensitive
+content policy, encrypt accepted events and update the local clipboard when a
+new remote event wins. A bounded event cache suppresses echo loops and duplicate
+delivery. Clipboard history is not mixed with the phrase CRDT, does not enter
+the candidate index and never runs in the input key-event path.
+
+The iOS host app performs network exchange and stores received items in the App
+Group. The keyboard extension reads only that local snapshot. iOS pasteboard
+upload is initiated by an explicit paste/share/Shortcut action because reading
+another app's general pasteboard without user intent can produce a system
+privacy notification or approval prompt.
+
 ## iOS phase two
 
 The Swift host app performs sync and updates an App Group snapshot. The keyboard extension reads that snapshot and never directly opens the network. Without Full Access it remains read-only; learning writeback is enabled only after the user opts into Full Access. GPL desktop code is not reused.
