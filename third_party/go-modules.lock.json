@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "reviewed_at": "2026-08-06",
+  "reviewed_at": "2026-08-07",
   "policy": "Every module@version present in protocol, localstore, sync, or integration go.sum must have a human-reviewed SPDX license here. CI performs no network license inference.",
   "modules": [
     {
@@ -59,9 +59,9 @@
     },
     {
       "module": "golang.org/x/crypto",
-      "version": "v0.41.0",
+      "version": "v0.54.0",
       "license": "BSD-3-Clause",
-      "license_source": "https://go.googlesource.com/crypto/+/refs/tags/v0.41.0/LICENSE"
+      "license_source": "https://go.googlesource.com/crypto/+/refs/tags/v0.54.0/LICENSE"
     },
     {
       "module": "golang.org/x/exp",
@@ -76,10 +76,22 @@
       "license_source": "https://go.googlesource.com/mod/+/refs/tags/v0.27.0/LICENSE"
     },
     {
+      "module": "golang.org/x/mod",
+      "version": "v0.37.0",
+      "license": "BSD-3-Clause",
+      "license_source": "https://go.googlesource.com/mod/+/refs/tags/v0.37.0/LICENSE"
+    },
+    {
       "module": "golang.org/x/sync",
       "version": "v0.16.0",
       "license": "BSD-3-Clause",
       "license_source": "https://go.googlesource.com/sync/+/refs/tags/v0.16.0/LICENSE"
+    },
+    {
+      "module": "golang.org/x/sync",
+      "version": "v0.22.0",
+      "license": "BSD-3-Clause",
+      "license_source": "https://go.googlesource.com/sync/+/refs/tags/v0.22.0/LICENSE"
     },
     {
       "module": "golang.org/x/sys",
@@ -89,27 +101,33 @@
     },
     {
       "module": "golang.org/x/sys",
-      "version": "v0.35.0",
-      "license": "BSD-3-Clause",
-      "license_source": "https://go.googlesource.com/sys/+/refs/tags/v0.35.0/LICENSE"
-    },
-    {
-      "module": "golang.org/x/sys",
       "version": "v0.36.0",
       "license": "BSD-3-Clause",
       "license_source": "https://go.googlesource.com/sys/+/refs/tags/v0.36.0/LICENSE"
     },
     {
-      "module": "golang.org/x/text",
-      "version": "v0.28.0",
+      "module": "golang.org/x/sys",
+      "version": "v0.47.0",
       "license": "BSD-3-Clause",
-      "license_source": "https://go.googlesource.com/text/+/refs/tags/v0.28.0/LICENSE"
+      "license_source": "https://go.googlesource.com/sys/+/refs/tags/v0.47.0/LICENSE"
+    },
+    {
+      "module": "golang.org/x/text",
+      "version": "v0.40.0",
+      "license": "BSD-3-Clause",
+      "license_source": "https://go.googlesource.com/text/+/refs/tags/v0.40.0/LICENSE"
     },
     {
       "module": "golang.org/x/tools",
       "version": "v0.36.0",
       "license": "BSD-3-Clause",
       "license_source": "https://go.googlesource.com/tools/+/refs/tags/v0.36.0/LICENSE"
+    },
+    {
+      "module": "golang.org/x/tools",
+      "version": "v0.47.0",
+      "license": "BSD-3-Clause",
+      "license_source": "https://go.googlesource.com/tools/+/refs/tags/v0.47.0/LICENSE"
     },
     {
       "module": "modernc.org/cc/v4",
