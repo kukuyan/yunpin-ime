@@ -144,10 +144,12 @@ class WindowsClientTests(unittest.TestCase):
             'Join-Path $boostRoot "bin.v2"',
             'Join-Path $boostRoot "stage"',
             'Merged librime build did not produce',
+            '"weasel.sln", "/m:1"',
             '"/p:Platform=x64"',
             '"/p:Platform=Win32"',
         ):
             self.assertIn(required, build)
+        self.assertNotIn('"weasel.sln", "/m",', build)
         self.assertNotIn("exit code $LASTEXITCODE:", build)
         filter_source = (
             ROOT / "librime-yunpin" / "src" / "rime_yunpin_filter.cpp"

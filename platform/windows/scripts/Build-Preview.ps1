@@ -331,12 +331,15 @@ try {
     Invoke-Checked -FilePath "cscript.exe" -ArgumentList (@(
         "//nologo", "render.js", "weasel.props"
     ) + $propertyNames)
+    # WeaselIME and WeaselTSF both emit weaselx64.lib/.exp while linking.
+    # Keep project scheduling serial so those shared outputs cannot race; the
+    # projects still retain their compiler-level /MP parallelism.
     Invoke-Checked -FilePath "msbuild.exe" -ArgumentList @(
-        "weasel.sln", "/m", "/t:Build", "/p:Configuration=Release",
+        "weasel.sln", "/m:1", "/t:Build", "/p:Configuration=Release",
         "/p:Platform=x64", "/verbosity:minimal"
     )
     Invoke-Checked -FilePath "msbuild.exe" -ArgumentList @(
-        "weasel.sln", "/m", "/t:Build", "/p:Configuration=Release",
+        "weasel.sln", "/m:1", "/t:Build", "/p:Configuration=Release",
         "/p:Platform=Win32", "/verbosity:minimal"
     )
 } finally {
