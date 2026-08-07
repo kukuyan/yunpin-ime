@@ -97,7 +97,7 @@ void TestAcceptanceAndRecallThresholds() {
   Check(!ContainsId(index.Query("zgs"), "company-long"),
         "pinned long phrase must wait for four initials");
 
-  for (const std::string& query : {"zhongguo", "zhongguoshihua", "zgsh"}) {
+  for (const std::string query : {"zhongguo", "zhongguoshihua", "zgsh"}) {
     const auto candidates = index.Query(query);
     Check(PositionOf(candidates, "company-long") < 3,
           "golden organization phrase must rank in the top three for " +
