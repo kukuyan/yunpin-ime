@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# YunPin macOS development-preview defaults. Personal data is never bundled.
+
+patch:
+  "schema_list":
+    - schema: rime_ice
+  "menu/page_size": 5
+  "menu/alternative_select_keys": "12345"

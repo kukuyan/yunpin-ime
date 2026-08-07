@@ -41,6 +41,51 @@ jobs:
       - run: cmake --build build/engine --config Release --parallel
       - run: ctest --test-dir build/engine -C Release --output-on-failure
 
+  windows-client:
+    name: windows-client
+    # The build is locked to Visual Studio 2022's v143 toolset. Do not move
+    # this job to windows-2025/VS 2026 without validating side-by-side v143.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Initialize pinned Windows sources
+        shell: pwsh
+        run: |
+          git submodule update --init third_party/weasel third_party/librime third_party/rime-ice
+          if ($LASTEXITCODE -ne 0) { throw "top-level submodule initialization failed" }
+          git -C third_party/librime submodule update --init --recursive
+          if ($LASTEXITCODE -ne 0) { throw "librime dependency initialization failed" }
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            build/windows/cache
+            build/windows/deps
+          key: windows-client-${{ hashFiles('platform/windows/dependencies.lock.json') }}
+      - name: Verify Windows integration source
+        run: python -m unittest discover -s platform/windows/tests -p "test_*.py" -v
+      - name: Build portable plugin tests with MSVC
+        run: cmake -S librime-yunpin -B build/librime-yunpin-windows -A x64
+      - run: cmake --build build/librime-yunpin-windows --config Release --parallel
+      - run: ctest --test-dir build/librime-yunpin-windows -C Release --output-on-failure
+      - name: Build and package merged Weasel preview
+        shell: pwsh
+        run: .\platform\windows\scripts\Build-Preview.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: YunPin-Windows-development-preview
+          path: |
+            build/windows/artifacts/YunPin-IME-Windows-development-preview.zip
+            build/windows/artifacts/YunPin-IME-Windows-development-preview-source.zip
+            build/windows/artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
   importer:
     name: importer-${{ matrix.os }}
     strategy:
@@ -112,13 +157,34 @@ jobs:
       - run: go test -race ./...
         working-directory: localstore
 
+  macos-client:
+    name: macos-client
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+      - run: sudo xcode-select --switch /Applications/Xcode_26.3.app
+      - run: xcodebuild -version
+      - run: cmake --version
+      - run: make -C platform/macos test
+      - run: make -C platform/macos package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: YunPin-macOS-development-preview
+          path: |
+            build/macos/package/YunPin-IME-development-preview.pkg
+            build/macos/package/YunPin-IME-development-preview-source.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
   required:
     name: required
     if: always()
-    needs: [privacy-and-license, engine, engine-windows, importer, localstore, protocol, sync]
+    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, protocol, sync, macos-client]
     runs-on: ubuntu-24.04
     steps:
       - name: Verify required jobs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: test "$RESULTS" = "success success success success success success success"
+        run: test "$RESULTS" = "success success success success success success success success success"

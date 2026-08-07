@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-only
+config_version: "1.0"
+
+schema_list:
+  - schema: yunpin_e2e
+
+menu:
+  page_size: 5

@@ -1,0 +1,494 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: YunPin development-preview identity and offline update boundary
+
+diff --git a/resources/Info.plist b/resources/Info.plist
+index df13876..b725283 100644
+--- a/resources/Info.plist
++++ b/resources/Info.plist
+@@ -3,11 +3,11 @@
+ <plist version="1.0">
+ <dict>
+ 	<key>TISInputSourceID</key>
+-	<string>im.rime.inputmethod.Squirrel</string>
++	<string>io.github.kukuyan.inputmethod.YunPin</string>
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>English</string>
+ 	<key>CFBundleExecutable</key>
+-	<string>Squirrel</string>
++	<string>YunPin</string>
+ 	<key>CFBundleIconFile</key>
+ 	<string>RimeIcon.icns</string>
+ 	<key>CFBundleIdentifier</key>
+@@ -15,7 +15,7 @@
+ 	<key>CFBundleInfoDictionaryVersion</key>
+ 	<string>6.0</string>
+ 	<key>CFBundleName</key>
+-	<string>Squirrel</string>
++	<string>YunPin</string>
+ 	<key>CFBundlePackageType</key>
+ 	<string>APPL</string>
+ 	<key>CFBundleSignature</key>
+@@ -26,10 +26,10 @@
+ 	<dict>
+ 		<key>tsInputModeListKey</key>
+ 		<dict>
+-			<key>im.rime.inputmethod.Squirrel.Hans</key>
++			<key>io.github.kukuyan.inputmethod.YunPin.Hans</key>
+ 			<dict>
+ 				<key>TISInputSourceID</key>
+-				<string>im.rime.inputmethod.Squirrel.Hans</string>
++				<string>io.github.kukuyan.inputmethod.YunPin.Hans</string>
+ 				<key>TISIntendedLanguage</key>
+ 				<string>zh-Hans</string>
+ 				<key>tsInputModeAlternateMenuIconFileKey</key>
+@@ -54,10 +54,10 @@
+ 				<key>tsInputModeScriptKey</key>
+ 				<string>smUnicodeScript</string>
+ 			</dict>
+-			<key>im.rime.inputmethod.Squirrel.Hant</key>
++			<key>io.github.kukuyan.inputmethod.YunPin.Hant</key>
+ 			<dict>
+ 				<key>TISInputSourceID</key>
+-				<string>im.rime.inputmethod.Squirrel.Hant</string>
++				<string>io.github.kukuyan.inputmethod.YunPin.Hant</string>
+ 				<key>TISIntendedLanguage</key>
+ 				<string>zh-Hant</string>
+ 				<key>tsInputModeAlternateMenuIconFileKey</key>
+@@ -85,16 +85,16 @@
+ 		</dict>
+ 		<key>tsVisibleInputModeOrderedArrayKey</key>
+ 		<array>
+-			<string>im.rime.inputmethod.Squirrel.Hans</string>
+-			<string>im.rime.inputmethod.Squirrel.Hant</string>
++			<string>io.github.kukuyan.inputmethod.YunPin.Hans</string>
++			<string>io.github.kukuyan.inputmethod.YunPin.Hant</string>
+ 		</array>
+ 	</dict>
+ 	<key>InputMethodConnectionName</key>
+-	<string>Squirrel_Connection</string>
++	<string>YunPin_Connection</string>
+ 	<key>InputMethodServerControllerClass</key>
+-	<string>Squirrel.SquirrelInputController</string>
++	<string>YunPin.SquirrelInputController</string>
+ 	<key>InputMethodServerDelegateClass</key>
+-	<string>Squirrel.SquirrelInputController</string>
++	<string>YunPin.SquirrelInputController</string>
+ 	<key>LSBackgroundOnly</key>
+ 	<false/>
+ 	<key>LSUIElement</key>
+@@ -102,11 +102,7 @@
+ 	<key>NSPrincipalClass</key>
+ 	<string>NSApplication</string>
+ 	<key>SUEnableAutomaticChecks</key>
+-	<true/>
+-	<key>SUFeedURL</key>
+-	<string>https://rime.github.io/release/squirrel/appcast.xml</string>
+-	<key>SUPublicEDKey</key>
+-	<string>ukvWq2dKOWn3B9AsdsQIwOptiDdDKdUjAVNgFxSvB2o=</string>
++	<false/>
+ 	<key>TICapsLockLanguageSwitchCapable</key>
+ 	<true/>
+ 	<key>SUEnableInstallerLauncherService</key>
+diff --git a/resources/InfoPlist.xcstrings b/resources/InfoPlist.xcstrings
+index e304fbe..5bf00a1 100644
+--- a/resources/InfoPlist.xcstrings
++++ b/resources/InfoPlist.xcstrings
+@@ -7,19 +7,19 @@
+         "en" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "Squirrel"
++            "value" : "YunPin"
+           }
+         },
+         "zh-Hans" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠须管"
++            "value" : "云拼"
+           }
+         },
+         "zh-Hant" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠鬚管"
++            "value" : "雲拼"
+           }
+         }
+       }
+@@ -31,88 +31,88 @@
+         "en" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "Squirrel"
++            "value" : "YunPin"
+           }
+         },
+         "zh-Hans" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠须管"
++            "value" : "云拼"
+           }
+         },
+         "zh-Hant" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠鬚管"
++            "value" : "雲拼"
+           }
+         }
+       }
+     },
+-    "im.rime.inputmethod.Squirrel" : {
++    "io.github.kukuyan.inputmethod.YunPin" : {
+       "extractionState" : "manual",
+       "localizations" : {
+         "en" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "Squirrel"
++            "value" : "YunPin"
+           }
+         },
+         "zh-Hans" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠须管"
++            "value" : "云拼"
+           }
+         },
+         "zh-Hant" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠鬚管"
++            "value" : "雲拼"
+           }
+         }
+       }
+     },
+-    "im.rime.inputmethod.Squirrel.Hans" : {
++    "io.github.kukuyan.inputmethod.YunPin.Hans" : {
+       "extractionState" : "manual",
+       "localizations" : {
+         "en" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "Squirrel - Simplified"
++            "value" : "YunPin - Simplified"
+           }
+         },
+         "zh-Hans" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠须管"
++            "value" : "云拼"
+           }
+         },
+         "zh-Hant" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠须管"
++            "value" : "雲拼（简体）"
+           }
+         }
+       }
+     },
+-    "im.rime.inputmethod.Squirrel.Hant" : {
++    "io.github.kukuyan.inputmethod.YunPin.Hant" : {
+       "extractionState" : "manual",
+       "localizations" : {
+         "en" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "Squirrel - Traditional"
++            "value" : "YunPin - Traditional"
+           }
+         },
+         "zh-Hans" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠鬚管"
++            "value" : "云拼（繁体）"
+           }
+         },
+         "zh-Hant" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠鬚管"
++            "value" : "雲拼"
+           }
+         }
+       }
+diff --git a/resources/Localizable.xcstrings b/resources/Localizable.xcstrings
+index eb96d08..b721594 100644
+--- a/resources/Localizable.xcstrings
++++ b/resources/Localizable.xcstrings
+@@ -101,7 +101,7 @@
+         "en" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "Squirrel is ready."
++            "value" : "YunPin is ready."
+           }
+         },
+         "zh-Hans" : {
+@@ -191,19 +191,19 @@
+         }
+       }
+     },
+-    "Squirrel" : {
++    "YunPin" : {
+       "comment" : "Menu title",
+       "localizations" : {
+         "zh-Hans" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠须管"
++            "value" : "云拼"
+           }
+         },
+         "zh-Hant" : {
+           "stringUnit" : {
+             "state" : "translated",
+-            "value" : "鼠鬚管"
++            "value" : "雲拼"
+           }
+         }
+       }
+@@ -244,4 +244,4 @@
+     }
+   },
+   "version" : "1.0"
+-}
+\ No newline at end of file
++}
+diff --git a/sources/InputSource.swift b/sources/InputSource.swift
+index a0c80ad..bdcb78f 100644
+--- a/sources/InputSource.swift
++++ b/sources/InputSource.swift
+@@ -11,8 +11,8 @@ import InputMethodKit
+ final class SquirrelInstaller {
+   enum InputMode: String, CaseIterable {
+     static let primary = Self.hans
+-    case hans = "im.rime.inputmethod.Squirrel.Hans"
+-    case hant = "im.rime.inputmethod.Squirrel.Hant"
++    case hans = "io.github.kukuyan.inputmethod.YunPin.Hans"
++    case hant = "io.github.kukuyan.inputmethod.YunPin.Hant"
+   }
+   private lazy var inputSources: [String: TISInputSource] = {
+     var inputSources = [String: TISInputSource]()
+@@ -43,7 +43,7 @@ final class SquirrelInstaller {
+   func register() {
+     let enabledInputModes = enabledModes()
+     if !enabledInputModes.isEmpty {
+-      print("User already registered Squirrel method(s): \(enabledInputModes.map { $0.rawValue })")
++      print("User already registered YunPin method(s): \(enabledInputModes.map { $0.rawValue })")
+       // Already registered.
+       return
+     }
+@@ -54,7 +54,7 @@ final class SquirrelInstaller {
+   func enable(modes: [InputMode] = []) {
+     let enabledInputModes = enabledModes()
+     if !enabledInputModes.isEmpty && modes.isEmpty {
+-      print("User already enabled Squirrel method(s): \(enabledInputModes.map { $0.rawValue })")
++      print("User already enabled YunPin method(s): \(enabledInputModes.map { $0.rawValue })")
+       // keep user's manually enabled input modes.
+       return
+     }
+diff --git a/sources/Main.swift b/sources/Main.swift
+index dca533b..673e483 100644
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -11,14 +11,14 @@ import InputMethodKit
+ @main
+ struct SquirrelApp {
+   static let userDir = if let pwuid = getpwuid(getuid()) {
+-    URL(fileURLWithFileSystemRepresentation: pwuid.pointee.pw_dir, isDirectory: true, relativeTo: nil).appending(components: "Library", "Rime")
++    URL(fileURLWithFileSystemRepresentation: pwuid.pointee.pw_dir, isDirectory: true, relativeTo: nil).appending(components: "Library", "Application Support", "YunPin", "Rime")
+   } else {
+-    try! FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false).appendingPathComponent("Rime", isDirectory: true)
++    try! FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false).appending(components: "YunPin", "Rime")
+   }
+-  static let appDir = "/Library/Input Library/Squirrel.app".withCString { dir in
++  static let appDir = "/Library/Input Methods/YunPin.app".withCString { dir in
+     URL(fileURLWithFileSystemRepresentation: dir, isDirectory: false, relativeTo: nil)
+   }
+-  static let logDir = FileManager.default.temporaryDirectory.appending(component: "rime.squirrel", directoryHint: .isDirectory)
++  static let logDir = FileManager.default.temporaryDirectory.appending(component: "yunpin.ime", directoryHint: .isDirectory)
+ 
+   // swiftlint:disable:next cyclomatic_complexity
+   static func main() {
+@@ -35,7 +35,7 @@ struct SquirrelApp {
+           runningSquirrels.forEach { $0.terminate() }
+           return true
+         case "--reload":
+-          DistributedNotificationCenter.default().postNotificationName(.init("SquirrelReloadNotification"), object: nil)
++          DistributedNotificationCenter.default().postNotificationName(.init("YunPinReloadNotification"), object: nil)
+           return true
+         case "--register-input-source", "--install":
+           installer.register()
+@@ -72,13 +72,13 @@ struct SquirrelApp {
+           SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_update", comment: ""))
+           // Build all schemas in current directory
+           var builderTraits = RimeTraits.rimeStructInit()
+-          builderTraits.setCString("rime.squirrel-builder", to: \.app_name)
++          builderTraits.setCString("yunpin.ime-builder", to: \.app_name)
+           rimeAPI.setup(&builderTraits)
+           rimeAPI.deployer_initialize(nil)
+           _ = rimeAPI.deploy()
+           return true
+         case "--sync":
+-          DistributedNotificationCenter.default().postNotificationName(.init("SquirrelSyncNotification"), object: nil)
++          print("YunPin encrypted sync is not connected in this development preview.")
+           return true
+         case "--help":
+           print(helpDoc)
+@@ -110,7 +110,7 @@ struct SquirrelApp {
+ 
+       if NSApp.squirrelAppDelegate.problematicLaunchDetected() {
+         print("Problematic launch detected!")
+-        let args = ["Problematic launch detected! Squirrel may be suffering a crash due to improper configuration. Revert previous modifications to see if the problem recurs."]
++        let args = ["Problematic launch detected! YunPin may be suffering a crash due to improper configuration. Revert previous modifications to see if the problem recurs."]
+         let task = Process()
+         task.executableURL = "/usr/bin/say".withCString { dir in
+           URL(fileURLWithFileSystemRepresentation: dir, isDirectory: false, relativeTo: nil)
+@@ -121,12 +121,12 @@ struct SquirrelApp {
+         NSApp.squirrelAppDelegate.setupRime()
+         NSApp.squirrelAppDelegate.startRime(fullCheck: false)
+         NSApp.squirrelAppDelegate.loadSettings()
+-        print("Squirrel reporting!")
++        print("YunPin reporting!")
+       }
+ 
+       // finally run everything
+       app.run()
+-      print("Squirrel is quitting...")
++      print("YunPin is quitting...")
+       rimeAPI.finalize()
+     }
+     return
+@@ -137,9 +137,9 @@ Supported arguments:
+ Perform actions:
+   --quit                     quit all Squirrel process
+   --reload                   deploy
+-  --sync                     sync user data
++  --sync                     report encrypted-sync preview status
+   --build                    build all schemas in current directory
+-Install Squirrel:
++Install YunPin:
+   --install, --register-input-source    register input source
+   --enable-input-source [source id...]  input source list optional
+   --disable-input-source [source id...] input source list optional
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+index c603760..3c7c590 100644
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -10,15 +10,15 @@ import Sparkle
+ import AppKit
+ 
+ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUStandardUserDriverDelegate, UNUserNotificationCenterDelegate {
+-  static let rimeWikiURL = URL(string: "https://github.com/rime/home/wiki")!
+-  static let updateNotificationIdentifier = "SquirrelUpdateNotification"
+-  static let notificationIdentifier = "SquirrelNotification"
++  static let rimeWikiURL = URL(string: "https://github.com/kukuyan/yunpin-ime")!
++  static let updateNotificationIdentifier = "YunPinUpdateNotification"
++  static let notificationIdentifier = "YunPinNotification"
+ 
+   let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+   var config: SquirrelConfig?
+   var panel: SquirrelPanel?
+   var enableNotifications = false
+-  let updateController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
++  let updateController = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
+   var supportsGentleScheduledUpdateReminders: Bool {
+     true
+   }
+@@ -72,8 +72,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+   }
+ 
+   func syncUserData() {
+-    print("Sync user data")
+-    _ = rimeAPI.sync_user_data()
++    print("YunPin encrypted sync is not connected in this development preview.")
+   }
+ 
+   func openLogFolder() {
+@@ -107,7 +106,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+     center.getNotificationSettings { settings in
+       if (settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional) && settings.alertSetting == .enabled {
+         let content = UNMutableNotificationContent()
+-        content.title = NSLocalizedString("Squirrel", comment: "")
++        content.title = NSLocalizedString("YunPin", comment: "")
+         if let msgText = msgText {
+           content.subtitle = msgText
+         }
+@@ -135,10 +134,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+     squirrelTraits.setCString(Bundle.main.sharedSupportPath!, to: \.shared_data_dir)
+     squirrelTraits.setCString(SquirrelApp.userDir.path(), to: \.user_data_dir)
+     squirrelTraits.setCString(SquirrelApp.logDir.path(), to: \.log_dir)
+-    squirrelTraits.setCString("Squirrel", to: \.distribution_code_name)
+-    squirrelTraits.setCString("鼠鬚管", to: \.distribution_name)
++    squirrelTraits.setCString("YunPin", to: \.distribution_code_name)
++    squirrelTraits.setCString("云拼输入法", to: \.distribution_name)
+     squirrelTraits.setCString(Bundle.main.object(forInfoDictionaryKey: kCFBundleVersionKey as String) as! String, to: \.distribution_version)
+-    squirrelTraits.setCString("rime.squirrel", to: \.app_name)
++    squirrelTraits.setCString("yunpin.ime", to: \.app_name)
+     rimeAPI.setup(&squirrelTraits)
+   }
+ 
+@@ -188,7 +187,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+   // prevent freezing the system
+   func problematicLaunchDetected() -> Bool {
+     var detected = false
+-    let logFile = FileManager.default.temporaryDirectory.appendingPathComponent("squirrel_launch.json", conformingTo: .json)
++    let logFile = FileManager.default.temporaryDirectory.appendingPathComponent("yunpin_launch.json", conformingTo: .json)
+     // print("[DEBUG] archive: \(logFile)")
+     do {
+       let archive = try Data(contentsOf: logFile, options: [.uncached])
+@@ -223,12 +222,11 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+     center.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: nil, using: workspaceWillPowerOff)
+ 
+     let notifCenter = DistributedNotificationCenter.default()
+-    notifCenter.addObserver(forName: .init("SquirrelReloadNotification"), object: nil, queue: nil, using: rimeNeedsReload)
+-    notifCenter.addObserver(forName: .init("SquirrelSyncNotification"), object: nil, queue: nil, using: rimeNeedsSync)
++    notifCenter.addObserver(forName: .init("YunPinReloadNotification"), object: nil, queue: nil, using: rimeNeedsReload)
+   }
+ 
+   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+-    print("Squirrel is quitting.")
++    print("YunPin is quitting.")
+     rimeAPI.cleanup_all_sessions()
+     return .terminateNow
+   }
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index bad53d9..5d4c418 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -229,24 +229,18 @@ final class SquirrelInputController: IMKInputController {
+     let deploy = NSMenuItem(title: NSLocalizedString("Deploy", comment: "Menu item"), action: #selector(deploy), keyEquivalent: "`")
+     deploy.target = self
+     deploy.keyEquivalentModifierMask = [.control, .option]
+-    let sync = NSMenuItem(title: NSLocalizedString("Sync user data", comment: "Menu item"), action: #selector(syncUserData), keyEquivalent: "")
+-    sync.target = self
+     let logDir = NSMenuItem(title: NSLocalizedString("Logs...", comment: "Menu item"), action: #selector(openLogFolder), keyEquivalent: "")
+     logDir.target = self
+     let setting = NSMenuItem(title: NSLocalizedString("Settings...", comment: "Menu item"), action: #selector(openRimeFolder), keyEquivalent: "")
+     setting.target = self
+     let wiki = NSMenuItem(title: NSLocalizedString("Rime Wiki...", comment: "Menu item"), action: #selector(openWiki), keyEquivalent: "")
+     wiki.target = self
+-    let update = NSMenuItem(title: NSLocalizedString("Check for updates...", comment: "Menu item"), action: #selector(checkForUpdates), keyEquivalent: "")
+-    update.target = self
+ 
+     let menu = NSMenu()
+     menu.addItem(deploy)
+-    menu.addItem(sync)
+     menu.addItem(logDir)
+     menu.addItem(setting)
+     menu.addItem(wiki)
+-    menu.addItem(update)
+ 
+     return menu
+   }

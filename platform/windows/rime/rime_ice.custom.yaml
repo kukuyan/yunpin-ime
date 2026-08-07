@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Windows preview overlay. The merged librime-yunpin module is activated by
+# the schema filter; personal data remains an external user-data file.
+
+patch:
+  "engine/filters/@before 0": yunpin_filter@yunpin
+  "translator/enable_word_completion": true
+  "translator/max_sentences": 2
+  "yunpin/tag": abc
+  "yunpin/snapshot": "yunpin/private.tsv"
+  "yunpin/max_candidates": 2
+  # The Windows TSF secure-input bridge has not passed host testing yet.
+  # Keep private candidates disabled in distributed development artifacts.
+  "yunpin/enabled": false

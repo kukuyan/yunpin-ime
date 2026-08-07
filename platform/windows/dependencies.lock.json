@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "weasel": {
+    "version": "0.17.4",
+    "commit": "9cc96e20dc71b80876b12f689bb5863c76c2a7ed",
+    "license": "GPL-3.0-only",
+    "patches": [
+      {
+        "path": "platform/patches/weasel/0001-yunpin-isolate-preview-identity-and-IPC.patch",
+        "sha256": "4b7b17dd5f2bb00fa08e9b8cf5784ef0df86cc2368bceeec17207bd14f19fe41"
+      },
+      {
+        "path": "platform/patches/weasel/0002-yunpin-remove-winsparkle-link.patch",
+        "sha256": "9ffb91d3256473fd3331a2a63c2e1a2db8692a01eee9d3aa7a829d9f7061c679"
+      }
+    ]
+  },
+  "librime": {
+    "version": "1.17.0",
+    "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4",
+    "license": "BSD-3-Clause",
+    "dependencies": {
+      "deps/glog": "7b134a5c82c0c0b5698bb6bf7a835b230c5638e4",
+      "deps/googletest": "f8d7d77c06936315286eb55f8de22cd23c188571",
+      "deps/leveldb": "99b3c03b3284f5886f9ef9a4ef703d57373e61be",
+      "deps/marisa-trie": "3e87d53b78e15f2f43783d5e376561a8c9722051",
+      "deps/opencc": "556ed22496d650bd0b13b6c163be9814637970ae",
+      "deps/yaml-cpp": "2f86d13775d119edbb69af52e5f566fd65c6953b"
+    }
+  },
+  "rimeIce": {
+    "commit": "569ff3bc65dd4aec0a26b33c49c8bbdfa8b5fd57",
+    "license": "GPL-3.0-only"
+  },
+  "boost": {
+    "version": "1.84.0",
+    "url": "https://archives.boost.io/release/1.84.0/source/boost_1_84_0.7z",
+    "sha256": "81a4d10075731966477276c47324ecd9cac02da49899d36c48eba66e40014f25",
+    "license": "BSL-1.0"
+  },
+  "identity": {
+    "textServiceClsid": "1C4FBFE5-AA8C-43A4-A272-A5ECE54D7BAB",
+    "profileGuid": "ECEE7EE5-E322-4691-B686-BFF27549CB0A",
+    "registryKey": "Software\\YunPin\\IME",
+    "pipeName": "YunPinImeNamedPipe"
+  },
+  "package": {
+    "runtimeFiles": {
+      "weasel.dll": "yunpin.dll",
+      "weaselx64.dll": "yunpinx64.dll",
+      "WeaselServer.exe": "YunPinServer.exe",
+      "WeaselDeployer.exe": "YunPinDeployer.exe",
+      "WeaselSetup.exe": "YunPinSetup.exe",
+      "rime.dll": "rime.dll"
+    }
+  }
+}

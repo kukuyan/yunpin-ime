@@ -11,6 +11,27 @@ YunPin records the following upstreams as commit-pinned Git submodules. A normal
 - [phrase-pinyin-data](https://github.com/mozillazg/phrase-pinyin-data), MIT.
 - [ImeWlConverter](https://github.com/studyzy/imewlconverter), GPL-3.0.
 
+The macOS development preview also embeds Squirrel's pinned universal librime
+1.16.0 runtime (BSD-3-Clause) and Sparkle 2.6.2 framework (MIT), and rebuilds
+librime with Boost 1.89.0 headers (BSL-1.0). Their source/release archive URLs
+and verified SHA-256 values are recorded in
+`platform/macos/dependencies.lock.json`; the matching Squirrel nested gitlinks
+are checked by the macOS tests. Sparkle's upstream update feed is disabled in
+YunPin builds.
+
+The Windows development preview is built from Weasel 0.17.4 and librime 1.17.0
+at the commits recorded in `platform/windows/dependencies.lock.json`. Its
+ordered GPL patch series, nested librime dependency commits, official Boost
+1.84.0 source archive SHA-256, runtime license bundle, and exact corresponding-
+source archive are part of the reproducible package process. WinSparkle is not
+linked or distributed in the YunPin runtime, and all upstream update calls are
+disabled.
+
+Squirrel's bundled Bopomofo, Cangjie, Essay, Luna Pinyin, Prelude, Stroke and
+Terra Pinyin data packages are LGPL-3.0. The macOS lock records an exact source
+commit and archive hash for each package, and the development source archive
+retains their complete extracted sources and license texts.
+
 Fetching or packaging an upstream requires retaining its exact LICENSE/NOTICE files and recording modifications. No Sogou proprietary dictionary is included or redistributed.
 
 The Go components also compile direct dependencies including

@@ -11,10 +11,15 @@ macOS applications   -> Squirrel IMKInputController -> librime
                                   librime-yunpin in-memory index
 ```
 
-The bootstrap already supplies and benchmarks the immutable in-memory index.
-The not-yet-implemented native adapters must query that index and Rime without
-waiting for a file read, HTTP request, or sync operation; a background process
-will rebuild and atomically swap it.
+The portable core supplies and benchmarks the immutable in-memory index.
+`librime-yunpin/` now registers a real `yunpin` module and bounded
+`yunpin_filter`; both desktop builds stage it with the portable engine and
+merge it into their pinned librime. It reads an optional private snapshot once
+during schema-component initialization, while candidate queries remain
+memory-only. Windows keeps that snapshot disabled until secure-input and IPC
+host gates pass. The macOS build runs a synthetic headless long-phrase/private-
+mode candidate test; native-host evidence, encrypted background refresh and
+learning are still release gates.
 
 `upstream-lock.json` is the source of truth for tags and commits. A future release
 checkout must verify each commit before applying the ordered patches described

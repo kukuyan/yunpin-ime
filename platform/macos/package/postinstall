@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-only
+set -euo pipefail
+
+app="/Library/Input Methods/YunPin.app"
+executable="$app/Contents/MacOS/YunPin"
+shared="$app/Contents/SharedSupport"
+login_user="$(/usr/bin/stat -f%Su /dev/console)"
+
+if [[ "$login_user" == "root" || ! -x "$executable" ]]; then
+  exit 0
+fi
+
+user_home="$(/usr/bin/dscl . -read "/Users/$login_user" NFSHomeDirectory | /usr/bin/awk '{print $2}')"
+user_rime="$user_home/Library/Application Support/YunPin/Rime"
+/usr/bin/install -d -m 700 -o "$login_user" "$user_rime"
+
+for overlay in default.custom.yaml squirrel.custom.yaml rime_ice.custom.yaml; do
+  if [[ ! -e "$user_rime/$overlay" ]]; then
+    /usr/bin/install -m 600 -o "$login_user" "$shared/$overlay" "$user_rime/$overlay"
+  fi
+done
+
+/usr/bin/killall YunPin >/dev/null 2>&1 || true
+"$executable" --register-input-source
+/usr/bin/sudo -u "$login_user" "$executable" --enable-input-source
+exit 0

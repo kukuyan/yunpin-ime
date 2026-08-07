@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Development-preview label and read-only local YunPin ranking filter.
+
+patch:
+  "schema/name": "云拼开发预览（Rime Ice）"
+  "engine/filters/@before 0": yunpin_filter@yunpin
+  "yunpin/tag": abc
+  "yunpin/snapshot": yunpin/private.tsv
+  "yunpin/max_candidates": 2
+  "yunpin/enabled": true

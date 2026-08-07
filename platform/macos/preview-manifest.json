@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "product": "YunPin IME",
+  "channel": "development-preview",
+  "frontend": "Squirrel/InputMethodKit",
+  "frontend_license": "GPL-3.0-only",
+  "minimum_macos": "13.0",
+  "architectures": ["arm64", "x86_64"],
+  "candidate_source": "Rime Ice",
+  "yunpin_module_merged": true,
+  "yunpin_ranking_headless_e2e": true,
+  "yunpin_ranking_native_host_e2e": false,
+  "yunpin_learning_bridge": false,
+  "encrypted_cloud_sync": false,
+  "production_signed": false
+}

@@ -1,0 +1,24 @@
+From: YunPin contributors <noreply@yunpin.invalid>
+Date: Thu, 6 Aug 2026 23:32:00 -0700
+Subject: [PATCH] yunpin: remove WinSparkle link from preview service
+
+SPDX-License-Identifier: GPL-3.0-only
+Upstream-Base: rime/weasel@9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+
+The development preview has no trusted YunPin update channel. Remove the
+remaining header whose pragma would add the WinSparkle import library even
+though all update calls were disabled by the identity patch.
+
+diff --git a/WeaselServer/WeaselServer.cpp b/WeaselServer/WeaselServer.cpp
+--- a/WeaselServer/WeaselServer.cpp
++++ b/WeaselServer/WeaselServer.cpp
+@@ -8,7 +8,6 @@
+ #include <WeaselUI.h>
+ #include <RimeWithWeasel.h>
+ #include <WeaselUtility.h>
+-#include <winsparkle.h>
+ #include <functional>
+ #include <ShellScalingApi.h>
+ #include <WinUser.h>
+-- 
+2.50.1

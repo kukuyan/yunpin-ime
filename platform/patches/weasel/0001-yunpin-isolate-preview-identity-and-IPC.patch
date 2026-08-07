@@ -1,0 +1,920 @@
+From 843828a949835285cd8768f20351dd5d15cf0406 Mon Sep 17 00:00:00 2001
+From: YunPin contributors <noreply@yunpin.invalid>
+Date: Thu, 6 Aug 2026 22:31:38 -0700
+Subject: [PATCH] yunpin: isolate preview identity and IPC
+
+SPDX-License-Identifier: GPL-3.0-only
+
+Upstream-Base: rime/weasel@9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+
+Give the TSF, registry, IPC objects, runtime paths and Rime application a separate YunPin identity. Disable WinSparkle update calls and narrow the named-pipe DACL to SYSTEM, the current user and app-container read/write access. This is an ACL boundary, not cryptographic client authentication.
+---
+ RimeWithWeasel/RimeWithWeasel.cpp         |  4 +-
+ RimeWithWeasel/WeaselUtility.cpp          |  5 +-
+ WeaselDeployer/Configurator.cpp           |  8 +-
+ WeaselDeployer/SwitcherSettingsDialog.cpp |  4 +-
+ WeaselDeployer/WeaselDeployer.cpp         |  4 +-
+ WeaselIPCServer/SecurityAttribute.cpp     | 95 ++++++++++++-----------
+ WeaselIPCServer/SecurityAttribute.h       |  1 +
+ WeaselIPCServer/WeaselServerImpl.cpp      |  2 +-
+ WeaselServer/WeaselServerApp.cpp          | 21 +----
+ WeaselServer/WeaselServerApp.h            | 17 +---
+ WeaselSetup/WeaselSetup.cpp               | 50 ++++++------
+ WeaselSetup/imesetup.cpp                  | 54 ++++++-------
+ WeaselTSF/CandidateList.cpp               | 10 +--
+ WeaselTSF/Globals.cpp                     | 48 ++++++------
+ WeaselTSF/LanguageBar.cpp                 |  9 ++-
+ WeaselTSF/Register.cpp                    |  4 +-
+ WeaselTSF/WeaselTSF.cpp                   |  4 +-
+ include/WeaselConstants.h                 |  6 +-
+ include/WeaselIPC.h                       |  4 +-
+ include/WeaselUtility.h                   | 17 ++--
+ 20 files changed, 172 insertions(+), 195 deletions(-)
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 3f4e59d..fd739fd 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -137,7 +137,7 @@ void RimeWithWeaselHandler::_Setup() {
+   weasel_traits.distribution_name = distribution_name.c_str();
+   weasel_traits.distribution_code_name = WEASEL_CODE_NAME;
+   weasel_traits.distribution_version = WEASEL_VERSION;
+-  weasel_traits.app_name = "rime.weasel";
++  weasel_traits.app_name = "rime.yunpin";
+   std::string log_dir = WeaselLogPath().u8string();
+   weasel_traits.log_dir = log_dir.c_str();
+   rime_api->setup(&weasel_traits);
+@@ -555,7 +555,7 @@ void RimeWithWeaselHandler::OnUpdateUI(std::function<void()> const& cb) {
+ }
+ 
+ bool RimeWithWeaselHandler::_IsDeployerRunning() {
+-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
++  HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
+   bool deployer_detected = hMutex && GetLastError() == ERROR_ALREADY_EXISTS;
+   if (hMutex) {
+     CloseHandle(hMutex);
+diff --git a/RimeWithWeasel/WeaselUtility.cpp b/RimeWithWeasel/WeaselUtility.cpp
+index 9a07343..31984ff 100644
+--- a/RimeWithWeasel/WeaselUtility.cpp
++++ b/RimeWithWeasel/WeaselUtility.cpp
+@@ -5,7 +5,7 @@
+ 
+ fs::path WeaselUserDataPath() {
+   WCHAR _path[MAX_PATH] = {0};
+-  const WCHAR KEY[] = L"Software\\Rime\\Weasel";
++  const WCHAR KEY[] = WEASEL_REG_KEY;
+   HKEY hKey;
+   LSTATUS ret = RegOpenKey(HKEY_CURRENT_USER, KEY, &hKey);
+   if (ret == ERROR_SUCCESS) {
+@@ -20,7 +20,8 @@ fs::path WeaselUserDataPath() {
+     }
+   }
+   // default location
+-  ExpandEnvironmentStringsW(L"%AppData%\\Rime", _path, _countof(_path));
++  ExpandEnvironmentStringsW(L"%AppData%\\YunPin\\Rime", _path,
++                            _countof(_path));
+   return fs::path(_path);
+ }
+ 
+diff --git a/WeaselDeployer/Configurator.cpp b/WeaselDeployer/Configurator.cpp
+index 1502322..3e7ce9a 100644
+--- a/WeaselDeployer/Configurator.cpp
++++ b/WeaselDeployer/Configurator.cpp
+@@ -42,7 +42,7 @@ void Configurator::Initialize() {
+   weasel_traits.distribution_name = distribution_name.c_str();
+   weasel_traits.distribution_code_name = WEASEL_CODE_NAME;
+   weasel_traits.distribution_version = WEASEL_VERSION;
+-  weasel_traits.app_name = "rime.weasel";
++  weasel_traits.app_name = "rime.yunpin";
+   std::string log_dir = WeaselLogPath().u8string();
+   weasel_traits.log_dir = log_dir.c_str();
+   RimeApi* rime_api = rime_get_api();
+@@ -114,7 +114,7 @@ int Configurator::Run(bool installing) {
+ }
+ 
+ int Configurator::UpdateWorkspace(bool report_errors) {
+-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
++  HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
+   if (!hMutex) {
+     LOG(ERROR) << "Error creating WeaselDeployerMutex.";
+     return 1;
+@@ -156,7 +156,7 @@ int Configurator::UpdateWorkspace(bool report_errors) {
+ }
+ 
+ int Configurator::DictManagement() {
+-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
++  HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
+   if (!hMutex) {
+     LOG(ERROR) << "Error creating WeaselDeployerMutex.";
+     return 1;
+@@ -196,7 +196,7 @@ int Configurator::DictManagement() {
+ }
+ 
+ int Configurator::SyncUserData() {
+-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
++  HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
+   if (!hMutex) {
+     LOG(ERROR) << "Error creating WeaselDeployerMutex.";
+     return 1;
+diff --git a/WeaselDeployer/SwitcherSettingsDialog.cpp b/WeaselDeployer/SwitcherSettingsDialog.cpp
+index 587cbc7..d04daff 100644
+--- a/WeaselDeployer/SwitcherSettingsDialog.cpp
++++ b/WeaselDeployer/SwitcherSettingsDialog.cpp
+@@ -114,9 +114,9 @@ LRESULT SwitcherSettingsDialog::OnGetSchemata(WORD, WORD, HWND hWndCtl, BOOL&) {
+   HKEY hKey;
+   std::wstring hPath;
+   if (is_wow64())
+-    hPath = _T("Software\\WOW6432Node\\Rime\\Weasel");
++    hPath = _T("Software\\WOW6432Node\\YunPin\\IME");
+   else
+-    hPath = _T("Software\\Rime\\Weasel");
++    hPath = _T("Software\\YunPin\\IME");
+   LSTATUS ret = RegOpenKey(HKEY_LOCAL_MACHINE, hPath.c_str(), &hKey);
+   if (ret == ERROR_SUCCESS) {
+     WCHAR value[MAX_PATH];
+diff --git a/WeaselDeployer/WeaselDeployer.cpp b/WeaselDeployer/WeaselDeployer.cpp
+index a578014..4af5606 100644
+--- a/WeaselDeployer/WeaselDeployer.cpp
++++ b/WeaselDeployer/WeaselDeployer.cpp
+@@ -40,7 +40,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
+   CreateDirectory(WeaselUserDataPath().c_str(), NULL);
+ 
+   int ret = 0;
+-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerExclusiveMutex");
++  HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerExclusiveMutex");
+   if (!hMutex) {
+     ret = 1;
+   } else if (GetLastError() == ERROR_ALREADY_EXISTS) {
+@@ -69,7 +69,7 @@ static int Run(LPTSTR lpCmdLine) {
+       MessageBox(NULL, msg, L"Weasel Deployer", MB_ICONINFORMATION | MB_OK);
+     } else {
+       MessageBox(NULL,
+-                 L"Usage: WeaselDeployer.exe [options]\n"
++                 L"Usage: YunPinDeployer.exe [options]\n"
+                  L"/? or /help		- Show this help message\n"
+                  L"/deploy		- Update Workspace\n"
+                  L"/dict		- Manage dictionary\n"
+diff --git a/WeaselIPCServer/SecurityAttribute.cpp b/WeaselIPCServer/SecurityAttribute.cpp
+index 6047b09..e6177f7 100644
+--- a/WeaselIPCServer/SecurityAttribute.cpp
++++ b/WeaselIPCServer/SecurityAttribute.cpp
+@@ -1,6 +1,8 @@
+ #include "stdafx.h"
+ #include "SecurityAttribute.h"
+ #include <Sddl.h>
++#include <string>
++#include <vector>
+ 
+ #ifndef SDDL_ALL_APP_PACKAGES
+ #define SDDL_ALL_APP_PACKAGES TEXT("AC")
+@@ -20,56 +22,59 @@
+   SDDL_ML_LOW                   \
+   SDDL_ACE_END
+ 
+-#define LOCAL_SYSTEM_FILE_ACCESS \
+-  SDDL_ACE_BEGIN                 \
+-  SDDL_ACCESS_ALLOWED            \
+-  SDDL_SEPERATOR                 \
+-  SDDL_SEPERATOR                 \
+-  SDDL_FILE_ALL                  \
+-  SDDL_SEPERATOR                 \
+-  SDDL_SEPERATOR                 \
+-  SDDL_SEPERATOR                 \
+-  SDDL_LOCAL_SYSTEM              \
+-  SDDL_ACE_END
++namespace weasel {
+ 
+-#define EVERYONE_FILE_ACCESS \
+-  SDDL_ACE_BEGIN             \
+-  SDDL_ACCESS_ALLOWED        \
+-  SDDL_SEPERATOR             \
+-  SDDL_SEPERATOR             \
+-  SDDL_FILE_ALL              \
+-  SDDL_SEPERATOR             \
+-  SDDL_SEPERATOR             \
+-  SDDL_SEPERATOR             \
+-  SDDL_EVERYONE              \
+-  SDDL_ACE_END
++void SecurityAttribute::_Init() {
++  sa.nLength = sizeof(SECURITY_ATTRIBUTES);
++  sa.lpSecurityDescriptor = NULL;
++  sa.bInheritHandle = FALSE;
+ 
+-#define ALL_APP_PACKAGES_FILE_ACCESS \
+-  SDDL_ACE_BEGIN                     \
+-  SDDL_ACCESS_ALLOWED                \
+-  SDDL_SEPERATOR                     \
+-  SDDL_SEPERATOR                     \
+-  SDDL_FILE_ALL                      \
+-  SDDL_SEPERATOR                     \
+-  SDDL_SEPERATOR                     \
+-  SDDL_SEPERATOR                     \
+-  SDDL_ALL_APP_PACKAGES              \
+-  SDDL_ACE_END
++  HANDLE token = NULL;
++  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
++    return;
++  }
+ 
+-namespace weasel {
++  DWORD token_size = 0;
++  GetTokenInformation(token, TokenUser, NULL, 0, &token_size);
++  if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || token_size == 0) {
++    CloseHandle(token);
++    return;
++  }
+ 
+-void SecurityAttribute::_Init() {
+-  // Privileges for UWP and IE protected mode
+-  // https://stackoverflow.com/questions/39138674/accessing-named-pipe-servers-from-within-ie-epm-bho
++  std::vector<BYTE> token_buffer(token_size);
++  if (!GetTokenInformation(token, TokenUser, token_buffer.data(), token_size,
++                           &token_size)) {
++    CloseHandle(token);
++    return;
++  }
++  CloseHandle(token);
+ 
+-  ConvertStringSecurityDescriptorToSecurityDescriptor(
+-      LOW_INTEGRITY_SDDL_SACL SDDL_DACL SDDL_DELIMINATOR
+-          LOCAL_SYSTEM_FILE_ACCESS EVERYONE_FILE_ACCESS
+-              ALL_APP_PACKAGES_FILE_ACCESS,
+-      SDDL_REVISION_1, &pd, NULL);
+-  sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+-  sa.lpSecurityDescriptor = pd;
+-  sa.bInheritHandle = TRUE;
++  const TOKEN_USER* token_user =
++      reinterpret_cast<const TOKEN_USER*>(token_buffer.data());
++  LPWSTR user_sid = NULL;
++  if (!ConvertSidToStringSidW(token_user->User.Sid, &user_sid)) {
++    return;
++  }
++
++  // SYSTEM and the current user get full access. App-container clients get
++  // only the read/write rights needed by TSF hosts. The low-integrity label
++  // preserves protected-mode access without granting EVERYONE access.
++  std::wstring descriptor =
++      LOW_INTEGRITY_SDDL_SACL L"D:(A;;GA;;;SY)(A;;GA;;;";
++  descriptor += user_sid;
++  descriptor += L")(A;;GRGW;;;" SDDL_ALL_APP_PACKAGES L")";
++  LocalFree(user_sid);
++
++  if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
++          descriptor.c_str(), SDDL_REVISION_1, &pd, NULL)) {
++    sa.lpSecurityDescriptor = pd;
++  }
++}
++
++SecurityAttribute::~SecurityAttribute() {
++  if (pd) {
++    LocalFree(pd);
++  }
+ }
+ 
+ SECURITY_ATTRIBUTES* SecurityAttribute::get_attr() {
+diff --git a/WeaselIPCServer/SecurityAttribute.h b/WeaselIPCServer/SecurityAttribute.h
+index 54b7e5d..8fd983b 100644
+--- a/WeaselIPCServer/SecurityAttribute.h
++++ b/WeaselIPCServer/SecurityAttribute.h
+@@ -11,6 +11,7 @@ class SecurityAttribute {
+ 
+  public:
+   SecurityAttribute() : pd(NULL) { _Init(); }
++  ~SecurityAttribute();
+   SECURITY_ATTRIBUTES* get_attr();
+ };
+ };  // namespace weasel
+diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
+index 11225c4..223c20d 100644
+--- a/WeaselIPCServer/WeaselServerImpl.cpp
++++ b/WeaselIPCServer/WeaselServerImpl.cpp
+@@ -140,7 +140,7 @@ DWORD ServerImpl::OnCommand(WEASEL_IPC_COMMAND uMsg,
+ }
+ 
+ int ServerImpl::Start() {
+-  std::wstring instanceName = L"(WEASEL)Furandōru-Sukāretto-";
++  std::wstring instanceName = L"YunPinImeServer-";
+   instanceName += getUsername();
+   HANDLE hMutexOneInstance = ::CreateMutex(NULL, FALSE, instanceName.c_str());
+   bool areYouOK = (::GetLastError() == ERROR_ALREADY_EXISTS ||
+diff --git a/WeaselServer/WeaselServerApp.cpp b/WeaselServer/WeaselServerApp.cpp
+index e09c4c5..97ced01 100644
+--- a/WeaselServer/WeaselServerApp.cpp
++++ b/WeaselServer/WeaselServerApp.cpp
+@@ -16,17 +16,6 @@ int WeaselServerApp::Run() {
+   if (!m_server.Start())
+     return -1;
+ 
+-  // win_sparkle_set_appcast_url("http://localhost:8000/weasel/update/appcast.xml");
+-  win_sparkle_set_registry_path("Software\\Rime\\Weasel\\Updates");
+-  if (GetThreadUILanguage() ==
+-      MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL))
+-    win_sparkle_set_lang("zh-TW");
+-  else if (GetThreadUILanguage() ==
+-           MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED))
+-    win_sparkle_set_lang("zh-CN");
+-  else
+-    win_sparkle_set_lang("en");
+-  win_sparkle_init();
+   m_ui.Create(m_server.GetHWnd());
+ 
+   m_handler->Initialize();
+@@ -40,7 +29,6 @@ int WeaselServerApp::Run() {
+   m_handler->Finalize();
+   m_ui.Destroy();
+   tray_icon.RemoveIcon();
+-  win_sparkle_cleanup();
+ 
+   return ret;
+ }
+@@ -50,24 +38,23 @@ void WeaselServerApp::SetupMenuHandlers() {
+   m_server.AddMenuHandler(ID_WEASELTRAY_QUIT,
+                           [this] { return m_server.Stop() == 0; });
+   m_server.AddMenuHandler(ID_WEASELTRAY_DEPLOY,
+-                          std::bind(execute, dir / L"WeaselDeployer.exe",
++                          std::bind(execute, dir / L"YunPinDeployer.exe",
+                                     std::wstring(L"/deploy")));
+   m_server.AddMenuHandler(
+       ID_WEASELTRAY_SETTINGS,
+-      std::bind(execute, dir / L"WeaselDeployer.exe", std::wstring()));
++      std::bind(execute, dir / L"YunPinDeployer.exe", std::wstring()));
+   m_server.AddMenuHandler(
+       ID_WEASELTRAY_DICT_MANAGEMENT,
+-      std::bind(execute, dir / L"WeaselDeployer.exe", std::wstring(L"/dict")));
++      std::bind(execute, dir / L"YunPinDeployer.exe", std::wstring(L"/dict")));
+   m_server.AddMenuHandler(
+       ID_WEASELTRAY_SYNC,
+-      std::bind(execute, dir / L"WeaselDeployer.exe", std::wstring(L"/sync")));
++      std::bind(execute, dir / L"YunPinDeployer.exe", std::wstring(L"/sync")));
+   m_server.AddMenuHandler(ID_WEASELTRAY_WIKI,
+                           std::bind(open, L"https://rime.im/docs/"));
+   m_server.AddMenuHandler(ID_WEASELTRAY_HOMEPAGE,
+                           std::bind(open, L"https://rime.im/"));
+   m_server.AddMenuHandler(ID_WEASELTRAY_FORUM,
+                           std::bind(open, L"https://rime.im/discuss/"));
+-  m_server.AddMenuHandler(ID_WEASELTRAY_CHECKUPDATE, check_update);
+   m_server.AddMenuHandler(ID_WEASELTRAY_INSTALLDIR, std::bind(explore, dir));
+   m_server.AddMenuHandler(ID_WEASELTRAY_USERCONFIG,
+                           std::bind(explore, WeaselUserDataPath()));
+diff --git a/WeaselServer/WeaselServerApp.h b/WeaselServer/WeaselServerApp.h
+index d5e32e0..ec6473a 100644
+--- a/WeaselServer/WeaselServerApp.h
++++ b/WeaselServer/WeaselServerApp.h
+@@ -9,7 +9,6 @@
+ #include <filesystem>
+ #include <functional>
+ #include <memory>
+-#include <winsparkle.h>
+ 
+ #include "WeaselTrayIcon.h"
+ 
+@@ -33,21 +32,7 @@ class WeaselServerApp {
+                                     SW_SHOWNORMAL) > 32;
+   }
+ 
+-  static bool check_update() {
+-    // when checked manually, show testing versions too
+-    std::string feed_url = GetCustomResource("ManualUpdateFeedURL", "APPCAST");
+-    std::wstring channel{};
+-    auto ret = RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Rime\\Weasel",
+-                                 L"UpdateChannel", channel);
+-    if (!ret && channel == L"testing") {
+-      feed_url = GetCustomResource("TestingManualUpdateFeedURL", "APPCAST");
+-    }
+-    if (!feed_url.empty()) {
+-      win_sparkle_set_appcast_url(feed_url.c_str());
+-    }
+-    win_sparkle_check_update_with_ui();
+-    return true;
+-  }
++  static bool check_update() { return false; }
+ 
+   static fs::path install_dir() {
+     WCHAR exe_path[MAX_PATH] = {0};
+diff --git a/WeaselSetup/WeaselSetup.cpp b/WeaselSetup/WeaselSetup.cpp
+index 9b2a240..d2e4068 100644
+--- a/WeaselSetup/WeaselSetup.cpp
++++ b/WeaselSetup/WeaselSetup.cpp
+@@ -60,7 +60,7 @@ static int CustomInstall(bool installing) {
+   bool old_ime_support = false;
+   std::wstring user_dir;
+ 
+-  const WCHAR KEY[] = L"Software\\Rime\\Weasel";
++  const WCHAR KEY[] = WEASEL_REG_KEY;
+   HKEY hKey;
+   LSTATUS ret = RegOpenKey(HKEY_CURRENT_USER, KEY, &hKey);
+   if (ret == ERROR_SUCCESS) {
+@@ -125,13 +125,13 @@ static int CustomInstall(bool installing) {
+   if (_has_installed) {
+     std::wstring dir(install_dir());
+     std::thread th([dir]() {
+-      ShellExecuteW(NULL, NULL, (dir + L"\\WeaselServer.exe").c_str(), L"/q",
++      ShellExecuteW(NULL, NULL, (dir + L"\\YunPinServer.exe").c_str(), L"/q",
+                     NULL, SW_SHOWNORMAL);
+       Sleep(500);
+-      ShellExecuteW(NULL, NULL, (dir + L"\\WeaselServer.exe").c_str(), L"",
++      ShellExecuteW(NULL, NULL, (dir + L"\\YunPinServer.exe").c_str(), L"",
+                     NULL, SW_SHOWNORMAL);
+       Sleep(500);
+-      ShellExecuteW(NULL, NULL, (dir + L"\\WeaselDeployer.exe").c_str(),
++      ShellExecuteW(NULL, NULL, (dir + L"\\YunPinDeployer.exe").c_str(),
+                     L"/deploy", NULL, SW_SHOWNORMAL);
+     });
+     th.detach();
+@@ -156,19 +156,19 @@ static int Run(LPTSTR lpCmdLine) {
+     WCHAR msg[1024] = {0};
+     if (LoadString(GetModuleHandle(NULL), IDS_STR_HELP, msg,
+                    sizeof(msg) / sizeof(TCHAR))) {
+-      MessageBox(NULL, msg, L"WeaselSetup", MB_ICONINFORMATION | MB_OK);
++      MessageBox(NULL, msg, L"YunPinSetup", MB_ICONINFORMATION | MB_OK);
+     } else {
+       MessageBox(
+           NULL,
+-          L"Usage: WeaselSetup.exe [options]\n"
++          L"Usage: YunPinSetup.exe [options]\n"
+           L"/? or /help    - Show this help message\n"
+-          L"/u             - Uninstall Weasel\n"
+-          L"/i             - Install Weasel\n"
+-          L"/s             - Install Weasel (Simplified Chinese)\n"
+-          L"/t             - Install Weasel (Traditional Chinese)\n"
+-          L"/ls            - Set Weasel language to Simplified Chinese\n"
+-          L"/lt            - Set Weasel language to Traditional Chinese\n"
+-          L"/le            - Set Weasel language to English\n"
++          L"/u             - Uninstall YunPin\n"
++          L"/i             - Install YunPin\n"
++          L"/s             - Install YunPin (Simplified Chinese)\n"
++          L"/t             - Install YunPin (Traditional Chinese)\n"
++          L"/ls            - Set YunPin language to Simplified Chinese\n"
++          L"/lt            - Set YunPin language to Traditional Chinese\n"
++          L"/le            - Set YunPin language to English\n"
+           L"/eu            - Enable automatic update check\n"
+           L"/du            - Disable automatic update check\n"
+           L"/toggleime     - Toggle IME on open/close(ctrl+space)\n"
+@@ -176,7 +176,7 @@ static int Run(LPTSTR lpCmdLine) {
+           L"/testing       - Set update channel to testing\n"
+           L"/release       - Set update channel to release\n"
+           L"/userdir:<dir> - Set user directory\n",
+-          L"WeaselSetup", MB_ICONINFORMATION | MB_OK);
++          L"YunPinSetup", MB_ICONINFORMATION | MB_OK);
+     }
+     return 0;
+   }
+@@ -189,44 +189,46 @@ static int Run(LPTSTR lpCmdLine) {
+   }
+ 
+   if (auto res = GetParamByPrefix(lpCmdLine, L"/userdir:")) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"RimeUserDir", res, REG_SZ);
+   }
+ 
+   if (!wcscmp(L"/ls", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"Language", L"chs", REG_SZ);
+   } else if (!wcscmp(L"/lt", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"Language", L"cht", REG_SZ);
+   } else if (!wcscmp(L"/le", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"Language", L"eng", REG_SZ);
+   }
+ 
+   if (!wcscmp(L"/eu", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel\\Updates",
++    return SetRegKeyValue(HKEY_CURRENT_USER,
++                          L"Software\\YunPin\\IME\\Updates",
+                           L"CheckForUpdates", L"1", REG_SZ);
+   }
+   if (!wcscmp(L"/du", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel\\Updates",
++    return SetRegKeyValue(HKEY_CURRENT_USER,
++                          L"Software\\YunPin\\IME\\Updates",
+                           L"CheckForUpdates", L"0", REG_SZ);
+   }
+ 
+   if (!wcscmp(L"/toggleime", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"ToggleImeOnOpenClose", L"yes", REG_SZ);
+   }
+   if (!wcscmp(L"/toggleascii", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"ToggleImeOnOpenClose", L"no", REG_SZ);
+   }
+   if (!wcscmp(L"/testing", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"UpdateChannel", L"testing", REG_SZ);
+   }
+   if (!wcscmp(L"/release", lpCmdLine)) {
+-    return SetRegKeyValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++    return SetRegKeyValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                           L"UpdateChannel", L"release", REG_SZ);
+   }
+ 
+diff --git a/WeaselSetup/imesetup.cpp b/WeaselSetup/imesetup.cpp
+index ed48aea..d6f7813 100644
+--- a/WeaselSetup/imesetup.cpp
++++ b/WeaselSetup/imesetup.cpp
+@@ -8,34 +8,34 @@
+ #include <WeaselUtility.h>
+ #include "InstallOptionsDlg.h"
+ 
+-// {A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}
++// {1C4FBFE5-AA8C-43A4-A272-A5ECE54D7BAB}
+ static const GUID c_clsidTextService = {
+-    0xa3f4cded,
+-    0xb1e9,
+-    0x41ee,
+-    {0x9c, 0xa6, 0x7b, 0x4d, 0xd, 0xe6, 0xcb, 0xa}};
++    0x1c4fbfe5,
++    0xaa8c,
++    0x43a4,
++    {0xa2, 0x72, 0xa5, 0xec, 0xe5, 0x4d, 0x7b, 0xab}};
+ 
+-// {3D02CAB6-2B8E-4781-BA20-1C9267529467}
++// {ECEE7EE5-E322-4691-B686-BFF27549CB0A}
+ static const GUID c_guidProfile = {
+-    0x3d02cab6,
+-    0x2b8e,
+-    0x4781,
+-    {0xba, 0x20, 0x1c, 0x92, 0x67, 0x52, 0x94, 0x67}};
++    0xecee7ee5,
++    0xe322,
++    0x4691,
++    {0xb6, 0x86, 0xbf, 0xf2, 0x75, 0x49, 0xcb, 0x0a}};
+ 
+ // if in the future, option hant is extended, maybe a function to generate this
+ // info is required
+ #define PSZTITLE_HANS                                                     \
+-  L"0804:{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}{3D02CAB6-2B8E-4781-BA20-" \
+-  L"1C9267529467}"
++  L"0804:{1C4FBFE5-AA8C-43A4-A272-A5ECE54D7BAB}{ECEE7EE5-E322-4691-B686-" \
++  L"BFF27549CB0A}"
+ #define PSZTITLE_HANT                                                     \
+-  L"0404:{A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}{3D02CAB6-2B8E-4781-BA20-" \
+-  L"1C9267529467}"
++  L"0404:{1C4FBFE5-AA8C-43A4-A272-A5ECE54D7BAB}{ECEE7EE5-E322-4691-B686-" \
++  L"BFF27549CB0A}"
+ #define ILOT_UNINSTALL 0x00000001
+ typedef HRESULT(WINAPI* PTF_INSTALLLAYOUTORTIP)(LPCWSTR psz, DWORD dwFlags);
+ 
+ #define WEASEL_WER_KEY                            \
+   L"SOFTWARE\\Microsoft\\Windows\\Windows Error " \
+-  L"Reporting\\LocalDumps\\WeaselServer.exe"
++  L"Reporting\\LocalDumps\\YunPinServer.exe"
+ 
+ BOOL copy_file(const std::wstring& src, const std::wstring& dest) {
+   BOOL ret = CopyFile(src.c_str(), dest.c_str(), FALSE);
+@@ -126,7 +126,7 @@ int install_ime_file(std::wstring& srcPath,
+   WCHAR path[MAX_PATH];
+   GetModuleFileNameW(GetModuleHandle(NULL), path, _countof(path));
+ 
+-  std::wstring srcFileName = L"weasel";
++  std::wstring srcFileName = L"yunpin";
+ 
+   srcFileName += ext;
+   WCHAR drive[_MAX_DRIVE];
+@@ -136,7 +136,7 @@ int install_ime_file(std::wstring& srcPath,
+   srcPath = std::wstring(drive) + dir + srcFileName;
+ 
+   GetSystemDirectoryW(path, _countof(path));
+-  std::wstring destPath = std::wstring(path) + L"\\weasel" + ext;
++  std::wstring destPath = std::wstring(path) + L"\\yunpin" + ext;
+ 
+   int retval = 0;
+   // 复制 .dll/.ime 到系统目录
+@@ -168,7 +168,7 @@ int install_ime_file(std::wstring& srcPath,
+         std::wstring srcPathARM32 = srcPath;
+         ireplace_last(srcPathARM32, ext, L"ARM" + ext);
+ 
+-        std::wstring destPathARM32 = std::wstring(sysarm32) + L"\\weasel" + ext;
++        std::wstring destPathARM32 = std::wstring(sysarm32) + L"\\yunpin" + ext;
+         if (!copy_file(srcPathARM32, destPathARM32)) {
+           MSG_NOT_SILENT_ID_CAP(silent, destPathARM32.c_str(),
+                                 IDS_STR_INSTALL_FAILED, MB_ICONERROR | MB_OK);
+@@ -205,7 +205,7 @@ int install_ime_file(std::wstring& srcPath,
+ 
+       // Since weaselARM64X is just a redirector we don't have separate
+       // HANS and HANT variants.
+-      srcPath = std::wstring(drive) + dir + L"weaselARM64X" + ext;
++      srcPath = std::wstring(drive) + dir + L"yunpinARM64X" + ext;
+     } else {
+       ireplace_last(srcPath, ext, L"x64" + ext);
+     }
+@@ -232,7 +232,7 @@ int uninstall_ime_file(const std::wstring& ext,
+   WCHAR path[MAX_PATH];
+   GetSystemDirectoryW(path, _countof(path));
+   std::wstring imePath(path);
+-  imePath += L"\\weasel" + ext;
++  imePath += L"\\yunpin" + ext;
+   retval += func(imePath, false, false, false, false, silent);
+   delete_file(imePath);
+   if (is_wow64()) {
+@@ -247,7 +247,7 @@ int uninstall_ime_file(const std::wstring& ext,
+     if (is_arm64_machine()) {
+       WCHAR sysarm32[MAX_PATH];
+       if (get_wow_arm32_system_dir(sysarm32, _countof(sysarm32)) > 0) {
+-        std::wstring imePathARM32 = std::wstring(sysarm32) + L"\\weasel" + ext;
++        std::wstring imePathARM32 = std::wstring(sysarm32) + L"\\yunpin" + ext;
+         retval += func(imePathARM32, false, true, true, false, silent);
+         delete_file(imePathARM32);
+       }
+@@ -306,7 +306,7 @@ int register_ime(const std::wstring& ime_path,
+             ret = RegQueryValueEx(hSubKey, L"Ime File", NULL, &type,
+                                   (LPBYTE)imeFile, &len);
+             if (ret = ERROR_SUCCESS) {
+-              if (_wcsicmp(imeFile, L"weasel.ime") == 0) {
++              if (_wcsicmp(imeFile, L"yunpin.ime") == 0) {
+                 hKL = (HKL)k;  // already there
+               }
+             }
+@@ -315,7 +315,7 @@ int register_ime(const std::wstring& ime_path,
+             // found a spare number to register
+             ret = RegCreateKey(hKey, hkl_str, &hSubKey);
+             if (ret == ERROR_SUCCESS) {
+-              const WCHAR ime_file[] = L"weasel.ime";
++              const WCHAR ime_file[] = L"yunpin.ime";
+               RegSetValueEx(hSubKey, L"Ime File", 0, REG_SZ, (LPBYTE)ime_file,
+                             sizeof(ime_file));
+               const WCHAR layout_file[] = L"kbdus.dll";
+@@ -401,7 +401,7 @@ int register_ime(const std::wstring& ime_path,
+         continue;
+ 
+       // 小狼毫?
+-      if (_wcsicmp(imeFile, L"weasel.ime") == 0) {
++      if (_wcsicmp(imeFile, L"yunpin.ime") == 0) {
+         DWORD value;
+         swscanf_s(subKey, L"%x", &value);
+         UnloadKeyboardLayout((HKL)value);
+@@ -568,7 +568,7 @@ int install(bool hant, bool silent, bool old_ime_support) {
+     return 1;
+   }
+ 
+-  const std::wstring executable = L"WeaselServer.exe";
++  const std::wstring executable = L"YunPinServer.exe";
+   ret = SetRegKeyValue(HKEY_LOCAL_MACHINE, WEASEL_REG_KEY, L"ServerExecutable",
+                        executable.c_str(), REG_SZ);
+   if (FAILED(HRESULT_FROM_WIN32(ret))) {
+@@ -623,7 +623,7 @@ int uninstall(bool silent) {
+   // 注销输入法
+   int retval = 0;
+ 
+-  const WCHAR KEY[] = L"Software\\Rime\\Weasel";
++  const WCHAR KEY[] = WEASEL_REG_KEY;
+   HKEY hKey;
+   LSTATUS ret = RegOpenKey(HKEY_CURRENT_USER, KEY, &hKey);
+   if (ret == ERROR_SUCCESS) {
+@@ -675,7 +675,7 @@ bool has_installed() {
+   WCHAR path[MAX_PATH];
+   GetSystemDirectory(path, _countof(path));
+   std::wstring sysPath(path);
+-  DWORD attr = GetFileAttributesW((sysPath + L"\\weasel.dll").c_str());
++  DWORD attr = GetFileAttributesW((sysPath + L"\\yunpin.dll").c_str());
+   return (attr != INVALID_FILE_ATTRIBUTES &&
+           !(attr & FILE_ATTRIBUTE_DIRECTORY));
+ }
+diff --git a/WeaselTSF/CandidateList.cpp b/WeaselTSF/CandidateList.cpp
+index 7c1e850..49a587c 100644
+--- a/WeaselTSF/CandidateList.cpp
++++ b/WeaselTSF/CandidateList.cpp
+@@ -65,11 +65,11 @@ STDMETHODIMP CCandidateList::GetDescription(BSTR* pbstr) {
+ }
+ 
+ STDMETHODIMP CCandidateList::GetGUID(GUID* pguid) {
+-  /// 36c3c795-7159-45aa-ab12-30229a51dbd3
+-  *pguid = {0x36c3c795,
+-            0x7159,
+-            0x45aa,
+-            {0xab, 0x12, 0x30, 0x22, 0x9a, 0x51, 0xdb, 0xd3}};
++  /// 4f0e7672-aec4-4d42-b3d6-a0e548fa1cb2
++  *pguid = {0x4f0e7672,
++            0xaec4,
++            0x4d42,
++            {0xb3, 0xd6, 0xa0, 0xe5, 0x48, 0xfa, 0x1c, 0xb2}};
+   return S_OK;
+ }
+ 
+diff --git a/WeaselTSF/Globals.cpp b/WeaselTSF/Globals.cpp
+index c5d28b9..52b1169 100644
+--- a/WeaselTSF/Globals.cpp
++++ b/WeaselTSF/Globals.cpp
+@@ -7,33 +7,33 @@ LONG g_cRefDll = -1;
+ 
+ CRITICAL_SECTION g_cs;
+ 
+-// {A3F4CDED-B1E9-41EE-9CA6-7B4D0DE6CB0A}
++// {1C4FBFE5-AA8C-43A4-A272-A5ECE54D7BAB}
+ static const GUID c_clsidTextService = {
+-    0xa3f4cded,
+-    0xb1e9,
+-    0x41ee,
+-    {0x9c, 0xa6, 0x7b, 0x4d, 0xd, 0xe6, 0xcb, 0xa}};
++    0x1c4fbfe5,
++    0xaa8c,
++    0x43a4,
++    {0xa2, 0x72, 0xa5, 0xec, 0xe5, 0x4d, 0x7b, 0xab}};
+ 
+-// {3D02CAB6-2B8E-4781-BA20-1C9267529467}
++// {ECEE7EE5-E322-4691-B686-BFF27549CB0A}
+ static const GUID c_guidProfile = {
+-    0x3d02cab6,
+-    0x2b8e,
+-    0x4781,
+-    {0xba, 0x20, 0x1c, 0x92, 0x67, 0x52, 0x94, 0x67}};
++    0xecee7ee5,
++    0xe322,
++    0x4691,
++    {0xb6, 0x86, 0xbf, 0xf2, 0x75, 0x49, 0xcb, 0x0a}};
+ 
+-// {341F9E3A-B8AD-499D-936C-48701E329FB2}
++// {39453E18-299F-41C7-8463-79224E7B4A9A}
+ static const GUID c_guidLangBarItemButton = {
+-    0x341f9e3a,
+-    0xb8ad,
+-    0x499d,
+-    {0x93, 0x6c, 0x48, 0x70, 0x1e, 0x32, 0x9f, 0xb2}};
++    0x39453e18,
++    0x299f,
++    0x41c7,
++    {0x84, 0x63, 0x79, 0x22, 0x4e, 0x7b, 0x4a, 0x9a}};
+ 
+-// {2AC87E79-3260-4B32-9DEA-F8390976C20B}
++// {980A2745-6430-4175-9520-CB14648C8093}
+ static const GUID c_guidDisplayAttributeInput = {
+-    0x2ac87e79,
+-    0x3260,
+-    0x4b32,
+-    {0x9d, 0xea, 0xf8, 0x39, 0x09, 0x76, 0xc2, 0x0b}};
++    0x980a2745,
++    0x6430,
++    0x4175,
++    {0x95, 0x20, 0xcb, 0x14, 0x64, 0x8c, 0x80, 0x93}};
+ 
+ #ifdef WEASEL_USING_OLDER_TSF_SDK
+ 
+@@ -59,7 +59,7 @@ const GUID GUID_LBI_INPUTMODE = {
+     {0xA3, 0xA7, 0x5F, 0x8A, 0x98, 0x75, 0x68, 0xE6}};
+ 
+ const GUID GUID_IME_MODE_PRESERVED_KEY = {
+-    0x0bd899fc,
+-    0xa8f7,
+-    0x4b42,
+-    {0xa9, 0x6d, 0xce, 0xc7, 0xc5, 0x0e, 0x0e, 0xae}};
++    0x3dbbfe95,
++    0x1974,
++    0x4826,
++    {0x9f, 0x69, 0x92, 0x5f, 0x17, 0xce, 0x34, 0xd3}};
+diff --git a/WeaselTSF/LanguageBar.cpp b/WeaselTSF/LanguageBar.cpp
+index a03b615..8acba0c 100644
+--- a/WeaselTSF/LanguageBar.cpp
++++ b/WeaselTSF/LanguageBar.cpp
+@@ -37,9 +37,9 @@ static void HMENU2ITfMenu(HMENU hMenu, ITfMenu* pTfMenu) {
+ static LPCWSTR GetWeaselRegName() {
+   LPCWSTR WEASEL_REG_NAME_;
+   if (is_wow64())
+-    WEASEL_REG_NAME_ = L"Software\\WOW6432Node\\Rime\\Weasel";
++    WEASEL_REG_NAME_ = L"Software\\WOW6432Node\\YunPin\\IME";
+   else
+-    WEASEL_REG_NAME_ = L"Software\\Rime\\Weasel";
++    WEASEL_REG_NAME_ = L"Software\\YunPin\\IME";
+ 
+   return WEASEL_REG_NAME_;
+ }
+@@ -316,11 +316,12 @@ void WeaselTSF::_HandleLangBarMenuSelect(UINT wID) {
+       }
+       break;
+     case ID_WEASELTRAY_USERCONFIG:
+-      if (FAILED(RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Rime\\Weasel",
++      if (FAILED(RegGetStringValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                                    L"RimeUserDir", dir)) ||
+           dir.empty()) {
+         WCHAR _path[MAX_PATH] = {0};
+-        ExpandEnvironmentStringsW(L"%AppData%\\Rime", _path, _countof(_path));
++        ExpandEnvironmentStringsW(L"%AppData%\\YunPin\\Rime", _path,
++                                  _countof(_path));
+         dir = std::wstring(_path);
+       }
+       if (!dir.empty() && fs::exists(dir))
+diff --git a/WeaselTSF/Register.cpp b/WeaselTSF/Register.cpp
+index 69dccc5..803fd13 100644
+--- a/WeaselTSF/Register.cpp
++++ b/WeaselTSF/Register.cpp
+@@ -31,7 +31,7 @@ HKL FindIME(LANGID langid) {
+         ret = RegQueryValueExW(hSubKey, L"Ime File", NULL, &type, (LPBYTE)data,
+                                &size);
+         if (ret == ERROR_SUCCESS && type == REG_SZ &&
+-            _wcsicmp(data, L"weasel.ime") == 0)
++            _wcsicmp(data, L"yunpin.ime") == 0)
+           hKL = (HKL)id;
+       }
+       RegCloseKey(hSubKey);
+@@ -222,7 +222,7 @@ BOOL RegisterServer() {
+         // weaselARM64.dll Rewrite the path to point to the redirector.
+ 
+         char wrapperPath[MAX_PATH];
+-        StringCbCatA(achFileName, MAX_PATH, "\\..\\weasel.dll");
++        StringCbCatA(achFileName, MAX_PATH, "\\..\\yunpin.dll");
+         GetFullPathNameA(achFileName, MAX_PATH, wrapperPath, NULL);
+         memcpy(achFileName, wrapperPath, MAX_PATH);
+       }
+diff --git a/WeaselTSF/WeaselTSF.cpp b/WeaselTSF/WeaselTSF.cpp
+index 590d3b8..f568657 100644
+--- a/WeaselTSF/WeaselTSF.cpp
++++ b/WeaselTSF/WeaselTSF.cpp
+@@ -170,7 +170,7 @@ ExitError:
+ 
+ STDMETHODIMP WeaselTSF::OnSetThreadFocus() {
+   std::wstring _ToggleImeOnOpenClose{};
+-  RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Rime\\weasel",
++  RegGetStringValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                     L"ToggleImeOnOpenClose", _ToggleImeOnOpenClose);
+   _isToOpenClose = (_ToggleImeOnOpenClose == L"yes");
+   if (m_client.Echo()) {
+@@ -239,7 +239,7 @@ bool WeaselTSF::_EnsureServerConnected() {
+     _Reconnect();
+     retry++;
+     if (retry >= 6) {
+-      HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerExclusiveMutex");
++      HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerExclusiveMutex");
+       if (!m_client.Echo() && GetLastError() != ERROR_ALREADY_EXISTS) {
+         std::wstring dir = _GetRootDir();
+         std::thread th([dir, this]() {
+diff --git a/include/WeaselConstants.h b/include/WeaselConstants.h
+index 09625e4..6907e04 100644
+--- a/include/WeaselConstants.h
++++ b/include/WeaselConstants.h
+@@ -1,8 +1,8 @@
+ ﻿#pragma once
+ 
+-#define WEASEL_CODE_NAME "Weasel"
+-#define WEASEL_REG_KEY L"Software\\Rime\\Weasel"
+-#define RIME_REG_KEY L"Software\\Rime"
++#define WEASEL_CODE_NAME "YunPin"
++#define WEASEL_REG_KEY L"Software\\YunPin\\IME"
++#define RIME_REG_KEY L"Software\\YunPin"
+ 
+ #define STRINGIZE(x) #x
+ #define VERSION_STR(x) STRINGIZE(x)
+diff --git a/include/WeaselIPC.h b/include/WeaselIPC.h
+index 3065cb5..018cf14 100644
+--- a/include/WeaselIPC.h
++++ b/include/WeaselIPC.h
+@@ -6,8 +6,8 @@
+ #include <memory>
+ #include <KeyEvent.h>
+ 
+-#define WEASEL_IPC_WINDOW L"WeaselIPCWindow_1.0"
+-#define WEASEL_IPC_PIPE_NAME L"WeaselNamedPipe"
++#define WEASEL_IPC_WINDOW L"YunPinIPCWindow_1.0"
++#define WEASEL_IPC_PIPE_NAME L"YunPinImeNamedPipe"
+ 
+ #define WEASEL_IPC_METADATA_SIZE 1024
+ #define WEASEL_IPC_BUFFER_SIZE (4 * 1024)
+diff --git a/include/WeaselUtility.h b/include/WeaselUtility.h
+index 54f840f..b58bf3f 100755
+--- a/include/WeaselUtility.h
++++ b/include/WeaselUtility.h
+@@ -37,7 +37,7 @@ std::filesystem::path WeaselUserDataPath();
+ inline fs::path WeaselLogPath() {
+   WCHAR _path[MAX_PATH] = {0};
+   // default location
+-  ExpandEnvironmentStringsW(L"%TEMP%\\rime.weasel", _path, _countof(_path));
++  ExpandEnvironmentStringsW(L"%TEMP%\\rime.yunpin", _path, _countof(_path));
+   fs::path path = fs::path(_path);
+   if (!fs::exists(path)) {
+     fs::create_directories(path);
+@@ -187,16 +187,11 @@ inline std::basic_string<CharT> unescape_string(
+ std::string GetCustomResource(const char* name, const char* type);
+ 
+ inline std::wstring get_weasel_ime_name() {
+-  LANGID langId = GetUserDefaultUILanguage();
+-
+-  if (langId == MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL) ||
+-      langId == MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED) ||
+-      langId == MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_HONGKONG) ||
+-      langId == MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SINGAPORE) ||
+-      langId == MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_MACAU)) {
+-    return L"小狼毫";
++  const LANGID langId = GetUserDefaultUILanguage();
++  if (PRIMARYLANGID(langId) == LANG_CHINESE) {
++    return L"云拼";
+   } else {
+-    return L"Weasel";
++    return L"YunPin";
+   }
+ }
+ 
+@@ -217,7 +212,7 @@ inline LONG RegGetStringValue(HKEY key,
+ 
+ inline LANGID get_language_id() {
+   std::wstring lang{};
+-  if (RegGetStringValue(HKEY_CURRENT_USER, L"Software\\Rime\\Weasel",
++  if (RegGetStringValue(HKEY_CURRENT_USER, WEASEL_REG_KEY,
+                         L"Language", lang) == ERROR_SUCCESS) {
+     if (lang == L"chs")
+       return MAKELANGID(LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED);
