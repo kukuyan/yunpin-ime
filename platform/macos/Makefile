@@ -2,7 +2,14 @@
 .PHONY: test prepare build-librime build package
 
 ROOT := $(abspath ../..)
-BUILD_ROOT ?= $(ROOT)/build/macos
+EXTERNAL_BUILD_ROOT := /Volumes/YunPinDev/YunPinBuild/macos
+ifneq ($(wildcard $(EXTERNAL_BUILD_ROOT)),)
+  DEFAULT_BUILD_ROOT := $(EXTERNAL_BUILD_ROOT)
+else
+  DEFAULT_BUILD_ROOT := $(ROOT)/build/macos
+endif
+
+BUILD_ROOT ?= $(DEFAULT_BUILD_ROOT)
 
 test:
 	PYTHONDONTWRITEBYTECODE=1 python3 tests/test_macos_integration.py -v

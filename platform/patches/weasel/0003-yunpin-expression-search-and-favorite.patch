@@ -1,0 +1,203 @@
+SPDX-License-Identifier: GPL-3.0-only
+Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+Subject: [PATCH] yunpin: add expression search and favorite actions
+
+diff --git a/WeaselTSF/Composition.cpp b/WeaselTSF/Composition.cpp
+index e94cea0..a5235b2 100644
+--- a/WeaselTSF/Composition.cpp
++++ b/WeaselTSF/Composition.cpp
+@@ -3,6 +3,177 @@
+ #include "EditSession.h"
+ #include "ResponseParser.h"
+ #include "CandidateList.h"
++#include <cwctype>
++#include <shellapi.h>
++
++#include <cwchar>
++
++
++namespace {
++constexpr wchar_t kSearchCommitPrefix[] = L"yunpin-search:";
++constexpr wchar_t kFavoriteCommitPrefix[] = L"yunpin-fav:";
++
++bool Trim(std::wstring& text) {
++  while (!text.empty() && std::iswspace(text.front())) {
++    text.erase(text.begin());
++  }
++  while (!text.empty() && std::iswspace(text.back())) {
++    text.pop_back();
++  }
++  return !text.empty();
++}
++
++bool EscapeJson(const std::string& input, std::string& output) {
++  std::string out;
++  out.reserve(input.size() + 16);
++  for (char c : input) {
++    switch (c) {
++      case '\\':
++        out += "\\\\";
++        break;
++      case '"':
++        out += "\\\"";
++        break;
++      case '\b':
++        out += "\\b";
++        break;
++      case '\f':
++        out += "\\f";
++        break;
++      case '\n':
++        out += "\\n";
++        break;
++      case '\r':
++        out += "\\r";
++        break;
++      case '\t':
++        out += "\\t";
++        break;
++      default:
++        out.push_back(c);
++    }
++  }
++  output.swap(out);
++  return true;
++}
++
++bool UrlEncodeUtf8(const std::string& bytes, std::string& encoded) {
++  std::string out;
++  for (unsigned char b : bytes) {
++    if ((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') ||
++        (b >= '0' && b <= '9') || b == '-' || b == '_' || b == '.' ||
++        b == '~') {
++      out.push_back(static_cast<char>(b));
++    } else {
++      char hex[4];
++      std::snprintf(hex, sizeof(hex), "%%%02X", b);
++      out += hex;
++    }
++  }
++  encoded.swap(out);
++  return true;
++}
++
++bool Utf16ToUtf8(const std::wstring& in, std::string& out) {
++  if (in.empty()) {
++    out.clear();
++    return true;
++  }
++  int len = ::WideCharToMultiByte(CP_UTF8, 0, in.data(),
++                                 static_cast<int>(in.size()), nullptr, 0, nullptr,
++                                 nullptr);
++  if (len <= 0) {
++    return false;
++  }
++  out.resize(static_cast<size_t>(len));
++  if (::WideCharToMultiByte(CP_UTF8, 0, in.data(),
++                           static_cast<int>(in.size()),
++                           out.data(), len, nullptr, nullptr) != len) {
++    return false;
++  }
++  return true;
++}
++
++bool LaunchImageSearch(const std::wstring& query) {
++  std::string utf8;
++  if (!Utf16ToUtf8(query, utf8)) {
++    return false;
++  }
++
++  std::string encoded;
++  UrlEncodeUtf8(utf8, encoded);
++  std::string url = "https://www.bing.com/images/search?q=" + encoded +
++                    "%20gif%20%E6%A2%97%E5%9B%BE%20%E8%A1%A8%E6%83%85";
++  std::wstring wide_url(url.begin(), url.end());
++  return ::ShellExecuteW(nullptr, L"open", wide_url.c_str(), nullptr, nullptr,
++                        SW_SHOWNORMAL) > (HINSTANCE)32;
++}
++
++bool IsActionCommit(const std::wstring& text, const wchar_t* prefix,
++                    std::wstring& query) {
++  const size_t prefix_len = std::wcslen(prefix);
++  if (text.size() < prefix_len ||
++      text.compare(0, prefix_len, prefix) != 0) {
++    return false;
++  }
++  query = text.substr(prefix_len);
++  return Trim(query);
++}
++
++bool BuildFavoritePath(std::wstring& path) {
++  WCHAR app_data_path[MAX_PATH];
++  const DWORD app_data_len =
++      ::GetEnvironmentVariableW(L"APPDATA", app_data_path, _countof(app_data_path));
++  if (app_data_len == 0 || app_data_len >= _countof(app_data_path)) {
++    return false;
++  }
++  std::wstring dir = app_data_path;
++  if (!dir.empty() && dir.back() != L'\\' && dir.back() != L'/') {
++    dir.push_back(L'\\');
++  }
++  dir += L"YunPin\\emoji_favorites";
++  if (!::CreateDirectoryW(dir.c_str(), nullptr) &&
++      ::GetLastError() != ERROR_ALREADY_EXISTS) {
++    return false;
++  }
++  path = dir + L"\\favorites.jsonl";
++  return true;
++}
++
++bool PersistFavorite(const std::wstring& query) {
++  if (query.empty()) {
++    return true;
++  }
++  std::wstring path;
++  if (!BuildFavoritePath(path)) {
++    return false;
++  }
++
++  std::string utf8_query;
++  if (!Utf16ToUtf8(query, utf8_query)) {
++    return false;
++  }
++  std::string escaped_query;
++  if (!EscapeJson(utf8_query, escaped_query)) {
++    return false;
++  }
++
++  const long long ts = static_cast<long long>(
++      ::time(nullptr));
++  const std::string payload =
++      "{\"type\":\"emoji\",\"query\":\"" + escaped_query +
++      "\",\"source\":\"weasel\",\"ts\":" +
++      std::to_string(ts) + "}\n";
++  FILE* file = ::_wfopen(path.c_str(), L"ab");
++  if (!file) {
++    return false;
++  }
++  const size_t written = ::fwrite(payload.data(), 1, payload.size(), file);
++  ::fclose(file);
++  return written == payload.size();
++}
++
++}  // namespace
+ 
+ /* Start Composition */
+ class CStartCompositionEditSession : public CEditSession {
+@@ -364,6 +535,16 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
+ 
+ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
+                             const std::wstring& text) {
++  std::wstring query;
++  if (IsActionCommit(text, kSearchCommitPrefix, query)) {
++    LaunchImageSearch(query);
++    return TRUE;
++  }
++  if (IsActionCommit(text, kFavoriteCommitPrefix, query)) {
++    PersistFavorite(query);
++    return TRUE;
++  }
++
+   CInsertTextEditSession* pEditSession;
+   HRESULT hr;
+ 

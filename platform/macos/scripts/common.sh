@@ -7,10 +7,94 @@ REPO_ROOT="$(cd "${MACOS_DIR}/../.." && pwd)"
 SQUIRREL_COMMIT="876adebaf2f612951dcdca8a591de65401222b9a"
 YUNPIN_BUNDLE_ID="io.github.kukuyan.inputmethod.YunPin"
 YUNPIN_PRODUCT="YunPin"
+YUNPIN_DEFAULT_XCODE_PATHS=(
+  "/Volumes/YunPinDev/Applications/Xcode.app"
+  "/Applications/Xcode.app"
+)
+YUNPIN_DEFAULT_CMAKE_PATHS=(
+  "/Volumes/YunPinDev/Applications/third_party/bin"
+  "/usr/local/bin"
+  "/opt/homebrew/bin"
+)
 
 die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+resolve_developer_dir() {
+  if [[ -n "${DEVELOPER_DIR:-}" ]]; then
+    if [[ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
+      export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
+      return
+    fi
+    printf 'warning: invalid DEVELOPER_DIR=%s; ignoring\n' "$DEVELOPER_DIR"
+  fi
+
+  if [[ -n "${YUNPIN_XCODE_APP_PATH:-}" && -x "${YUNPIN_XCODE_APP_PATH%/}/Contents/Developer/usr/bin/xcodebuild" ]]; then
+    DEVELOPER_DIR="${YUNPIN_XCODE_APP_PATH%/}/Contents/Developer"
+    export DEVELOPER_DIR
+    export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
+    return
+  fi
+
+  local selected=""
+  for candidate in "${YUNPIN_DEFAULT_XCODE_PATHS[@]}"; do
+    if [[ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]]; then
+      selected="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$selected" ]]; then
+    for candidate in /Volumes/*/Applications/Xcode.app; do
+      [[ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]] || continue
+      selected="$candidate"
+      break
+    done
+  fi
+
+  if [[ -n "$selected" ]]; then
+    DEVELOPER_DIR="${selected%/}/Contents/Developer"
+    export DEVELOPER_DIR
+    export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
+    return
+  fi
+
+  local xcode_select_path=""
+  if xcode_select_path="$(xcode-select -p 2>/dev/null)"; then
+    if [[ -x "$xcode_select_path/usr/bin/xcodebuild" && "$xcode_select_path" != *"/CommandLineTools" ]]; then
+      DEVELOPER_DIR="$xcode_select_path"
+      export DEVELOPER_DIR
+      export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
+      return
+    fi
+  fi
+}
+
+resolve_cmake() {
+  if command -v cmake >/dev/null 2>&1; then
+    return
+  fi
+
+  local selected=""
+  for candidate in "${YUNPIN_DEFAULT_CMAKE_PATHS[@]}"; do
+    [[ -x "$candidate/cmake" ]] || continue
+    export PATH="$candidate:$PATH"
+    local candidate_pythonpath="${candidate%/}/../lib/python3.9/site-packages"
+    if [[ -d "$candidate_pythonpath" ]]; then
+      if [[ -z "${PYTHONPATH:-}" ]]; then
+        export PYTHONPATH="$candidate_pythonpath"
+      else
+        export PYTHONPATH="$candidate_pythonpath:$PYTHONPATH"
+      fi
+    fi
+    if command -v cmake >/dev/null 2>&1; then
+      selected="$candidate"
+      break
+    fi
+  done
+
+  [[ -n "$selected" ]] || die "cmake is required to build merged librime-yunpin"
 }
 
 require_macos() {
@@ -18,6 +102,7 @@ require_macos() {
 }
 
 require_full_xcode() {
+  resolve_developer_dir
   command -v xcodebuild >/dev/null 2>&1 || die "xcodebuild is unavailable; install full Xcode"
   xcodebuild -version >/dev/null 2>&1 || die "full Xcode is required; Command Line Tools alone are insufficient"
   xcode_major="$(xcodebuild -version | awk 'NR == 1 {split($2, version, "."); print version[1]}')"

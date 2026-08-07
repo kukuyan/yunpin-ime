@@ -73,7 +73,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(4, len(patches))
+        self.assertEqual(5, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -161,11 +161,11 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_generated_bundle_xattrs_are_cleared_before_adhoc_signing(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(encoding="utf-8")
-        clear_xattrs = build.index('xattr -cr "$app"')
-        sign_bundle = build.index('codesign --force --deep --sign - "$app"')
+        clear_xattrs = build.index("cleanup_bundle_metadata \"$app\"")
+        sign_bundle = build.index('codesign --force --sign - "$app"')
         self.assertLess(clear_xattrs, sign_bundle)
         self.assertIn("for attempt in 1 2 3", build)
-        self.assertIn("unable to remove generated bundle metadata", build)
+        self.assertIn("warning: bundle signing failed", build)
 
     def test_corresponding_source_staging_stays_with_the_build_root(self) -> None:
         archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(

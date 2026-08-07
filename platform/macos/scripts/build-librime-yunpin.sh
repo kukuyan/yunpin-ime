@@ -4,7 +4,8 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 require_macos
-command -v cmake >/dev/null 2>&1 || die "cmake is required to build merged librime-yunpin"
+require_full_xcode
+resolve_cmake
 
 source_dir="${1:-${REPO_ROOT}/build/macos/squirrel}"
 [[ -d "$source_dir" ]] || die "prepared Squirrel source is missing: $source_dir"

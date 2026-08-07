@@ -12,6 +12,10 @@
       {
         "path": "platform/patches/weasel/0002-yunpin-remove-winsparkle-link.patch",
         "sha256": "9ffb91d3256473fd3331a2a63c2e1a2db8692a01eee9d3aa7a829d9f7061c679"
+      },
+      {
+        "path": "platform/patches/weasel/0003-yunpin-expression-search-and-favorite.patch",
+        "sha256": "9d2e2c34354bb3f2b926941ba20132639ca3c78f9ad9a9dccf47096e80fdece3"
       }
     ]
   },

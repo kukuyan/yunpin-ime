@@ -1,0 +1,98 @@
+SPDX-License-Identifier: GPL-3.0-only
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: [PATCH] yunpin: add expression search and favorite actions
+
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index bad53d9..31538b6 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -5,10 +5,14 @@
+ //  Created by Leo Liu on 5/7/24.
+ //
+ 
++import Foundation
+ import InputMethodKit
+ 
+ final class SquirrelInputController: IMKInputController {
+   private static let keyRollOver = 50
++  private static let searchCommitPrefix = "yunpin-search:"
++  private static let favoriteCommitPrefix = "yunpin-fav:"
++  private static let favoriteStorePath = "yunpin-emoji-favorites"
+   private static var unknownAppCnt: UInt = 0
+ 
+   private weak var client: IMKTextInput?
+@@ -546,12 +550,74 @@ private extension SquirrelInputController {
+ 
+   func commit(string: String) {
+     guard let client = client else { return }
++    if handleSearchCommit(string) {
++      preedit = ""
++      hidePalettes()
++      return
++    }
++    if handleFavoriteCommit(string) {
++      preedit = ""
++      hidePalettes()
++      return
++    }
+     // print("[DEBUG] commitString: \(string)")
+     client.insertText(string, replacementRange: .empty)
+     preedit = ""
+     hidePalettes()
+   }
+ 
++  private func handleSearchCommit(_ string: String) -> Bool {
++    guard string.hasPrefix(Self.searchCommitPrefix) else { return false }
++    let query = String(string.dropFirst(Self.searchCommitPrefix.count))
++      .trimmingCharacters(in: .whitespacesAndNewlines)
++    guard !query.isEmpty else { return true }
++
++    guard var components = URLComponents(string: "https://www.bing.com/images/search") else {
++      return true
++    }
++    components.queryItems = [URLQueryItem(name: "q", value: "\(query) gif 梗图 表情")]
++    guard let url = components.url else { return true }
++    _ = NSWorkspace.shared.open(url)
++    return true
++  }
++
++  private func handleFavoriteCommit(_ string: String) -> Bool {
++    guard string.hasPrefix(Self.favoriteCommitPrefix) else { return false }
++    let query = String(string.dropFirst(Self.favoriteCommitPrefix.count))
++      .trimmingCharacters(in: .whitespacesAndNewlines)
++    guard !query.isEmpty else { return true }
++    guard persistFavorite(query: query) else { return true }
++    return true
++  }
++
++  private func persistFavorite(query: String) -> Bool {
++    let storeDir = SquirrelApp.userDir.appendingPathComponent(Self.favoriteStorePath, isDirectory: true)
++    let storeFile = storeDir.appendingPathComponent("favorites.jsonl", conformingTo: .json)
++    do {
++      try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
++      let payload = String(
++        format: "{\"type\":\"emoji\",\"query\":\"%@\",\"source\":\"squirrel\",\"ts\":%f}\n",
++        query.replacingOccurrences(of: "\\", with: "\\\\")
++          .replacingOccurrences(of: "\"", with: "\\\""),
++        Date().timeIntervalSince1970
++      )
++      let data = Data(payload.utf8)
++
++      if FileManager.default.fileExists(atPath: storeFile.path()) {
++        if let handle = FileHandle(forWritingTo: storeFile) {
++          handle.seekToEnd()
++          handle.write(data)
++          try handle.close()
++          return true
++        }
++      }
++      try data.write(to: storeFile, options: .atomic)
++      return true
++    } catch {
++      return false
++    }
++  }
++
+   func show(preedit: String, selRange: NSRange, caretPos: Int) {
+     guard let client = client else { return }
+     // print("[DEBUG] showPreeditString: '\(preedit)'")

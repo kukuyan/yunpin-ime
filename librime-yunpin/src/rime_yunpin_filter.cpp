@@ -19,6 +19,29 @@
 namespace rime {
 namespace {
 
+constexpr char kSearchActionPrefix[] = "yunpin-search:";
+constexpr char kFavoriteActionPrefix[] = "yunpin-fav:";
+
+class YunPinSearchCandidate : public SimpleCandidate {
+ public:
+  explicit YunPinSearchCandidate(std::size_t start,
+                                std::size_t end,
+                                const std::string& input)
+      : SimpleCandidate("yunpin-search", start, end,
+                        kSearchActionPrefix + input,
+                        "点击联网搜索：GIF / 图片（梗图）") {}
+};
+
+class YunPinFavoriteCandidate : public SimpleCandidate {
+ public:
+  explicit YunPinFavoriteCandidate(std::size_t start,
+                                  std::size_t end,
+                                  const std::string& input)
+      : SimpleCandidate("yunpin-fav", start, end,
+                        kFavoriteActionPrefix + input,
+                        "点击收藏到表情收藏夹") {}
+};
+
 class YunPinCandidate : public SimpleCandidate {
  public:
   YunPinCandidate(std::string id,
@@ -191,13 +214,33 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   if (active_input_.empty()) {
     return translation;
   }
+  std::string trimmed_input = active_input_;
+  while (!trimmed_input.empty() &&
+         (trimmed_input.front() == ' ' || trimmed_input.front() == '\t')) {
+    trimmed_input.erase(trimmed_input.begin());
+  }
+  while (!trimmed_input.empty() &&
+         (trimmed_input.back() == ' ' || trimmed_input.back() == '\t')) {
+    trimmed_input.pop_back();
+  }
+  std::vector<of<Candidate>> injected;
   const auto matches = store_.Query(active_input_, max_candidates_);
-  if (matches.empty()) {
-    return translation;
+  injected.reserve(matches.size() + 2);
+  if (!trimmed_input.empty()) {
+    injected.push_back(
+        New<YunPinSearchCandidate>(active_start_, active_end_, trimmed_input));
+    injected.push_back(
+        New<YunPinFavoriteCandidate>(active_start_, active_end_, trimmed_input));
   }
 
-  std::vector<of<Candidate>> injected;
-  injected.reserve(matches.size());
+  if (matches.empty()) {
+    if (injected.empty()) {
+      return translation;
+    }
+    return New<YunPinMergedTranslation>(std::move(translation),
+                                        std::move(injected));
+  }
+
   std::set<std::string> seen;
   for (const auto& match : matches) {
     if (!seen.insert(match.text).second) {
