@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Original YunPin compact theme; contains no Sogou asset or branding.
+
+patch:
+  "style/candidate_list_layout": linear
+  "style/text_orientation": horizontal
+  "style/inline_preedit": true
+  "style/inline_candidate": false
+  "style/memorize_size": true
+  "style/show_paging": false
+  "style/candidate_format": "[label]. [candidate] [comment]"
+  "style/font_face": "PingFang SC"
+  "style/font_point": 15
+  "style/label_font_face": "SF Pro Text"
+  "style/label_font_point": 10
+  "style/comment_font_face": "PingFang SC"
+  "style/comment_font_point": 12
+  "style/corner_radius": 9
+  "style/hilited_corner_radius": 6
+  "style/border_height": 5
+  "style/border_width": 7
+  "style/spacing": 7
+  "style/color_scheme": yunpin_light
+  "style/color_scheme_dark": yunpin_dark
+  "preset_color_schemes/yunpin_light":
+    name: "云拼浅色 / YunPin Light"
+    author: "YunPin contributors"
+    back_color: 0xF8FFFFFF
+    border_color: 0xFFE6E6E6
+    text_color: 0xFF383838
+    candidate_text_color: 0xFF303030
+    label_color: 0xFF888888
+    comment_text_color: 0xFF888888
+    hilited_candidate_text_color: 0xFFFFFFFF
+    hilited_candidate_label_color: 0xFFFFFFFF
+    hilited_comment_text_color: 0xFFF5F5F5
+    hilited_candidate_back_color: 0xFF3478F6
+  "preset_color_schemes/yunpin_dark":
+    name: "云拼深色 / YunPin Dark"
+    author: "YunPin contributors"
+    back_color: 0xF8292929
+    border_color: 0xFF414141
+    text_color: 0xFFF2F2F2
+    candidate_text_color: 0xFFEBEBEB
+    label_color: 0xFFA8A8A8
+    comment_text_color: 0xFFA8A8A8
+    hilited_candidate_text_color: 0xFFFFFFFF
+    hilited_candidate_label_color: 0xFFFFFFFF
+    hilited_comment_text_color: 0xFFF5F5F5
+    hilited_candidate_back_color: 0xFF4C8DFF

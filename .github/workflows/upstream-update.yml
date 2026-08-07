@@ -1,0 +1,55 @@
+name: Review upstream updates
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Initialize public-data submodules only
+        run: |
+          git submodule update --init --depth 1 -- \
+            third_party/rime-ice \
+            third_party/rime-essay \
+            third_party/THUOCL \
+            third_party/phrase-pinyin-data
+      - run: python3 scripts/update_upstreams.py
+      - run: python3 scripts/check_licenses.py
+      - run: python3 scripts/check_supply_chain.py
+      - run: ruby scripts/check_yaml.rb
+      - run: python3 scripts/check_submodule_locks.py
+      - name: Build reviewed public-pack evidence
+        working-directory: tools/public_pack
+        run: |
+          python3 -m yunpin_public_pack \
+            --lock ../../third_party/upstreams.lock.json \
+            --rime-ice-root ../../third_party/rime-ice \
+            --rime-essay-root ../../third_party/rime-essay \
+            --thuocl-root ../../third_party/THUOCL \
+            --phrase-pinyin-root ../../third_party/phrase-pinyin-data \
+            --build-dir ../../build/public-pack
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-pack-review-manifest
+          path: build/public-pack/yunpin_public.sources.json
+          if-no-files-found: error
+      - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        with:
+          branch: codex/update-upstreams
+          delete-branch: true
+          commit-message: "chore(data): propose pinned upstream updates"
+          title: "chore(data): review pinned upstream updates"
+          body: |
+            Automated proposal only. Before merging, review upstream licenses,
+            regenerated dictionary diffs, ranking goldens, and privacy scans.
+          labels: dependencies,data

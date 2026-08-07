@@ -1,0 +1,51 @@
+# Build outputs
+build/
+dist/
+out/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+
+# Tooling caches
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+.vscode/
+
+# Local service state
+sync/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# Personal dictionaries and exports MUST stay outside Git.
+private/
+personal/
+local-data/
+imports/
+exports/
+*.scel
+*.bin
+*.sgpybin
+*.userdb/
+conversations.json
+chat.html
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+*.key

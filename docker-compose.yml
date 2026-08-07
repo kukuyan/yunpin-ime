@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+services:
+  sync:
+    build:
+      context: ./sync
+      target: runtime
+    environment:
+      YUNPIN_LISTEN: 0.0.0.0:8787
+      YUNPIN_DATABASE: /data/yunpin.db
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - yunpin-sync-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  yunpin-sync-data:

@@ -1,0 +1,11 @@
+YunPin IME
+Copyright 2026 YunPin IME contributors
+
+YunPin is an independent open-source project. “Rime”, “Weasel”, “Squirrel”,
+“搜狗” and other names belong to their respective owners. Their mention is
+solely for interoperability, migration, and attribution.
+
+Third-party source is not vendored in this bootstrap commit; commit-pinned
+submodule pointers fetch it separately. When fetched or distributed, each
+upstream copyright notice and license file must be preserved. See
+THIRD_PARTY_NOTICES.md and docs/LICENSE_MATRIX.md.

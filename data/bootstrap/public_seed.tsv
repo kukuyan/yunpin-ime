@@ -1,0 +1,15 @@
+# phrase	pinyin	weight	source
+你好	ni hao	100000	yunpin-bootstrap
+谢谢	xie xie	98000	yunpin-bootstrap
+好的	hao de	97000	yunpin-bootstrap
+没问题	mei wen ti	96000	yunpin-bootstrap
+中国	zhong guo	95000	yunpin-bootstrap
+中华人民共和国	zhong hua ren min gong he guo	94000	yunpin-bootstrap
+股份有限公司	gu fen you xian gong si	90000	yunpin-bootstrap
+有限公司	you xian gong si	89000	yunpin-bootstrap
+输入法	shu ru fa	88000	yunpin-bootstrap
+云同步	yun tong bu	87000	yunpin-bootstrap
+开源项目	kai yuan xiang mu	86000	yunpin-bootstrap
+数据库	shu ju ku	85000	yunpin-bootstrap
+网络故障	wang luo gu zhang	84000	yunpin-bootstrap
+石家庄	shi jia zhuang	83000	yunpin-bootstrap
