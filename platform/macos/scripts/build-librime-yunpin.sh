@@ -23,7 +23,7 @@ ditto "$source_dir/download/lib" "$librime_dir/lib"
 
 (
   cd "$librime_dir"
-  RIME_PLUGINS=librime-yunpin cmake -S . -B "$build_dir" \
+  RIME_PLUGINS=librime-yunpin cmake --fresh -S . -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$install_dir" \
     -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \

@@ -234,10 +234,25 @@ if (-not (Test-Path (Join-Path $boostRoot "boost"))) {
     throw "Boost extraction did not create $boostRoot"
 }
 
+$vcInstallDir = [string]$env:VCINSTALLDIR
+if ([string]::IsNullOrWhiteSpace($vcInstallDir)) {
+    throw "VCINSTALLDIR is unavailable; run from a Visual Studio 2022 developer environment"
+}
+$vcvarsAll = Join-Path $vcInstallDir "Auxiliary\Build\vcvarsall.bat"
+if (-not (Test-Path $vcvarsAll -PathType Leaf)) {
+    throw "Visual Studio setup script is missing: $vcvarsAll"
+}
+$boostUserConfig = Join-Path $scratchRoot "boost-msvc-user-config.jam"
+$vcvarsAllForJam = $vcvarsAll.Replace("\", "/")
+$boostUserConfigText = "using msvc : 14.3 : : <setup>`"$vcvarsAllForJam`" ;`r`n"
+[IO.File]::WriteAllText($boostUserConfig, $boostUserConfigText, [Text.Encoding]::ASCII)
+$boostBuildOptions = "--user-config=`"$boostUserConfig`""
+
 $envFile = Join-Path $weaselSource "env.bat"
 $envLines = @(
     "@echo off",
     "set BOOST_ROOT=$boostRoot",
+    "set BOOST_COMPILED_LIBS=$boostBuildOptions",
     "set BJAM_TOOLSET=msvc-14.3",
     'set CMAKE_GENERATOR="Visual Studio 17 2022"',
     "set PLATFORM_TOOLSET=v143"
@@ -245,6 +260,7 @@ $envLines = @(
 [IO.File]::WriteAllLines($envFile, $envLines, [Text.Encoding]::ASCII)
 
 $env:BOOST_ROOT = $boostRoot
+$env:BOOST_COMPILED_LIBS = $boostBuildOptions
 $env:BJAM_TOOLSET = "msvc-14.3"
 $env:CMAKE_GENERATOR = '"Visual Studio 17 2022"'
 $env:PLATFORM_TOOLSET = "v143"
@@ -259,14 +275,43 @@ $env:FILE_VERSION = "0.17.4.0"
 $env:RELEASE_BUILD = "1"
 
 $boostMarker = Join-Path $boostRoot ".yunpin-vc143-x86-x64.complete"
+$boostArtifacts = @(
+    (Join-Path $boostRoot "stage\lib\libboost_wserialization-vc143-mt-s-x32-1_84.lib"),
+    (Join-Path $boostRoot "stage\lib\libboost_wserialization-vc143-mt-s-x64-1_84.lib")
+)
+$missingBoostArtifacts = @($boostArtifacts | Where-Object { -not (Test-Path $_ -PathType Leaf) })
+if ((Test-Path $boostMarker -PathType Leaf) -and $missingBoostArtifacts.Count -ne 0) {
+    Remove-Item -LiteralPath $boostMarker -Force
+}
 Push-Location $weaselSource
 try {
     if (-not (Test-Path $boostMarker)) {
+        # Boost caches failed compiler feature probes in bin.v2.  A corrected
+        # VS setup must not reuse those negative results from an interrupted
+        # build, or the x86 wide-serialization library remains silently absent.
+        Reset-GeneratedDirectory -Path (Join-Path $boostRoot "bin.v2") -AllowedParent $boostRoot
+        Reset-GeneratedDirectory -Path (Join-Path $boostRoot "stage") -AllowedParent $boostRoot
         Invoke-Checked -FilePath "cmd.exe" -ArgumentList @("/d", "/c", "call build.bat boost")
+        $missingBoostArtifacts = @($boostArtifacts | Where-Object { -not (Test-Path $_ -PathType Leaf) })
+        if ($missingBoostArtifacts.Count -ne 0) {
+            throw "Boost build did not produce required x86/x64 libraries: $($missingBoostArtifacts -join ', ')"
+        }
         [IO.File]::WriteAllText($boostMarker, "boost 1.84.0 vc143 x86+x64`r`n", [Text.Encoding]::ASCII)
     }
 
     Invoke-Checked -FilePath "cmd.exe" -ArgumentList @("/d", "/c", "call build.bat rime")
+    foreach ($requiredRimeOutput in @(
+        "include\rime_api.h",
+        "include\rime_levers_api.h",
+        "lib64\rime.lib",
+        "lib\rime.lib",
+        "output\rime.dll",
+        "output\Win32\rime.dll"
+    )) {
+        if (-not (Test-Path (Join-Path $weaselSource $requiredRimeOutput) -PathType Leaf)) {
+            throw "Merged librime build did not produce $requiredRimeOutput; inspect the preceding compiler error"
+        }
+    }
     foreach ($architecture in @("x64", "Win32")) {
         $generatedProject = Join-Path $stagedLibrime ("build_" + $architecture + "\src\rime.vcxproj")
         if (-not (Test-Path $generatedProject -PathType Leaf)) {

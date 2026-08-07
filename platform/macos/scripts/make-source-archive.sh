@@ -10,7 +10,8 @@ output_dir="$build_root/package"
 archive="$output_dir/YunPin-IME-development-preview-source.tar.gz"
 [[ -f "$source_dir/.yunpin-base-commit" ]] || die "prepared Squirrel source is missing"
 
-staging="$(mktemp -d "${TMPDIR:-/tmp}/yunpin-source.XXXXXX")"
+mkdir -p "$build_root"
+staging="$(mktemp -d "$build_root/.source-archive.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 mkdir -p "$staging/YunPin-IME/Squirrel" "$staging/YunPin-IME/YunPin"
 

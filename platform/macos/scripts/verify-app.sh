@@ -63,8 +63,13 @@ if manifest.get("yunpin_ranking_native_host_e2e") is not False:
     raise SystemExit("development preview must not overstate native host evidence")
 PY
 
-if find "$app" -type f \( -name '*.scel' -o -name '*.sgpybin' -o -name '*.sqlite' -o -name '*.db' -o -name '*.pem' -o -name '*.p12' \) | grep -q .; then
-  die "forbidden personal or credential material found in app bundle"
-fi
+public_lunar_db="$shared_support/lua/lunar.db"
+[[ -f "$public_lunar_db" ]] || die "locked Rime Ice lunar database is missing"
+source_lunar_hash="$(shasum -a 256 "${REPO_ROOT}/third_party/rime-ice/lua/lunar.db" | awk '{print $1}')"
+bundled_lunar_hash="$(shasum -a 256 "$public_lunar_db" | awk '{print $1}')"
+[[ "$bundled_lunar_hash" == "$source_lunar_hash" ]] || die "bundled Rime Ice lunar database does not match the locked source"
+while IFS= read -r -d '' candidate; do
+  [[ "$candidate" == "$public_lunar_db" ]] || die "forbidden personal or credential material found in app bundle: $candidate"
+done < <(find "$app" -type f \( -name '*.scel' -o -name '*.sgpybin' -o -name '*.sqlite' -o -name '*.db' -o -name '*.pem' -o -name '*.p12' \) -print0)
 
 printf 'verified YunPin.app: bundle=%s architectures=%s updates=offline\n' "$YUNPIN_BUNDLE_ID" "$architectures"

@@ -150,11 +150,34 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('${REPO_ROOT}/engine/src', stage)
         self.assertIn('failed to atomically refresh librime-yunpin staging', stage)
         self.assertIn('RIME_PLUGINS=librime-yunpin', build)
+        self.assertIn('cmake --fresh -S . -B "$build_dir"', build)
         self.assertIn('-DBUILD_MERGED_PLUGINS=ON', build)
         self.assertIn('rime_require_module_yunpin', build)
         self.assertNotIn("grep -Fq 'rime_require_module_yunpin'", build)
         self.assertIn('source_dir="$(cd "$source_dir" && pwd)"', build)
         self.assertIn('scripts/test-merged-ranking.sh', build)
+
+    def test_generated_bundle_xattrs_are_cleared_before_adhoc_signing(self) -> None:
+        build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(encoding="utf-8")
+        clear_xattrs = build.index('xattr -cr "$app"')
+        sign_bundle = build.index('codesign --force --deep --sign - "$app"')
+        self.assertLess(clear_xattrs, sign_bundle)
+        self.assertIn("for attempt in 1 2 3", build)
+        self.assertIn("unable to remove generated bundle metadata", build)
+
+    def test_corresponding_source_staging_stays_with_the_build_root(self) -> None:
+        archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('mktemp -d "$build_root/.source-archive.XXXXXX"', archive)
+        self.assertNotIn('${TMPDIR:-/tmp}/yunpin-source', archive)
+
+    def test_public_lunar_database_is_the_only_database_exception(self) -> None:
+        verify = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(encoding="utf-8")
+        self.assertIn('public_lunar_db="$shared_support/lua/lunar.db"', verify)
+        self.assertIn('${REPO_ROOT}/third_party/rime-ice/lua/lunar.db', verify)
+        self.assertIn('[[ "$candidate" == "$public_lunar_db" ]]', verify)
+        self.assertIn("forbidden personal or credential material", verify)
 
     def test_config_injection_is_private_atomic_and_non_destructive(self) -> None:
         with tempfile.TemporaryDirectory(prefix="yunpin-rime-config-") as temporary:

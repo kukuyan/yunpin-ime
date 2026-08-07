@@ -135,11 +135,25 @@ class WindowsClientTests(unittest.TestCase):
             '"WeaselSetup\\WeaselSetup.ico"',
             '"x64", "Win32"',
             "Q\\(yunpin\\)",
+            'libboost_wserialization-vc143-mt-s-x32-1_84.lib',
+            'libboost_wserialization-vc143-mt-s-x64-1_84.lib',
+            'boost-msvc-user-config.jam',
+            '<setup>`"$vcvarsAllForJam`"',
+            '"set BOOST_COMPILED_LIBS=$boostBuildOptions"',
+            'Boost build did not produce required x86/x64 libraries',
+            'Join-Path $boostRoot "bin.v2"',
+            'Join-Path $boostRoot "stage"',
+            'Merged librime build did not produce',
             '"/p:Platform=x64"',
             '"/p:Platform=Win32"',
         ):
             self.assertIn(required, build)
         self.assertNotIn("exit code $LASTEXITCODE:", build)
+        filter_source = (
+            ROOT / "librime-yunpin" / "src" / "rime_yunpin_filter.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"\\xE2\\x98\\x85"', filter_source)
+        self.assertNotIn('"★"', filter_source)
         self.assertTrue((ROOT / "librime-yunpin" / "src" / "yunpin_module.cpp").is_file())
         self.assertTrue((ROOT / "engine" / "src" / "phrase_engine.cpp").is_file())
 

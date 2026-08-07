@@ -26,7 +26,7 @@ class YunPinCandidate : public SimpleCandidate {
                   std::size_t end,
                   const yunpin::Candidate& candidate)
       : SimpleCandidate("yunpin", start, end, candidate.text,
-                        candidate.pinned ? "★" : ""),
+                        candidate.pinned ? "\xE2\x98\x85" : ""),
         id_(std::move(id)) {}
 
   const std::string& id() const noexcept { return id_; }

@@ -71,6 +71,15 @@ for package in bopomofo cangjie essay luna-pinyin prelude stroke terra-pinyin; d
 done
 cp "${MACOS_DIR}/preview-manifest.json" "$shared_support/yunpin-preview.json"
 
-codesign --force --deep --sign - "$app"
+signed=false
+for attempt in 1 2 3; do
+  xattr -cr "$app"
+  if codesign --force --deep --sign - "$app"; then
+    signed=true
+    break
+  fi
+  sleep 1
+done
+[[ "$signed" == true ]] || die "unable to remove generated bundle metadata before ad-hoc signing"
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
 printf 'built YunPin development preview: %s\n' "$app"
