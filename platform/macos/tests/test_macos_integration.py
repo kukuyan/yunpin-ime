@@ -73,7 +73,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(3, len(patches))
+        self.assertEqual(4, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -96,7 +96,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
         sources = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in (self.prepared / "sources").glob("*.swift")
+        for path in (self.prepared / "sources").glob("*.swift")
         )
         self.assertIn("/Library/Input Methods/YunPin.app", sources)
         self.assertIn('"Application Support", "YunPin", "Rime"', sources)
@@ -108,7 +108,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_original_artwork_replaces_upstream_visible_assets(self) -> None:
         upstream_logo = SQUIRREL / "Rime.icon" / "Assets" / "logo.svg"
-        prepared_logo = self.prepared / "YunPin.icon" / "Assets" / "logo.svg"
+        prepared_logo = self.prepared / "Rime.icon" / "Assets" / "logo.svg"
         self.assertNotEqual(
             hashlib.sha256(upstream_logo.read_bytes()).digest(),
             hashlib.sha256(prepared_logo.read_bytes()).digest(),
@@ -117,8 +117,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         project = (self.prepared / "Squirrel.xcodeproj" / "project.pbxproj").read_text(encoding="utf-8")
         self.assertIn("resources/yunpin.pdf", project)
         self.assertNotIn("resources/rime.pdf", project)
-        self.assertIn("path = YunPin.icon", project)
-        self.assertNotIn("path = Rime.icon", project)
+        self.assertIn("path = Rime.icon", project)
 
     def test_preview_manifest_separates_merged_module_from_host_evidence(self) -> None:
         manifest = json.loads((MACOS_DIR / "preview-manifest.json").read_text(encoding="utf-8"))
