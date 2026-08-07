@@ -13,9 +13,17 @@ function Invoke-CheckedExecutable {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $false)][string[]]$Arguments = @()
     )
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    $startParameters = @{
+        FilePath = $FilePath
+        Wait = $true
+        PassThru = $true
+    }
+    if ($Arguments.Count -gt 0) {
+        $startParameters.ArgumentList = $Arguments
+    }
+    $process = Start-Process @startParameters
+    if ($process.ExitCode -ne 0) {
+        throw "Command failed with exit code $($process.ExitCode): $FilePath $($Arguments -join ' ')"
     }
 }
 

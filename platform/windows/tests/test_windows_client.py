@@ -187,11 +187,19 @@ class WindowsClientTests(unittest.TestCase):
             "AcceptUnsignedDevelopmentBuild",
             "Assert-BundleManifest",
             "Copy-OverlayWithBackup",
+            "Start-Process @startParameters",
+            "PassThru = $true",
+            "Wait = $true",
+            "$process.ExitCode",
             '"YunPinIMEPreview"',
         ):
             self.assertIn(required, installer)
+        self.assertNotIn("$LASTEXITCODE", installer)
         self.assertRegex(installer, r"-Arguments\s+@\((?:'/du'|\"/du\")\)")
         self.assertIn("ConfirmUninstall", uninstaller)
+        self.assertIn("Start-Process @startParameters", uninstaller)
+        self.assertIn("$process.ExitCode", uninstaller)
+        self.assertNotIn("$LASTEXITCODE", uninstaller)
         self.assertIn("userDataRetained = $true", uninstaller)
         self.assertIn("MANIFEST.sha256", package)
         self.assertIn("development-preview-source.zip", package)
