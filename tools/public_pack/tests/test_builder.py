@@ -13,6 +13,7 @@ from yunpin_public_pack.builder import (
     validate_output_directory,
     write_outputs,
 )
+from yunpin_public_pack.gitcheck import verify_checkout
 
 
 class SyntheticSources:
@@ -106,6 +107,40 @@ class SyntheticSources:
 
 
 class BuilderTests(unittest.TestCase):
+    def test_crlf_checkout_uses_canonical_git_input_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            checkout = Path(directory) / "source"
+            checkout.mkdir()
+            (checkout / "dictionary.txt").write_bytes(b"first\r\nsecond\r\n")
+            subprocess.run(["git", "init", "-q"], cwd=str(checkout), check=True)
+            subprocess.run(
+                ["git", "-c", "core.autocrlf=true", "add", "dictionary.txt"],
+                cwd=str(checkout),
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.autocrlf=true",
+                    "-c",
+                    "user.name=YunPin Tests",
+                    "-c",
+                    "user.email=tests@example.invalid",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "synthetic CRLF source",
+                ],
+                cwd=str(checkout),
+                check=True,
+            )
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=str(checkout), text=True
+            ).strip()
+
+            self.assertEqual(commit, verify_checkout(checkout, commit))
+
     def test_priority_weights_reading_resolution_and_determinism(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = SyntheticSources(Path(directory))

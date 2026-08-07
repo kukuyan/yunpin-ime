@@ -30,7 +30,16 @@ def _git_environment() -> dict:
 def _run_git(root: Path, *arguments: str) -> str:
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), *arguments],
+            [
+                "git",
+                "-c",
+                "core.autocrlf=input",
+                "-c",
+                "core.safecrlf=false",
+                "-C",
+                str(root),
+                *arguments,
+            ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

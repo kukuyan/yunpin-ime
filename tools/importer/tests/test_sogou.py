@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +12,9 @@ from yunpin_importer.sogou import SogouConversionError, convert_with_pinned_tool
 
 class SogouBridgeTests(unittest.TestCase):
     def _fake_converter(self, directory: Path) -> Path:
-        converter = directory / "fake-converter"
+        # Exercise the supported managed-converter path so the fixture is
+        # executable on POSIX and Windows without a platform-specific binary.
+        converter = directory / "fake-converter.dll"
         converter.write_text(
             "#!/usr/bin/env python3\n"
             "import pathlib, sys\n"
@@ -38,6 +41,7 @@ class SogouBridgeTests(unittest.TestCase):
                 sha256_file(converter),
                 source_format="sgpybin",
                 expected_source_sha256=before,
+                dotnet=sys.executable,
             )
             try:
                 self.assertTrue(artifact.converted_path.exists())
@@ -68,7 +72,12 @@ class SogouBridgeTests(unittest.TestCase):
             )
             converter.chmod(0o700)
             with self.assertRaises(SogouConversionError):
-                convert_with_pinned_tool(source, converter, sha256_file(converter))
+                convert_with_pinned_tool(
+                    source,
+                    converter,
+                    sha256_file(converter),
+                    dotnet=sys.executable,
+                )
 
 
 if __name__ == "__main__":
