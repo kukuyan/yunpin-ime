@@ -3,16 +3,17 @@ Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
 Subject: [PATCH] yunpin: add expression search and favorite actions
 
 diff --git a/WeaselTSF/Composition.cpp b/WeaselTSF/Composition.cpp
-index e94cea0..a5235b2 100644
+index e94cea0..f5245cf 100644
 --- a/WeaselTSF/Composition.cpp
 +++ b/WeaselTSF/Composition.cpp
-@@ -3,6 +3,177 @@
+@@ -3,6 +3,221 @@
  #include "EditSession.h"
  #include "ResponseParser.h"
  #include "CandidateList.h"
 +#include <cwctype>
 +#include <shellapi.h>
 +
++#include <cstdio>
 +#include <cwchar>
 +
 +
@@ -57,7 +58,14 @@ index e94cea0..a5235b2 100644
 +        out += "\\t";
 +        break;
 +      default:
-+        out.push_back(c);
++        if (static_cast<unsigned char>(c) < 0x20) {
++          char escape[7];
++          std::snprintf(escape, sizeof(escape), "\\u%04X",
++                        static_cast<unsigned>(static_cast<unsigned char>(c)));
++          out += escape;
++        } else {
++          out.push_back(c);
++        }
 +    }
 +  }
 +  output.swap(out);
@@ -127,6 +135,35 @@ index e94cea0..a5235b2 100644
 +  return Trim(query);
 +}
 +
++// CreateDirectoryW does not create intermediate levels, so walk up until an
++// existing ancestor is found. Without this the first favorite on a machine
++// where %APPDATA%\YunPin does not yet exist fails with ERROR_PATH_NOT_FOUND.
++bool EnsureDirectory(const std::wstring& dir) {
++  if (::CreateDirectoryW(dir.c_str(), nullptr)) {
++    return true;
++  }
++  const DWORD error = ::GetLastError();
++  if (error == ERROR_ALREADY_EXISTS) {
++    return true;
++  }
++  if (error != ERROR_PATH_NOT_FOUND) {
++    return false;
++  }
++  const size_t separator = dir.find_last_of(L"\\/");
++  if (separator == std::wstring::npos || separator == 0) {
++    return false;
++  }
++  const std::wstring parent = dir.substr(0, separator);
++  // Stop at a drive root such as "C:".
++  if (parent.size() <= 2 || !EnsureDirectory(parent)) {
++    return false;
++  }
++  if (::CreateDirectoryW(dir.c_str(), nullptr)) {
++    return true;
++  }
++  return ::GetLastError() == ERROR_ALREADY_EXISTS;
++}
++
 +bool BuildFavoritePath(std::wstring& path) {
 +  WCHAR app_data_path[MAX_PATH];
 +  const DWORD app_data_len =
@@ -139,8 +176,7 @@ index e94cea0..a5235b2 100644
 +    dir.push_back(L'\\');
 +  }
 +  dir += L"YunPin\\emoji_favorites";
-+  if (!::CreateDirectoryW(dir.c_str(), nullptr) &&
-+      ::GetLastError() != ERROR_ALREADY_EXISTS) {
++  if (!EnsureDirectory(dir)) {
 +    return false;
 +  }
 +  path = dir + L"\\favorites.jsonl";
@@ -171,20 +207,28 @@ index e94cea0..a5235b2 100644
 +      "{\"type\":\"emoji\",\"query\":\"" + escaped_query +
 +      "\",\"source\":\"weasel\",\"ts\":" +
 +      std::to_string(ts) + "}\n";
-+  FILE* file = ::_wfopen(path.c_str(), L"ab");
-+  if (!file) {
++  // Weasel TSF is loaded into every client process, so two hosts can append
++  // concurrently. A handle opened with FILE_APPEND_DATA (and without
++  // FILE_WRITE_DATA) gives an atomic append and never truncates the store.
++  const HANDLE file = ::CreateFileW(path.c_str(), FILE_APPEND_DATA,
++                                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
++                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++  if (file == INVALID_HANDLE_VALUE) {
 +    return false;
 +  }
-+  const size_t written = ::fwrite(payload.data(), 1, payload.size(), file);
-+  ::fclose(file);
-+  return written == payload.size();
++  DWORD written = 0;
++  const BOOL ok = ::WriteFile(file, payload.data(),
++                              static_cast<DWORD>(payload.size()), &written,
++                              nullptr);
++  ::CloseHandle(file);
++  return ok != FALSE && written == payload.size();
 +}
 +
 +}  // namespace
  
  /* Start Composition */
  class CStartCompositionEditSession : public CEditSession {
-@@ -364,6 +535,16 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
+@@ -364,6 +579,16 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
  
  BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
                              const std::wstring& text) {

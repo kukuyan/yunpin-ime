@@ -3,7 +3,7 @@ Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
 Subject: [PATCH] yunpin: add expression search and favorite actions
 
 diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
-index bad53d9..31538b6 100644
+index bad53d9..7520985 100644
 --- a/sources/SquirrelInputController.swift
 +++ b/sources/SquirrelInputController.swift
 @@ -5,10 +5,14 @@
@@ -21,7 +21,7 @@ index bad53d9..31538b6 100644
    private static var unknownAppCnt: UInt = 0
  
    private weak var client: IMKTextInput?
-@@ -546,12 +550,74 @@ private extension SquirrelInputController {
+@@ -546,12 +550,91 @@ private extension SquirrelInputController {
  
    func commit(string: String) {
      guard let client = client else { return }
@@ -61,32 +61,49 @@ index bad53d9..31538b6 100644
 +    let query = String(string.dropFirst(Self.favoriteCommitPrefix.count))
 +      .trimmingCharacters(in: .whitespacesAndNewlines)
 +    guard !query.isEmpty else { return true }
-+    guard persistFavorite(query: query) else { return true }
++    if !persistFavorite(query: query) {
++      // Never echo the query itself into the log: it is user-typed content.
++      NSLog("YunPin: failed to persist an emoji favorite record")
++    }
 +    return true
 +  }
 +
 +  private func persistFavorite(query: String) -> Bool {
 +    let storeDir = SquirrelApp.userDir.appendingPathComponent(Self.favoriteStorePath, isDirectory: true)
-+    let storeFile = storeDir.appendingPathComponent("favorites.jsonl", conformingTo: .json)
++    let storeFile = storeDir.appendingPathComponent("favorites.jsonl", isDirectory: false)
 +    do {
-+      try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
-+      let payload = String(
-+        format: "{\"type\":\"emoji\",\"query\":\"%@\",\"source\":\"squirrel\",\"ts\":%f}\n",
-+        query.replacingOccurrences(of: "\\", with: "\\\\")
-+          .replacingOccurrences(of: "\"", with: "\\\""),
-+        Date().timeIntervalSince1970
++      try FileManager.default.createDirectory(
++        at: storeDir,
++        withIntermediateDirectories: true,
++        attributes: [.posixPermissions: 0o700]
 +      )
-+      let data = Data(payload.utf8)
++      // Serialize through Foundation so control characters and lone surrogates
++      // cannot produce a malformed JSONL record.
++      let record: [String: Any] = [
++        "type": "emoji",
++        "query": query,
++        "source": "squirrel",
++        "ts": Date().timeIntervalSince1970,
++      ]
++      var data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
++      data.append(0x0A)
 +
-+      if FileManager.default.fileExists(atPath: storeFile.path()) {
-+        if let handle = FileHandle(forWritingTo: storeFile) {
-+          handle.seekToEnd()
-+          handle.write(data)
-+          try handle.close()
-+          return true
++      let storePath = storeFile.path(percentEncoded: false)
++      if !FileManager.default.fileExists(atPath: storePath) {
++        guard FileManager.default.createFile(
++          atPath: storePath,
++          contents: nil,
++          attributes: [.posixPermissions: 0o600]
++        ) else {
++          return false
 +        }
 +      }
-+      try data.write(to: storeFile, options: .atomic)
++      // Append only. An existing store is never truncated, even when the
++      // handle cannot be opened.
++      guard let handle = FileHandle(forWritingTo: storeFile) else { return false }
++      defer { try? handle.close() }
++      try handle.seekToEnd()
++      try handle.write(contentsOf: data)
 +      return true
 +    } catch {
 +      return false
