@@ -62,7 +62,13 @@ only the private phrases, and a present one never switches the actions on.
 
 ## Build modes
 
-At repository root, the directory builds only the snapshot/parser tests:
+At repository root the directory builds two test targets and no plugin: the
+snapshot/parser tests, and a candidate-ordering test that compiles the real
+`src/rime_yunpin_filter.cpp` against `tests/rime_stubs/`. Those stubs declare
+only the slice of the librime API the filter touches, so ordering regressions
+are caught on a machine without librime, Boost or glog. They are pinned to the
+librime commit in `platform/upstream-lock.json`; re-check them against the real
+headers whenever that moves.
 
 ```bash
 cmake -S librime-yunpin -B build/librime-yunpin

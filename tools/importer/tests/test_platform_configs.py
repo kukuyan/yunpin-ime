@@ -19,6 +19,19 @@ class PlatformConfigTests(unittest.TestCase):
                 self.assertTrue(component["tag"])
                 self.assertTrue(component["license"])
 
+    def test_rime_stub_headers_track_the_locked_librime(self):
+        # librime-yunpin/tests/rime_stubs re-declares part of the librime API so
+        # the filter can be tested without librime. A librime bump silently
+        # invalidates those signatures, so every stub records the commit it was
+        # written against and this pins it to the lock.
+        lock = json.loads((self.repository / "platform" / "upstream-lock.json").read_text(encoding="utf-8"))
+        librime = next(item for item in lock["components"] if item["name"] == "librime")
+        stubs = sorted((self.repository / "librime-yunpin" / "tests" / "rime_stubs").rglob("*.h"))
+        self.assertGreaterEqual(len(stubs), 10)
+        for stub in stubs:
+            with self.subTest(stub=stub.name):
+                self.assertIn(librime["commit"], stub.read_text(encoding="utf-8"))
+
     def overlay_paths(self):
         roots = (
             self.repository / "platform" / "rime",

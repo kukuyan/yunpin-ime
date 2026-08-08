@@ -69,4 +69,30 @@ else()
     Threads::Threads
   )
   add_test(NAME yunpin_snapshot_tests COMMAND yunpin_snapshot_tests)
+
+  # Candidate ordering is decided by the filter, which normally only compiles
+  # inside a librime tree. tests/rime_stubs declares the small slice of the
+  # librime API the filter uses so the ordering rules stay testable on a
+  # machine without librime, Boost or glog. The filter, snapshot store and
+  # phrase engine sources here are the production ones.
+  add_executable(yunpin_filter_behaviour_tests
+    tests/filter_behaviour_test.cpp
+    src/rime_yunpin_filter.cpp
+  )
+  target_include_directories(yunpin_filter_behaviour_tests PRIVATE
+    tests/rime_stubs
+    src
+  )
+  target_link_libraries(yunpin_filter_behaviour_tests PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  if(MSVC)
+    target_compile_options(yunpin_filter_behaviour_tests PRIVATE /W4 /WX /permissive-)
+  else()
+    target_compile_options(yunpin_filter_behaviour_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Werror
+    )
+  endif()
+  add_test(NAME yunpin_filter_behaviour_tests COMMAND yunpin_filter_behaviour_tests)
 endif()
