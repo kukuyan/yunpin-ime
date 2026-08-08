@@ -50,6 +50,27 @@ python3 -m yunpin_importer import /path/to/conversations.json --kind chatgpt \
   --confirm IMPORT
 ```
 
+### 如果你本机仍看到 5 个候选
+
+通常是旧的用户配置文件未刷新。先不重编译的话，先按你实际使用端执行：
+
+- macOS：
+
+```bash
+platform/macos/scripts/inject-rime-config.sh --force
+killall Squirrel || true
+```
+
+- Windows（PowerShell）：
+
+```powershell
+Copy-Item -LiteralPath "$PWD\platform\rime\common\default.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\default.custom.yaml" -Force
+Copy-Item -LiteralPath "$PWD\platform\rime\weasel\weasel.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\weasel.custom.yaml" -Force
+Copy-Item -LiteralPath "$PWD\platform\windows\rime\rime_ice.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\rime_ice.custom.yaml" -Force
+```
+
+之后重新部署输入法（macOS 可在系统设置里重启输入法，Windows 退出并重新激活 YunPin），再试 `12345678` 是否生效。
+
 ## 数据与隐私边界
 
 公共词包来自锁定版本的 Rime Ice、Rime Essay、THUOCL 与 phrase-pinyin-data；更新任务只提交待审核 PR。输入过程中绝不在线查询。历史对话只在本地提取短语、拼音和粗粒度频次，过滤原句、URL、IP、邮箱、路径、凭据、令牌、长数字与代码块。

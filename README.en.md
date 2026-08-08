@@ -28,3 +28,24 @@ Start the development sync service with `docker compose up --build`, then visit 
 You can point clients to a local NAS relay by setting a local URL such as `http://192.168.1.127:8787`; client-side behavior is unchanged.
 
 The original shared code is Apache-2.0. Weasel/Squirrel derivative patches and desktop distributions are GPL-3.0. Third-party dictionaries retain their upstream licenses. See [the license matrix](docs/LICENSE_MATRIX.md), [privacy model](PRIVACY.md), and [architecture](docs/ARCHITECTURE.md).
+
+### If you still see only 5 candidates locally
+
+This is usually caused by stale per-user Rime overlays. You can refresh without rebuilding:
+
+- macOS:
+
+```bash
+platform/macos/scripts/inject-rime-config.sh --force
+killall Squirrel || true
+```
+
+- Windows (PowerShell):
+
+```powershell
+Copy-Item -LiteralPath "$PWD\platform\rime\common\default.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\default.custom.yaml" -Force
+Copy-Item -LiteralPath "$PWD\platform\rime\weasel\weasel.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\weasel.custom.yaml" -Force
+Copy-Item -LiteralPath "$PWD\platform\windows\rime\rime_ice.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\rime_ice.custom.yaml" -Force
+```
+
+Then reactivate YunPin (macOS: toggle input method, Windows: disable and re-enable) and test `12345678`.

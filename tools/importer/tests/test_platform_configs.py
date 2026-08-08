@@ -33,6 +33,17 @@ class PlatformConfigTests(unittest.TestCase):
         )
         self.assertIn('"style/horizontal": true', weasel)
         self.assertIn('"style/candidate_list_layout": linear', squirrel)
+        self.assertIn('"menu/page_size": 8', squirrel)
+        self.assertIn('"menu/alternative_select_keys": "12345678"', squirrel)
+        rime_ice_windows = (self.repository / "platform" / "windows" / "rime" / "rime_ice.custom.yaml").read_text(
+            encoding="utf-8"
+        )
+        rime_ice_squirrel = (self.repository / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml").read_text(
+            encoding="utf-8"
+        )
+        for overlay in (rime_ice_windows, rime_ice_squirrel):
+            self.assertIn('"menu/page_size": 8', overlay)
+            self.assertIn('"menu/alternative_select_keys": "12345678"', overlay)
         for overlay in (weasel, squirrel):
             self.assertIn('"style/color_scheme_dark": yunpin_dark', overlay)
             self.assertNotIn("preset_color_schemes/sogou", overlay.lower())

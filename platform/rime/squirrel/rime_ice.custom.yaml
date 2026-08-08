@@ -2,6 +2,8 @@
 # Development-preview label and read-only local YunPin ranking filter.
 
 patch:
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
   "schema/name": "云拼开发预览（Rime Ice）"
   "engine/filters/@before 0": yunpin_filter@yunpin
   "yunpin/tag": abc

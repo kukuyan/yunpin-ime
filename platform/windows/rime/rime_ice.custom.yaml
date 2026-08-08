@@ -3,6 +3,8 @@
 # the schema filter; personal data remains an external user-data file.
 
 patch:
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
   "engine/filters/@before 0": yunpin_filter@yunpin
   "translator/enable_word_completion": true
   "translator/max_sentences": 2
