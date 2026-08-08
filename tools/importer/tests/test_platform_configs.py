@@ -22,8 +22,8 @@ class PlatformConfigTests(unittest.TestCase):
         common = (self.repository / "platform" / "rime" / "common" / "default.custom.yaml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"menu/page_size": 5', common)
-        self.assertIn('"menu/alternative_select_keys": "12345"', common)
+        self.assertIn('"menu/page_size": 8', common)
+        self.assertIn('"menu/alternative_select_keys": "12345678"', common)
 
         weasel = (self.repository / "platform" / "rime" / "weasel" / "weasel.custom.yaml").read_text(
             encoding="utf-8"
