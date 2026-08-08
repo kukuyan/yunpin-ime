@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -18,13 +19,53 @@ class PlatformConfigTests(unittest.TestCase):
                 self.assertTrue(component["tag"])
                 self.assertTrue(component["license"])
 
-    def test_both_desktop_overlays_are_horizontal_numbered_and_dark_aware(self):
-        common = (self.repository / "platform" / "rime" / "common" / "default.custom.yaml").read_text(
-            encoding="utf-8"
+    def overlay_paths(self):
+        roots = (
+            self.repository / "platform" / "rime",
+            self.repository / "platform" / "windows" / "rime",
         )
-        self.assertIn('"menu/page_size": 8', common)
-        self.assertIn('"menu/alternative_select_keys": "12345678"', common)
+        found = []
+        for root in roots:
+            found.extend(sorted(root.rglob("*.custom.yaml")))
+        return found
 
+    def test_every_shipped_overlay_pins_the_eight_key_layout(self):
+        overlays = self.overlay_paths()
+        # A new overlay that nobody asserts on is how "my machine still shows
+        # five candidates" comes back, so the count is pinned deliberately.
+        self.assertEqual(
+            [
+                "squirrel/default.custom.yaml",
+                "squirrel/rime_ice.custom.yaml",
+                "squirrel/squirrel.custom.yaml",
+                "weasel/default.custom.yaml",
+                "weasel/weasel.custom.yaml",
+                "rime/rime_ice.custom.yaml",
+            ],
+            [f"{path.parent.name}/{path.name}" for path in overlays],
+        )
+        for path in overlays:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(overlay=f"{path.parent.name}/{path.name}"):
+                sizes = re.findall(r'"menu/page_size":\s*(\d+)', text)
+                self.assertTrue(sizes, "overlay must pin the candidate page size")
+                self.assertEqual({"8"}, set(sizes))
+                self.assertIn('"menu/alternative_select_keys": "12345678"', text)
+
+    def test_the_two_default_overlays_agree(self):
+        # macOS installs squirrel/default.custom.yaml and Windows installs
+        # weasel/default.custom.yaml. They are separate files that must not
+        # drift apart on the menu settings.
+        def menu_lines(path):
+            text = (self.repository / "platform" / "rime" / path).read_text(encoding="utf-8")
+            return sorted(re.findall(r'^\s*"menu/[^"]+":.*$', text, flags=re.MULTILINE))
+
+        self.assertEqual(
+            menu_lines("squirrel/default.custom.yaml"),
+            menu_lines("weasel/default.custom.yaml"),
+        )
+
+    def test_desktop_themes_are_horizontal_and_dark_aware(self):
         weasel = (self.repository / "platform" / "rime" / "weasel" / "weasel.custom.yaml").read_text(
             encoding="utf-8"
         )
@@ -33,24 +74,21 @@ class PlatformConfigTests(unittest.TestCase):
         )
         self.assertIn('"style/horizontal": true', weasel)
         self.assertIn('"style/candidate_list_layout": linear', squirrel)
-        self.assertIn('"menu/page_size": 8', squirrel)
-        self.assertIn('"menu/alternative_select_keys": "12345678"', squirrel)
-        rime_ice_windows = (self.repository / "platform" / "windows" / "rime" / "rime_ice.custom.yaml").read_text(
-            encoding="utf-8"
-        )
-        rime_ice_squirrel = (self.repository / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml").read_text(
-            encoding="utf-8"
-        )
-        for overlay in (rime_ice_windows, rime_ice_squirrel):
-            self.assertIn('"menu/page_size": 8', overlay)
-            self.assertIn('"menu/alternative_select_keys": "12345678"', overlay)
-            # The expression actions consume two candidate slots and reach the
-            # network, so no shipped overlay may enable them.
-            self.assertIn('"yunpin/expression_search": false', overlay)
-            self.assertNotIn('"yunpin/expression_search": true', overlay)
         for overlay in (weasel, squirrel):
             self.assertIn('"style/color_scheme_dark": yunpin_dark', overlay)
             self.assertNotIn("preset_color_schemes/sogou", overlay.lower())
+
+    def test_no_shipped_overlay_enables_the_expression_actions(self):
+        for name in (
+            self.repository / "platform" / "windows" / "rime" / "rime_ice.custom.yaml",
+            self.repository / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml",
+        ):
+            overlay = name.read_text(encoding="utf-8")
+            with self.subTest(overlay=name.name):
+                # The expression actions consume two candidate slots and reach
+                # the network, so no shipped overlay may enable them.
+                self.assertIn('"yunpin/expression_search": false', overlay)
+                self.assertNotIn('"yunpin/expression_search": true', overlay)
 
 
 if __name__ == "__main__":

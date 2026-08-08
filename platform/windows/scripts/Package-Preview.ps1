@@ -158,7 +158,7 @@ Get-ChildItem -LiteralPath $rimeIceExport -File | Where-Object {
 foreach ($directory in @("cn_dicts", "en_dicts", "lua", "opencc")) {
     Copy-TreeContent -Source (Join-Path $rimeIceExport $directory) -Destination (Join-Path $rimeDataRoot $directory)
 }
-Copy-Item -LiteralPath (Join-Path $repoRoot "platform\rime\common\default.custom.yaml") -Destination $rimeDataRoot -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "platform\rime\weasel\default.custom.yaml") -Destination $rimeDataRoot -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "platform\rime\weasel\weasel.custom.yaml") -Destination $rimeDataRoot -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "platform\windows\rime\rime_ice.custom.yaml") -Destination $rimeDataRoot -Force
 $privateExampleRoot = Join-Path $rimeDataRoot "yunpin"

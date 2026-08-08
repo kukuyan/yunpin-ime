@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Weasel/Windows default overlay. Copy into the user's Rime data directory.
+# macOS reads platform/rime/squirrel/default.custom.yaml instead; the menu
+# settings of the two files are kept in step by tools/importer tests.
+
+patch:
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"

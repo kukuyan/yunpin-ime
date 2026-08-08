@@ -14,6 +14,26 @@ actual_commit="$(git -C "$source_checkout" rev-parse HEAD)"
 [[ "$actual_commit" == "$SQUIRREL_COMMIT" ]] || die "Squirrel checkout $actual_commit does not match lock $SQUIRREL_COMMIT"
 [[ "$(read_lock_value squirrel_commit)" == "$SQUIRREL_COMMIT" ]] || die "macOS dependency lock disagrees with the platform lock"
 
+# The patch series carries the whole preview identity, so verify it against the
+# lock before touching a checkout. Windows already does this through
+# platform/windows/dependencies.lock.json.
+/usr/bin/python3 - "${MACOS_DIR}/dependencies.lock.json" "$REPO_ROOT" "$patch_dir" <<'VERIFY' || die "Squirrel patch series failed verification against the macOS dependency lock"
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+lock, repo_root, patch_dir = (Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
+rows = json.loads(lock.read_text(encoding="utf-8")).get("squirrel_patches")
+if not rows:
+    sys.exit("dependency lock does not record the Squirrel patch series")
+if [repo_root / row["path"] for row in rows] != sorted(patch_dir.glob("*.patch")):
+    sys.exit("locked Squirrel patch series does not match the files on disk")
+for row in rows:
+    if hashlib.sha256((repo_root / row["path"]).read_bytes()).hexdigest() != row["sha256"]:
+        sys.exit(f"digest mismatch for {row['path']}")
+VERIFY
+
 mkdir -p "$(dirname "$output")"
 git clone --quiet --no-hardlinks "$source_checkout" "$output"
 git -C "$output" checkout --quiet --detach "$SQUIRREL_COMMIT"

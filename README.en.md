@@ -43,7 +43,7 @@ killall Squirrel || true
 - Windows (PowerShell):
 
 ```powershell
-Copy-Item -LiteralPath "$PWD\platform\rime\common\default.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\default.custom.yaml" -Force
+Copy-Item -LiteralPath "$PWD\platform\rime\weasel\default.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\default.custom.yaml" -Force
 Copy-Item -LiteralPath "$PWD\platform\rime\weasel\weasel.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\weasel.custom.yaml" -Force
 Copy-Item -LiteralPath "$PWD\platform\windows\rime\rime_ice.custom.yaml" -Destination "$env:APPDATA\YunPin\Rime\rime_ice.custom.yaml" -Force
 ```

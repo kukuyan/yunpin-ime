@@ -7,6 +7,28 @@
     "plum": "4c28f11f451facef809b380502874a48ba964ddb",
     "Sparkle": "41847a58cdef7506b257591fcca6f9495df591d4"
   },
+  "squirrel_patches": [
+    {
+      "path": "platform/patches/squirrel/0001-yunpin-development-preview-identity.patch",
+      "sha256": "653780ecbc1167e388c214c94d6de9b4ecb921426aaa08e077f42cea0834855a"
+    },
+    {
+      "path": "platform/patches/squirrel/0002-yunpin-original-input-source-artwork.patch",
+      "sha256": "127b199d87f0b5584c2c419228eae11d5264c60009c4922e337703a27495349a"
+    },
+    {
+      "path": "platform/patches/squirrel/0003-yunpin-original-app-icon-name.patch",
+      "sha256": "3a3db5d0a43b25895c440594c6e4a3c1b20a6f64816ae6144dcd500cee4b74b4"
+    },
+    {
+      "path": "platform/patches/squirrel/0004-yunpin-stable-app-icon-names.patch",
+      "sha256": "51a44be6b5f6e25725f9501b01f1f6c2ca9b3e027c13e5ec2c4315d313b87165"
+    },
+    {
+      "path": "platform/patches/squirrel/0005-yunpin-expression-search-and-favorite.patch",
+      "sha256": "15fc36e6656b4dcc884ae8dcd346f58bc4dd2cd44e697517cccf52285abcffca"
+    }
+  ],
   "archives": [
     {
       "name": "rime-a251145-macOS-universal.tar.bz2",

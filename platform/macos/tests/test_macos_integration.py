@@ -80,6 +80,19 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertIn(f"Base-Commit: {EXPECTED_COMMIT}", text)
         self.assertEqual(EXPECTED_COMMIT, (self.prepared / ".yunpin-base-commit").read_text().strip())
 
+    def test_patch_series_is_digest_locked(self) -> None:
+        # Base-Commit alone only proves what a patch was written against; it
+        # does not detect an edited patch. Windows pins digests in
+        # platform/windows/dependencies.lock.json and macOS must match.
+        rows = json.loads((MACOS_DIR / "dependencies.lock.json").read_text(encoding="utf-8"))[
+            "squirrel_patches"
+        ]
+        self.assertEqual([ROOT / row["path"] for row in rows], sorted(PATCH_DIR.glob("*.patch")))
+        for row in rows:
+            with self.subTest(patch=row["path"]):
+                digest = hashlib.sha256((ROOT / row["path"]).read_bytes()).hexdigest()
+                self.assertEqual(digest, row["sha256"])
+
     def test_preview_has_unique_input_method_identity_and_offline_updates(self) -> None:
         with (self.prepared / "resources" / "Info.plist").open("rb") as stream:
             info = plistlib.load(stream)
