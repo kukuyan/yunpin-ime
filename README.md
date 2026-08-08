@@ -34,6 +34,9 @@ curl http://127.0.0.1:8787/healthz
 若部署到 NAS（例如 `192.168.1.127`），可改为：
 
 ```bash
+cp .env.example .env
+sed -i '' 's/^YUNPIN_HOST_BIND=.*/YUNPIN_HOST_BIND=192.168.1.127/' .env
+docker compose up -d --build
 curl http://192.168.1.127:8787/healthz
 ```
 

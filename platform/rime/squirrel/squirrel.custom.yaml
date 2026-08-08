@@ -20,6 +20,8 @@ patch:
   "style/border_height": 5
   "style/border_width": 7
   "style/spacing": 7
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
   "style/color_scheme": yunpin_light
   "style/color_scheme_dark": yunpin_dark
   "preset_color_schemes/yunpin_light":
