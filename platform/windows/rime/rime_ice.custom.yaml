@@ -14,3 +14,6 @@ patch:
   # The Windows TSF secure-input bridge has not passed host testing yet.
   # Keep private candidates disabled in distributed development artifacts.
   "yunpin/enabled": false
+  # Expression actions reach the network and the local disk, and they occupy
+  # two candidate slots. Opt-in only.
+  "yunpin/expression_search": false

@@ -49,7 +49,16 @@ yunpin:
   snapshot: yunpin/private.tsv
   max_candidates: 2
   enabled: true
+  # Optional expression search/favorite actions. Default false. When enabled
+  # the two action candidates are placed in the trailing slots of the first
+  # page, never at the head, so the space bar and keys 1-2 keep selecting real
+  # candidates. `enabled: false` also forces this off.
+  expression_search: false
 ```
+
+`max_candidates` bounds the private phrases that may take head slots.
+`expression_search` is independent of `snapshot`: a missing snapshot disables
+only the private phrases, and a present one never switches the actions on.
 
 ## Build modes
 

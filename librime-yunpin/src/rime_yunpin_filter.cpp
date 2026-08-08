@@ -58,12 +58,26 @@ class YunPinCandidate : public SimpleCandidate {
   std::string id_;
 };
 
+// Ordering contract: `front` candidates (private phrases) take the head of the
+// list, then upstream. `deferred` candidates are parked at `deferred_offset`
+// so that they never occupy a head slot -- the first candidate is what the
+// space bar commits, and 1/2 are the most used selection keys. When upstream
+// runs dry before the offset the deferred candidates are still emitted rather
+// than silently dropped.
 class YunPinMergedTranslation : public Translation {
  public:
   YunPinMergedTranslation(an<Translation> upstream,
-                          std::vector<of<Candidate>> injected)
-      : upstream_(std::move(upstream)), injected_(std::move(injected)) {
-    for (const auto& candidate : injected_) {
+                          std::vector<of<Candidate>> front,
+                          std::vector<of<Candidate>> deferred,
+                          std::size_t deferred_offset)
+      : upstream_(std::move(upstream)),
+        front_(std::move(front)),
+        deferred_(std::move(deferred)),
+        deferred_offset_(deferred_offset) {
+    for (const auto& candidate : front_) {
+      injected_text_.insert(candidate->text());
+    }
+    for (const auto& candidate : deferred_) {
       injected_text_.insert(candidate->text());
     }
     SkipDuplicateUpstream();
@@ -71,30 +85,60 @@ class YunPinMergedTranslation : public Translation {
   }
 
   bool Next() override {
-    if (exhausted()) {
-      return false;
+    switch (SelectSource()) {
+      case Source::kFront:
+        ++front_cursor_;
+        break;
+      case Source::kDeferred:
+        ++deferred_cursor_;
+        break;
+      case Source::kUpstream:
+        upstream_->Next();
+        SkipDuplicateUpstream();
+        break;
+      case Source::kNone:
+        return false;
     }
-    if (injected_cursor_ < injected_.size()) {
-      ++injected_cursor_;
-    } else if (upstream_ && !upstream_->exhausted()) {
-      upstream_->Next();
-      SkipDuplicateUpstream();
-    }
+    ++emitted_;
     RefreshExhausted();
     return true;
   }
 
   an<Candidate> Peek() override {
-    if (injected_cursor_ < injected_.size()) {
-      return injected_[injected_cursor_];
+    switch (SelectSource()) {
+      case Source::kFront:
+        return front_[front_cursor_];
+      case Source::kDeferred:
+        return deferred_[deferred_cursor_];
+      case Source::kUpstream:
+        return upstream_->Peek();
+      case Source::kNone:
+        break;
     }
-    if (!upstream_ || upstream_->exhausted()) {
-      return nullptr;
-    }
-    return upstream_->Peek();
+    return nullptr;
   }
 
  private:
+  enum class Source { kFront, kDeferred, kUpstream, kNone };
+
+  // Single decision point shared by Peek and Next so the two can never
+  // disagree about which candidate is current.
+  Source SelectSource() const {
+    if (front_cursor_ < front_.size()) {
+      return Source::kFront;
+    }
+    const bool upstream_available = upstream_ && !upstream_->exhausted();
+    const bool deferred_available = deferred_cursor_ < deferred_.size();
+    if (deferred_available &&
+        (emitted_ >= deferred_offset_ || !upstream_available)) {
+      return Source::kDeferred;
+    }
+    if (upstream_available) {
+      return Source::kUpstream;
+    }
+    return deferred_available ? Source::kDeferred : Source::kNone;
+  }
+
   void SkipDuplicateUpstream() {
     while (upstream_ && !upstream_->exhausted()) {
       const auto candidate = upstream_->Peek();
@@ -106,15 +150,16 @@ class YunPinMergedTranslation : public Translation {
     }
   }
 
-  void RefreshExhausted() {
-    set_exhausted(injected_cursor_ >= injected_.size() &&
-                  (!upstream_ || upstream_->exhausted()));
-  }
+  void RefreshExhausted() { set_exhausted(SelectSource() == Source::kNone); }
 
   an<Translation> upstream_;
-  std::vector<of<Candidate>> injected_;
+  std::vector<of<Candidate>> front_;
+  std::vector<of<Candidate>> deferred_;
   std::set<std::string> injected_text_;
-  std::size_t injected_cursor_{0};
+  std::size_t front_cursor_{0};
+  std::size_t deferred_cursor_{0};
+  std::size_t deferred_offset_{0};
+  std::size_t emitted_{0};
 };
 
 bool IsSafeRelativePath(const std::string& path) {
@@ -147,15 +192,38 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
     config->GetString(name_space_ + "/tag", &tag_);
     config->GetString(name_space_ + "/snapshot", &snapshot_path_);
     config->GetBool(name_space_ + "/enabled", &enabled_);
+    config->GetBool(name_space_ + "/expression_search", &expression_search_);
     int configured_limit = static_cast<int>(max_candidates_);
     if (config->GetInt(name_space_ + "/max_candidates", &configured_limit)) {
       max_candidates_ = static_cast<std::size_t>(
           std::clamp(configured_limit, 0, 2));
     }
   }
-  if (enabled_ && max_candidates_ > 0) {
-    enabled_ = LoadSnapshot(snapshot_path_);
+  // The module master switch still wins: a deployment that turns the filter
+  // off must not regain the expression actions through a stale overlay.
+  if (!enabled_) {
+    expression_search_ = false;
   }
+  // Snapshot availability now only gates the private phrases. Previously a
+  // missing snapshot disabled the whole filter and a present one silently
+  // switched the expression actions on.
+  if (enabled_ && max_candidates_ > 0) {
+    private_ready_ = LoadSnapshot(snapshot_path_);
+  }
+}
+
+bool YunPinFilter::Active() const {
+  return enabled_ && (private_ready_ || expression_search_);
+}
+
+std::size_t YunPinFilter::PageSize() const {
+  if (engine_ && engine_->schema()) {
+    const int configured = engine_->schema()->page_size();
+    if (configured > 0) {
+      return static_cast<std::size_t>(configured);
+    }
+  }
+  return 5;
 }
 
 bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
@@ -193,9 +261,8 @@ bool YunPinFilter::PrivateModeEnabled() const {
 
 bool YunPinFilter::AppliesToSegment(Segment* segment) {
   active_input_.clear();
-  if (!enabled_ || max_candidates_ == 0 || segment == nullptr ||
-      !segment->HasTag(tag_) || PrivateModeEnabled() || !engine_ ||
-      !engine_->context()) {
+  if (!Active() || segment == nullptr || !segment->HasTag(tag_) ||
+      PrivateModeEnabled() || !engine_ || !engine_->context()) {
     return false;
   }
   const std::string& input = engine_->context()->input();
@@ -223,34 +290,44 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
          (trimmed_input.back() == ' ' || trimmed_input.back() == '\t')) {
     trimmed_input.pop_back();
   }
-  std::vector<of<Candidate>> injected;
-  const auto matches = store_.Query(active_input_, max_candidates_);
-  injected.reserve(matches.size() + 2);
-  if (!trimmed_input.empty()) {
-    injected.push_back(
+  // Private phrases keep the head slots; max_candidates_ already bounds them.
+  std::vector<of<Candidate>> front;
+  if (private_ready_) {
+    const auto matches = store_.Query(active_input_, max_candidates_);
+    front.reserve(matches.size());
+    std::set<std::string> seen;
+    for (const auto& match : matches) {
+      if (!seen.insert(match.text).second) {
+        continue;
+      }
+      front.push_back(New<YunPinCandidate>(match.id, active_start_,
+                                           active_end_, match));
+    }
+  }
+
+  std::vector<of<Candidate>> deferred;
+  if (expression_search_ && !trimmed_input.empty()) {
+    deferred.reserve(2);
+    deferred.push_back(
         New<YunPinSearchCandidate>(active_start_, active_end_, trimmed_input));
-    injected.push_back(
+    deferred.push_back(
         New<YunPinFavoriteCandidate>(active_start_, active_end_, trimmed_input));
   }
 
-  if (matches.empty()) {
-    if (injected.empty()) {
-      return translation;
-    }
-    return New<YunPinMergedTranslation>(std::move(translation),
-                                        std::move(injected));
+  if (front.empty() && deferred.empty()) {
+    return translation;
   }
 
-  std::set<std::string> seen;
-  for (const auto& match : matches) {
-    if (!seen.insert(match.text).second) {
-      continue;
-    }
-    injected.push_back(New<YunPinCandidate>(match.id, active_start_,
-                                            active_end_, match));
+  // Park the actions in the trailing slots of the first page: visible without
+  // a page turn, but off the space bar and off keys 1-2.
+  std::size_t deferred_offset = front.size();
+  const std::size_t page_size = PageSize();
+  if (page_size > deferred.size()) {
+    deferred_offset = std::max(deferred_offset, page_size - deferred.size());
   }
-  return New<YunPinMergedTranslation>(std::move(translation),
-                                      std::move(injected));
+
+  return New<YunPinMergedTranslation>(std::move(translation), std::move(front),
+                                      std::move(deferred), deferred_offset);
 }
 
 }  // namespace rime

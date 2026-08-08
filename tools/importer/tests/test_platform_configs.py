@@ -44,6 +44,10 @@ class PlatformConfigTests(unittest.TestCase):
         for overlay in (rime_ice_windows, rime_ice_squirrel):
             self.assertIn('"menu/page_size": 8', overlay)
             self.assertIn('"menu/alternative_select_keys": "12345678"', overlay)
+            # The expression actions consume two candidate slots and reach the
+            # network, so no shipped overlay may enable them.
+            self.assertIn('"yunpin/expression_search": false', overlay)
+            self.assertNotIn('"yunpin/expression_search": true', overlay)
         for overlay in (weasel, squirrel):
             self.assertIn('"style/color_scheme_dark": yunpin_dark', overlay)
             self.assertNotIn("preset_color_schemes/sogou", overlay.lower())

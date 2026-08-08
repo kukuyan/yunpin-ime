@@ -23,6 +23,10 @@ class YunPinFilter : public Filter {
  private:
   bool LoadSnapshot(const std::string& relative_path);
   bool PrivateModeEnabled() const;
+  // True when the filter has anything to contribute: either a loaded private
+  // snapshot or the opt-in expression actions.
+  bool Active() const;
+  std::size_t PageSize() const;
 
   yunpin::SnapshotStore store_;
   std::string tag_{"abc"};
@@ -32,6 +36,11 @@ class YunPinFilter : public Filter {
   std::size_t active_end_{0};
   std::size_t max_candidates_{2};
   bool enabled_{true};
+  // The expression actions reach the network and the local disk, so they are
+  // off unless a deployment opts in. They are deliberately independent of the
+  // private snapshot: the two features share no data.
+  bool expression_search_{false};
+  bool private_ready_{false};
 };
 
 }  // namespace rime
