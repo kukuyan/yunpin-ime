@@ -8,25 +8,34 @@
 
 #include <rime/filter.h>
 
+#include "yunpin/session_learning.hpp"
 #include "yunpin/snapshot_store.hpp"
 
 namespace rime {
 
+class Context;
+class KeyEvent;
+
 class YunPinFilter : public Filter {
  public:
   explicit YunPinFilter(const Ticket& ticket);
+  ~YunPinFilter() override;
 
   an<Translation> Apply(an<Translation> translation,
                         CandidateList* candidates) override;
   bool AppliesToSegment(Segment* segment) override;
+  [[nodiscard]] std::vector<yunpin::HabitStat> QueryHabits(
+      const yunpin::HabitQuery& query = {}) const;
 
  private:
   bool LoadSnapshot(const std::string& relative_path);
   bool PrivateModeEnabled() const;
-  // True when the filter has anything to contribute: either a loaded private
-  // snapshot or the opt-in expression actions.
+  void OnCommit(Context* context);
+  void OnContextUpdate(Context* context);
+  void OnUnhandledKey(Context* context, const KeyEvent& key_event);
+  // True while either the private overlay or the conservative short-input
+  // guard has work to do. Expression actions remain disconnected.
   bool Active() const;
-  std::size_t PageSize() const;
 
   yunpin::SnapshotStore store_;
   std::string tag_{"abc"};
@@ -35,12 +44,20 @@ class YunPinFilter : public Filter {
   std::size_t active_start_{0};
   std::size_t active_end_{0};
   std::size_t max_candidates_{2};
+  // `enabled` gates private snapshot loading/injection. The short-input guard
+  // is independent so the Windows preview can reject implausible upstream
+  // predictions without enabling private data or session learning in a TSF
+  // host.
   bool enabled_{true};
-  // The expression actions reach the network and the local disk, so they are
-  // off unless a deployment opts in. They are deliberately independent of the
-  // private snapshot: the two features share no data.
-  bool expression_search_{false};
+  bool short_input_guard_{true};
+  bool session_learning_enabled_{false};
   bool private_ready_{false};
+  std::unique_ptr<yunpin::SessionLearning> session_learning_;
+  connection commit_connection_;
+  connection update_connection_;
+  connection unhandled_key_connection_;
+  connection option_update_connection_;
+  connection delete_connection_;
 };
 
 }  // namespace rime

@@ -15,7 +15,7 @@
       },
       {
         "path": "platform/patches/weasel/0003-yunpin-expression-search-and-favorite.patch",
-        "sha256": "b04f2ba398fbf57ce6285ef8db187b0188e77001bee7278afdf296cb9cb16595"
+        "sha256": "02f8c9f48ef4ae3d6285b06c4dea176358f0a142e60810a2a03327a16b689754"
       }
     ]
   },

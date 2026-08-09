@@ -10,9 +10,12 @@ use:
 ```text
 weasel/0001-yunpin-isolate-preview-identity-and-IPC.patch
 weasel/0002-yunpin-remove-winsparkle-link.patch
+weasel/0003-yunpin-expression-search-and-favorite.patch
 squirrel/0001-yunpin-development-preview-identity.patch
 squirrel/0002-yunpin-original-input-source-artwork.patch
 squirrel/0003-yunpin-original-app-icon-name.patch
+squirrel/0004-yunpin-stable-app-icon-names.patch
+squirrel/0005-yunpin-expression-search-and-favorite.patch
 ```
 
 Each patch must:
@@ -35,3 +38,9 @@ headless ranking/private-mode test. Windows keeps private snapshot loading
 disabled until secure-input/IPC host evidence passes. Learning, encrypted
 background refresh, and full native-host evidence remain explicit release
 gates on both platforms.
+
+The expression-named patches are intentionally fail-closed markers, not a
+working expression feature. Both frontends treat all candidate commits as
+untrusted text and contain no prefix dispatcher, browser launch, or favorite
+file write. Expression actions remain deferred until an unforgeable typed and
+explicitly armed channel exists.

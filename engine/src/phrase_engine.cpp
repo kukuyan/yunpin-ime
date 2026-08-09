@@ -14,8 +14,13 @@ namespace yunpin {
 namespace {
 
 constexpr std::size_t kHardMaxFuzzyAliases = 64;
+constexpr std::int32_t kMaxCorrectionScore = 1000000;
 static_assert(std::atomic_bool::is_always_lock_free,
               "YunPin requires lock-free tombstone reads");
+static_assert(std::atomic<std::int32_t>::is_always_lock_free,
+              "YunPin requires lock-free correction score reads");
+static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
+              "YunPin requires lock-free candidate revision reads");
 
 std::vector<std::string> BuiltInSyllables() {
   // Standard tone-free Hanyu Pinyin spellings, using v for keyboard ü. Keeping
@@ -554,9 +559,15 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
 
   if (!entries_.empty()) {
     tombstones_ = std::make_unique<std::atomic_bool[]>(entries_.size());
+    correction_scores_ =
+        std::make_unique<std::atomic<std::int32_t>[]>(entries_.size());
     for (std::size_t index = 0; index < entries_.size(); ++index) {
       tombstones_[index].store(entries_[index].entry.tombstoned,
                                std::memory_order_relaxed);
+      correction_scores_[index].store(
+          std::clamp(entries_[index].entry.correction_score,
+                     -kMaxCorrectionScore, kMaxCorrectionScore),
+          std::memory_order_relaxed);
     }
   }
 }
@@ -629,9 +640,32 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     }
 
     const bool pinned_personal = entry.pinned && IsPersonalOrigin(entry.origin);
+    if (IsPersonalOrigin(entry.origin) && entry.syllables.size() >= 2 &&
+        query.size() < 2) {
+      // A single letter is not yet a reliable syllable or initials intent.
+      // Never let a private/history/import overlay turn `h` into a learned
+      // multi-syllable phrase; upstream single-character completion remains
+      // available to the native Rime translator.
+      continue;
+    }
     const bool pinned_long =
         pinned_personal &&
         entry.syllables.size() >= kLongPhraseMinSyllables;
+    // A one-syllable prefix such as `he` is useful for one- and two-syllable
+    // words, but is far too broad for injecting an arbitrary three-syllable
+    // (or longer) phrase such as `he bing wei`. Non-pinned long entries must
+    // therefore demonstrate two complete full-pinyin syllables. Initial-only
+    // recall is deliberately unavailable for them; manually pinned long
+    // phrases keep the separately documented four-initial escape hatch below.
+    const bool non_pinned_long =
+        !pinned_personal && entry.syllables.size() >= 3;
+    if (non_pinned_long && match.kind == MatchKind::kFullPrefix &&
+        CompleteSyllablePrefixCount(entry, match.alias) < 2) {
+      continue;
+    }
+    if (non_pinned_long && match.kind == MatchKind::kInitials) {
+      continue;
+    }
     if (pinned_long && match.kind == MatchKind::kFullPrefix &&
         CompleteSyllablePrefixCount(entry, match.alias) < 2) {
       continue;
@@ -649,7 +683,9 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
                                match.kind,
                                entry.use_count,
                                entry.static_weight,
-                               entry.pinned});
+                               entry.pinned,
+                               correction_scores_[index].load(
+                                   std::memory_order_relaxed)});
   }
 
   std::sort(ranked.begin(), ranked.end(), [](const Candidate& left,
@@ -667,6 +703,9 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     }
     if (MatchTier(left.match) != MatchTier(right.match)) {
       return MatchTier(left.match) > MatchTier(right.match);
+    }
+    if (left.correction_score != right.correction_score) {
+      return left.correction_score > right.correction_score;
     }
     if (left.use_count != right.use_count) {
       return left.use_count > right.use_count;
@@ -720,11 +759,59 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
 bool PhraseIndex::ApplyTombstone(std::string_view id) {
   for (std::size_t index = 0; index < entries_.size(); ++index) {
     if (entries_[index].entry.id == id) {
-      tombstones_[index].store(true, std::memory_order_relaxed);
+      if (!tombstones_[index].exchange(true, std::memory_order_acq_rel)) {
+        revision_.fetch_add(1, std::memory_order_release);
+      }
       return true;
     }
   }
   return false;
+}
+
+bool PhraseIndex::ApplyCorrectionFeedback(std::string_view id,
+                                          std::int32_t delta) {
+  for (std::size_t index = 0; index < entries_.size(); ++index) {
+    if (entries_[index].entry.id != id) {
+      continue;
+    }
+    if (delta == 0) {
+      return true;
+    }
+
+    auto& score = correction_scores_[index];
+    std::int32_t current = score.load(std::memory_order_relaxed);
+    while (true) {
+      const std::int32_t next =
+          delta > 0
+              ? (current > kMaxCorrectionScore -
+                               std::min(delta, kMaxCorrectionScore)
+                     ? kMaxCorrectionScore
+                     : current + std::min(delta, kMaxCorrectionScore))
+              : (current < -kMaxCorrectionScore -
+                               std::max(delta, -kMaxCorrectionScore)
+                     ? -kMaxCorrectionScore
+                     : current + std::max(delta, -kMaxCorrectionScore));
+      if (next == current) {
+        return true;
+      }
+      if (score.compare_exchange_weak(current, next,
+                                      std::memory_order_acq_rel,
+                                      std::memory_order_relaxed)) {
+        revision_.fetch_add(1, std::memory_order_release);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::uint32_t PhraseIndex::revision() const noexcept {
+  return revision_.load(std::memory_order_acquire);
+}
+
+bool PhraseIndex::CanReuseRevision(
+    std::uint32_t cached_revision) const noexcept {
+  return cached_revision == revision();
 }
 
 std::size_t PhraseIndex::size() const noexcept {

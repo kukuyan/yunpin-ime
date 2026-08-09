@@ -115,7 +115,7 @@ if (Test-Path (Join-Path $BundleRoot "rime-data\yunpin\private.tsv")) {
     throw "A private phrase snapshot must never be packaged"
 }
 $forbiddenPrivate = Get-ChildItem -LiteralPath $BundleRoot -File -Recurse | Where-Object {
-    $_.Name -match '\.(userdb|scel|sgpybin|sqlite|sqlite3|bin)$'
+    $_.Name -match '\.(userdb|scel|sgpybin|sqlite|sqlite3|dpapi|bin)$'
 }
 if ($forbiddenPrivate) {
     throw "Private dictionary/database artifact found: $($forbiddenPrivate[0].FullName)"
@@ -124,6 +124,8 @@ $config = Get-Content -LiteralPath (Join-Path $BundleRoot "rime-data\rime_ice.cu
 foreach ($pattern in @(
     'yunpin_filter@yunpin',
     '(?m)^\s*"yunpin/enabled": false\s*$',
+    '(?m)^\s*"yunpin/short_input_guard": true\s*$',
+    '(?m)^\s*"yunpin/session_learning": false\s*$',
     '(?m)^\s*"yunpin/max_candidates": 2\s*$'
 )) {
     if ($config -notmatch $pattern) {

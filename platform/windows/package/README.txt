@@ -28,7 +28,10 @@ Security gates:
   client authentication.
 * The merged yunpin_filter is present, but yunpin/enabled is false. No private
   phrase snapshot is packaged or read until secure-input suppression and IPC
-  isolation are verified in real x86/x64 hosts.
+  isolation are verified in real x86/x64 hosts. The independent public-data
+  short_input_guard remains enabled; it only filters Rime's in-memory upstream
+  candidates and does not load a personal snapshot. session_learning remains
+  false until the Windows secure-input and IPC gates pass.
 * No cloud synchronization, Sogou migration, or private phrase import is run by
   these scripts. R0W is not contacted.
 

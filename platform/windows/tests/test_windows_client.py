@@ -113,6 +113,9 @@ class WindowsClientTests(unittest.TestCase):
             server_main = (target / "WeaselServer" / "WeaselServer.cpp").read_text(
                 encoding="utf-8-sig"
             )
+            composition = (target / "WeaselTSF" / "Composition.cpp").read_text(
+                encoding="utf-8-sig"
+            )
             self.assertIn("YunPin", constants)
             self.assertIn(self.lock["identity"]["pipeName"], ipc)
             self.assertIn("0x1c4fbfe5", globals_cpp.lower())
@@ -123,6 +126,24 @@ class WindowsClientTests(unittest.TestCase):
             self.assertNotIn("win_sparkle_init", server)
             self.assertNotIn("winsparkle.h", server_main.lower())
             self.assertIn("YunPinDeployer.exe", server)
+            self.assertIn("typed, explicitly armed action", composition)
+            for forbidden in (
+                "yunpin-search:",
+                "yunpin-fav:",
+                "ShellExecuteW",
+                "CreateFileW",
+                "favorites.jsonl",
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, composition)
+
+            filter_source = (
+                ROOT / "librime-yunpin" / "src" / "rime_yunpin_filter.cpp"
+            ).read_text(encoding="utf-8")
+            self.assertNotIn("YunPinSearchCandidate", filter_source)
+            self.assertNotIn("YunPinFavoriteCandidate", filter_source)
+            self.assertNotIn("yunpin-search:", filter_source)
+            self.assertNotIn("yunpin-fav:", filter_source)
 
     def test_build_stages_real_merged_plugin_for_both_architectures(self) -> None:
         build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(encoding="utf-8")
@@ -184,6 +205,8 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"yunpin/snapshot": "yunpin/private.tsv"', config)
         self.assertIn('"yunpin/max_candidates": 2', config)
         self.assertIn('"yunpin/enabled": false', config)
+        self.assertIn('"yunpin/short_input_guard": true', config)
+        self.assertIn('"yunpin/session_learning": false', config)
         self.assertFalse((WINDOWS / "rime" / "private.tsv").exists())
         self.assertFalse((WINDOWS / "rime" / "yunpin" / "private.tsv").exists())
         example = (WINDOWS / "rime" / "yunpin-private.tsv.example").read_text(

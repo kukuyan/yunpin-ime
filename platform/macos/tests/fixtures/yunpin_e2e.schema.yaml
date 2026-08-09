@@ -38,3 +38,5 @@ yunpin:
   snapshot: yunpin/private.tsv
   max_candidates: 2
   enabled: true
+  short_input_guard: true
+  session_learning: true

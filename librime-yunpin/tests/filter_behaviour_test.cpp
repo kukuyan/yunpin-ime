@@ -5,10 +5,10 @@
 // production sources; only librime is replaced. This keeps the candidate
 // ordering rules testable on a machine that cannot build librime.
 //
-// The rule these cases exist to protect: the expression actions must never
-// occupy a head slot. The first candidate is what the space bar commits and
-// 1/2 are the most used selection keys, so an action there makes the input
-// method open a browser instead of typing.
+// The rule these cases exist to protect: expression actions are not injected
+// until a native frontend has a typed, explicitly armed channel. A stale or
+// manually edited expression_search setting must not turn ordinary candidate
+// text into a browser or file-system command.
 
 // Assertions must survive a Release configuration.
 #undef NDEBUG
@@ -16,6 +16,7 @@
 #include "rime_yunpin_filter.hpp"
 
 #include <rime/engine.h>
+#include <rime/key_event.h>
 #include <rime/segmentation.h>
 #include <rime/service.h>
 #include <rime/translation.h>
@@ -33,8 +34,8 @@ namespace {
 using namespace rime;
 
 const std::string kPhrase = "你好世界";
-const std::string kSearch = "yunpin-search:nihaoshijie";
-const std::string kFavorite = "yunpin-fav:nihaoshijie";
+const std::string kSearchLikeText = "yunpin-search:nihaoshijie";
+const std::string kFavoriteLikeText = "yunpin-fav:nihaoshijie";
 const std::string kInactive = "<filter inactive>";
 
 class FakeUpstream : public Translation {
@@ -80,6 +81,8 @@ struct Harness {
     engine.context_ = &context;
     schema.set_page_size(8);  // the shipped menu/page_size
     config.bools_["yunpin/enabled"] = true;
+    config.bools_["yunpin/short_input_guard"] = true;
+    config.bools_["yunpin/session_learning"] = true;
     config.ints_["yunpin/max_candidates"] = 2;
   }
 
@@ -99,12 +102,73 @@ void WriteSnapshot(const std::filesystem::path& user_data_dir) {
   out << kPhrase << "\tni hao shi jie\tcodex_history\t9\ttrue\n";
 }
 
+void EmitCommit(Harness& harness,
+                const std::string& input,
+                const std::string& text,
+                const std::string& type = "phrase",
+                bool trailing_placeholder = true) {
+  harness.context.input_ = input;
+  harness.context.commit_text_ = text;
+  harness.context.composition_.clear();
+  Segment segment(0, static_cast<int>(input.size()));
+  segment.status = Segment::kSelected;
+  segment.selected_candidate_ = New<SimpleCandidate>(
+      type, 0, input.size(), text);
+  harness.context.composition_.push_back(std::move(segment));
+  if (trailing_placeholder) {
+    harness.context.composition_.push_back(
+        Segment(static_cast<int>(input.size()),
+                static_cast<int>(input.size())));
+  }
+  harness.context.commit_notifier()(&harness.context);
+
+  // Context::Commit clears composition after the real notifier returns.
+  harness.context.input_.clear();
+  harness.context.commit_text_.clear();
+  harness.context.composition_.clear();
+  harness.context.update_notifier()(&harness.context);
+}
+
+void EmitMultiSegmentCommit(Harness& harness,
+                            const std::string& input,
+                            const std::string& text) {
+  harness.context.input_ = input;
+  harness.context.commit_text_ = text;
+  harness.context.composition_.clear();
+  Segment first(0, 2);
+  first.status = Segment::kConfirmed;
+  first.selected_candidate_ = New<SimpleCandidate>("phrase", 0, 2, "日");
+  Segment second(2, static_cast<int>(input.size()));
+  second.status = Segment::kSelected;
+  second.selected_candidate_ = New<SimpleCandidate>(
+      "phrase", 2, input.size(), "长");
+  harness.context.composition_.push_back(std::move(first));
+  harness.context.composition_.push_back(std::move(second));
+  harness.context.commit_notifier()(&harness.context);
+  harness.context.input_.clear();
+  harness.context.commit_text_.clear();
+  harness.context.composition_.clear();
+  harness.context.update_notifier()(&harness.context);
+}
+
+void EmitComposition(Harness& harness, const std::string& input) {
+  harness.context.input_ = input;
+  harness.context.update_notifier()(&harness.context);
+}
+
+void EmitKey(Harness& harness, int keycode, int modifier = 0) {
+  const KeyEvent key(keycode, modifier);
+  harness.context.unhandled_key_notifier()(&harness.context, key);
+}
+
 // Drives the filter the way librime does: AppliesToSegment, then Apply, then
 // walk the returned translation.
-std::vector<std::string> Run(YunPinFilter& filter,
-                             Harness& harness,
-                             const std::string& input,
-                             std::size_t limit) {
+std::vector<std::string> RunWithUpstream(
+    YunPinFilter& filter,
+    Harness& harness,
+    const std::string& input,
+    std::vector<std::string> upstream,
+    std::size_t limit) {
   harness.context.input_ = input;
   Segment segment(0, static_cast<int>(input.size()));
   segment.tags.insert("abc");
@@ -112,7 +176,8 @@ std::vector<std::string> Run(YunPinFilter& filter,
     return {kInactive};
   }
   CandidateList candidates;
-  auto translation = filter.Apply(New<FakeUpstream>(Upstream()), &candidates);
+  auto translation =
+      filter.Apply(New<FakeUpstream>(std::move(upstream)), &candidates);
 
   std::vector<std::string> texts;
   std::size_t guard = 0;
@@ -125,6 +190,13 @@ std::vector<std::string> Run(YunPinFilter& filter,
     }
   }
   return texts;
+}
+
+std::vector<std::string> Run(YunPinFilter& filter,
+                             Harness& harness,
+                             const std::string& input,
+                             std::size_t limit) {
+  return RunWithUpstream(filter, harness, input, Upstream(), limit);
 }
 
 void Expect(const char* name,
@@ -153,16 +225,160 @@ void TestShippedDefaultHasNoActionCandidates() {
          {kPhrase, "u0", "u1", "u2", "u3", "u4", "u5", "u6"});
 }
 
-void TestOptedInActionsStayOffTheHeadOfThePage() {
+void TestExpressionConfigCannotArmActions() {
   Harness harness;
   harness.config.bools_["yunpin/expression_search"] = true;
   YunPinFilter filter(harness.ticket());
-  // page_size 8: the actions belong in the last two slots of the first page.
-  Expect("opted in, page_size 8", Run(filter, harness, "nihaoshijie", 9),
-         {kPhrase, "u0", "u1", "u2", "u3", "u4", kSearch, kFavorite, "u5"});
+  Expect("unarmed expression config", Run(filter, harness, "nihaoshijie", 9),
+         {kPhrase, "u0", "u1", "u2", "u3", "u4", "u5", "u6"});
 }
 
-void TestActionsAreIndependentOfThePrivateSnapshot() {
+void TestExpressionConfigCannotArmActionsWithShortUpstream() {
+  Harness harness;
+  harness.config.bools_["yunpin/expression_search"] = true;
+  YunPinFilter filter(harness.ticket());
+
+  // Empty, one-candidate and short upstream translations previously promoted
+  // deferred actions into the first two slots. With no typed/armed frontend
+  // channel, all three cases must contain only personal/ordinary candidates.
+  Expect("empty upstream",
+         RunWithUpstream(filter, harness, "nihaoshijie", {}, 8), {kPhrase});
+  Expect("one upstream",
+         RunWithUpstream(filter, harness, "nihaoshijie", {"u0"}, 8),
+         {kPhrase, "u0"});
+  Expect("short upstream",
+         RunWithUpstream(filter, harness, "nihaoshijie",
+                         {"u0", "u1", "u2", "u3"}, 8),
+         {kPhrase, "u0", "u1", "u2", "u3"});
+}
+
+void TestCommandLikeOrdinaryTextStaysOrdinary() {
+  Harness harness;
+  harness.config.bools_["yunpin/expression_search"] = true;
+  YunPinFilter filter(harness.ticket());
+  Expect("command-like text is data",
+         RunWithUpstream(filter, harness, "nihaoshijie",
+                         {kSearchLikeText, kFavoriteLikeText}, 4),
+         {kPhrase, kSearchLikeText, kFavoriteLikeText});
+}
+
+void TestShortPinyinSuppressesOnlyLongPureCjkUpstream() {
+  Harness harness;
+  YunPinFilter filter(harness.ticket());
+  const std::string malformed_after_three_cjk =
+      std::string("合并为") + std::string("\xe5", 1);
+
+  // Consecutive long predictions, including one at the end, exercise both
+  // ordering and termination. A malformed candidate that begins with three
+  // valid Han scalars must be retained because the complete UTF-8 value is not
+  // valid and therefore cannot be classified safely.
+  Expect("he filters only long pure CJK",
+         RunWithUpstream(filter, harness, "he",
+                         {"合并为", "和", "合并", "hello", "合并A",
+                          malformed_after_three_cjk, "中国石化", "tail"},
+                         8),
+         {"和", "合并", "hello", "合并A", malformed_after_three_cjk,
+          "tail"});
+  Expect("h filters all-long upstream to exhaustion",
+         RunWithUpstream(filter, harness, "h", {"合并为", "中国石化"}, 4),
+         {});
+}
+
+void TestLongerInputAndPrivateDedupStayUnchanged() {
+  Harness harness;
+  YunPinFilter filter(harness.ticket());
+  Expect("three-letter input keeps long CJK",
+         RunWithUpstream(filter, harness, "heb", {"合并为", "tail"}, 4),
+         {"合并为", "tail"});
+  Expect("private candidate still deduplicates upstream",
+         RunWithUpstream(filter, harness, "nihaoshijie",
+                         {kPhrase, "中国石化", "tail"}, 5),
+         {kPhrase, "中国石化", "tail"});
+}
+
+void TestSessionCorrectionReranksBoundedUpstreamWindow() {
+  Harness harness;
+  YunPinFilter filter(harness.ticket());
+  EmitCommit(harness, "richang", "日长");
+  EmitKey(harness, XK_BackSpace);
+  EmitKey(harness, XK_BackSpace);
+  EmitComposition(harness, "richang");
+  EmitCommit(harness, "richang", "日常");
+
+  Expect("session correction reranks same pinyin",
+         RunWithUpstream(filter, harness, "richang",
+                         {"日长", "日历", "日常", "tail"}, 6),
+         {"日常", "日历", "tail", "日长"});
+  const auto stats = filter.QueryHabits(
+      yunpin::HabitQuery{"", true, 8});
+  assert(stats.size() == 2);
+  assert((stats[0].phrase == "日常" || stats[1].phrase == "日常"));
+  assert((stats[0].phrase == "日长" || stats[1].phrase == "日长"));
+}
+
+void TestSessionBridgeFailsClosedOnUnprovenDeletion() {
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    EmitCommit(harness, "richang", "日长");
+    EmitKey(harness, XK_BackSpace);
+    EmitComposition(harness, "richang");
+    EmitCommit(harness, "richang", "日常");
+    Expect("too few Backspaces keep upstream order",
+           RunWithUpstream(filter, harness, "richang", {"日长", "日常"},
+                           4),
+           {"日长", "日常"});
+  }
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    EmitCommit(harness, "richang", "日长");
+    EmitKey(harness, XK_BackSpace, kControlMask);
+    EmitKey(harness, XK_BackSpace);
+    EmitKey(harness, XK_BackSpace);
+    EmitCommit(harness, "richang", "日常");
+    Expect("modified Backspace breaks adjacency",
+           RunWithUpstream(filter, harness, "richang", {"日长", "日常"},
+                           4),
+           {"日长", "日常"});
+  }
+  {
+    Harness harness;
+    harness.context.options_["yunpin_one_shot"] = true;
+    YunPinFilter filter(harness.ticket());
+    EmitCommit(harness, "richang", "日长");
+    EmitKey(harness, XK_BackSpace);
+    EmitKey(harness, XK_BackSpace);
+    harness.context.options_["yunpin_one_shot"] = false;
+    EmitCommit(harness, "richang", "日常");
+    assert(filter.QueryHabits(
+               yunpin::HabitQuery{"", true, 8}).empty());
+  }
+  for (const std::string& rejected_type :
+       {std::string("sentence"), std::string("yunpin"),
+        std::string("unknown")}) {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    EmitCommit(harness, "richang", "日长", rejected_type);
+    EmitKey(harness, XK_BackSpace);
+    EmitKey(harness, XK_BackSpace);
+    EmitCommit(harness, "richang", "日常");
+    assert(filter.QueryHabits(
+               yunpin::HabitQuery{"", true, 8}).empty());
+  }
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    EmitMultiSegmentCommit(harness, "richang", "日长");
+    EmitKey(harness, XK_BackSpace);
+    EmitKey(harness, XK_BackSpace);
+    EmitCommit(harness, "richang", "日常");
+    assert(filter.QueryHabits(
+               yunpin::HabitQuery{"", true, 8}).empty());
+  }
+}
+
+void TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable() {
   const auto empty = std::filesystem::temp_directory_path() /
                      "yunpin-filter-behaviour" / "no-snapshot";
   std::filesystem::create_directories(empty);
@@ -172,22 +388,49 @@ void TestActionsAreIndependentOfThePrivateSnapshot() {
   Harness harness;
   harness.config.bools_["yunpin/expression_search"] = true;
   YunPinFilter filter(harness.ticket());
-  // A missing snapshot must drop only the private phrases. Before the split
-  // it disabled the whole filter, and a present one silently enabled these
-  // actions.
-  Expect("no snapshot", Run(filter, harness, "nihaoshijie", 9),
-         {"u0", "u1", "u2", "u3", "u4", "u5", kSearch, kFavorite, "u6"});
+  Expect("no snapshot long input is transparent",
+         Run(filter, harness, "nihaoshijie", 9),
+         {"u0", "u1", "u2", "u3", "u4", "u5", "u6"});
+  Expect("no snapshot short guard",
+         RunWithUpstream(filter, harness, "he", {"合并为", "和", "tail"},
+                         4),
+         {"和", "tail"});
 
   Service::instance().deployer().user_data_dir = previous;
 }
 
-void TestModuleSwitchOverridesTheActions() {
+void TestPrivateSwitchDoesNotDisableShortGuard() {
   Harness harness;
   harness.config.bools_["yunpin/enabled"] = false;
+  harness.config.bools_["yunpin/session_learning"] = false;
   harness.config.bools_["yunpin/expression_search"] = true;
   YunPinFilter filter(harness.ticket());
-  // The Windows preview ships yunpin/enabled false and must gain nothing.
-  Expect("module switch off", Run(filter, harness, "nihaoshijie", 9),
+  Expect("private switch off leaves long input transparent",
+         RunWithUpstream(filter, harness, "nihaoshijie", {"中国石化", "tail"},
+                         4),
+         {"中国石化", "tail"});
+  Expect("private switch off keeps short guard",
+         RunWithUpstream(filter, harness, "he", {"合并为", "和", "tail"}, 4),
+         {"和", "tail"});
+
+  EmitCommit(harness, "richang", "日长");
+  EmitKey(harness, XK_BackSpace);
+  EmitKey(harness, XK_BackSpace);
+  EmitCommit(harness, "richang", "日常");
+  Expect("Windows guard-only mode keeps learning disabled",
+         RunWithUpstream(filter, harness, "richang", {"日长", "日常"}, 4),
+         {"日长", "日常"});
+  assert(filter.QueryHabits().empty());
+}
+
+void TestBothFeatureSwitchesOffStayInactive() {
+  Harness harness;
+  harness.config.bools_["yunpin/enabled"] = false;
+  harness.config.bools_["yunpin/short_input_guard"] = false;
+  harness.config.bools_["yunpin/session_learning"] = false;
+  harness.config.bools_["yunpin/expression_search"] = true;
+  YunPinFilter filter(harness.ticket());
+  Expect("all filter features off", Run(filter, harness, "he", 9),
          {kInactive});
 }
 
@@ -197,15 +440,6 @@ void TestPasswordModeDisablesEverything() {
   harness.context.options_["password_mode"] = true;
   YunPinFilter filter(harness.ticket());
   Expect("password mode", Run(filter, harness, "nihaoshijie", 9), {kInactive});
-}
-
-void TestSmallerPageStillKeepsTheHeadClear() {
-  Harness harness;
-  harness.schema.set_page_size(5);
-  harness.config.bools_["yunpin/expression_search"] = true;
-  YunPinFilter filter(harness.ticket());
-  Expect("page_size 5", Run(filter, harness, "nihaoshijie", 7),
-         {kPhrase, "u0", "u1", kSearch, kFavorite, "u2", "u3"});
 }
 
 void TestPrivateCandidatesStayBounded() {
@@ -228,11 +462,17 @@ int main() {
   Service::instance().deployer().user_data_dir = user_data_dir;
 
   TestShippedDefaultHasNoActionCandidates();
-  TestOptedInActionsStayOffTheHeadOfThePage();
-  TestActionsAreIndependentOfThePrivateSnapshot();
-  TestModuleSwitchOverridesTheActions();
+  TestExpressionConfigCannotArmActions();
+  TestExpressionConfigCannotArmActionsWithShortUpstream();
+  TestCommandLikeOrdinaryTextStaysOrdinary();
+  TestShortPinyinSuppressesOnlyLongPureCjkUpstream();
+  TestLongerInputAndPrivateDedupStayUnchanged();
+  TestSessionCorrectionReranksBoundedUpstreamWindow();
+  TestSessionBridgeFailsClosedOnUnprovenDeletion();
+  TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable();
+  TestPrivateSwitchDoesNotDisableShortGuard();
+  TestBothFeatureSwitchesOffStayInactive();
   TestPasswordModeDisablesEverything();
-  TestSmallerPageStillKeepsTheHeadClear();
   TestPrivateCandidatesStayBounded();
 
   std::filesystem::remove_all(user_data_dir);

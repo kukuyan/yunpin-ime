@@ -10,6 +10,7 @@
   "yunpin_module_merged": true,
   "yunpin_ranking_headless_e2e": true,
   "yunpin_ranking_native_host_e2e": false,
+  "yunpin_session_correction_librime_e2e": true,
   "yunpin_learning_bridge": false,
   "encrypted_cloud_sync": false,
   "production_signed": false

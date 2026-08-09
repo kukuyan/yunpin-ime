@@ -1,115 +1,19 @@
 SPDX-License-Identifier: GPL-3.0-only
 Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
-Subject: [PATCH] yunpin: add expression search and favorite actions
+Subject: [PATCH] yunpin: keep expression commit text side-effect free
 
 diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
-index bad53d9..7520985 100644
+index 5d4c418..cded55f 100644
 --- a/sources/SquirrelInputController.swift
 +++ b/sources/SquirrelInputController.swift
-@@ -5,10 +5,14 @@
- //  Created by Leo Liu on 5/7/24.
- //
- 
-+import Foundation
- import InputMethodKit
- 
- final class SquirrelInputController: IMKInputController {
-   private static let keyRollOver = 50
-+  private static let searchCommitPrefix = "yunpin-search:"
-+  private static let favoriteCommitPrefix = "yunpin-fav:"
-+  private static let favoriteStorePath = "yunpin-emoji-favorites"
-   private static var unknownAppCnt: UInt = 0
- 
-   private weak var client: IMKTextInput?
-@@ -546,12 +550,91 @@ private extension SquirrelInputController {
+@@ -540,6 +540,10 @@ private extension SquirrelInputController {
  
    func commit(string: String) {
      guard let client = client else { return }
-+    if handleSearchCommit(string) {
-+      preedit = ""
-+      hidePalettes()
-+      return
-+    }
-+    if handleFavoriteCommit(string) {
-+      preedit = ""
-+      hidePalettes()
-+      return
-+    }
++    // YunPin expression actions are not connected in this preview. Candidate
++    // commit text is untrusted dictionary data, so it must never be parsed as
++    // a browser or file-system command. A future integration must carry a
++    // typed, explicitly armed action outside the ordinary commit string.
      // print("[DEBUG] commitString: \(string)")
      client.insertText(string, replacementRange: .empty)
      preedit = ""
-     hidePalettes()
-   }
- 
-+  private func handleSearchCommit(_ string: String) -> Bool {
-+    guard string.hasPrefix(Self.searchCommitPrefix) else { return false }
-+    let query = String(string.dropFirst(Self.searchCommitPrefix.count))
-+      .trimmingCharacters(in: .whitespacesAndNewlines)
-+    guard !query.isEmpty else { return true }
-+
-+    guard var components = URLComponents(string: "https://www.bing.com/images/search") else {
-+      return true
-+    }
-+    components.queryItems = [URLQueryItem(name: "q", value: "\(query) gif 梗图 表情")]
-+    guard let url = components.url else { return true }
-+    _ = NSWorkspace.shared.open(url)
-+    return true
-+  }
-+
-+  private func handleFavoriteCommit(_ string: String) -> Bool {
-+    guard string.hasPrefix(Self.favoriteCommitPrefix) else { return false }
-+    let query = String(string.dropFirst(Self.favoriteCommitPrefix.count))
-+      .trimmingCharacters(in: .whitespacesAndNewlines)
-+    guard !query.isEmpty else { return true }
-+    if !persistFavorite(query: query) {
-+      // Never echo the query itself into the log: it is user-typed content.
-+      NSLog("YunPin: failed to persist an emoji favorite record")
-+    }
-+    return true
-+  }
-+
-+  private func persistFavorite(query: String) -> Bool {
-+    let storeDir = SquirrelApp.userDir.appendingPathComponent(Self.favoriteStorePath, isDirectory: true)
-+    let storeFile = storeDir.appendingPathComponent("favorites.jsonl", isDirectory: false)
-+    do {
-+      try FileManager.default.createDirectory(
-+        at: storeDir,
-+        withIntermediateDirectories: true,
-+        attributes: [.posixPermissions: 0o700]
-+      )
-+      // Serialize through Foundation so control characters and lone surrogates
-+      // cannot produce a malformed JSONL record.
-+      let record: [String: Any] = [
-+        "type": "emoji",
-+        "query": query,
-+        "source": "squirrel",
-+        "ts": Date().timeIntervalSince1970,
-+      ]
-+      var data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
-+      data.append(0x0A)
-+
-+      let storePath = storeFile.path(percentEncoded: false)
-+      if !FileManager.default.fileExists(atPath: storePath) {
-+        guard FileManager.default.createFile(
-+          atPath: storePath,
-+          contents: nil,
-+          attributes: [.posixPermissions: 0o600]
-+        ) else {
-+          return false
-+        }
-+      }
-+      // Append only. An existing store is never truncated, even when the
-+      // handle cannot be opened.
-+      guard let handle = FileHandle(forWritingTo: storeFile) else { return false }
-+      defer { try? handle.close() }
-+      try handle.seekToEnd()
-+      try handle.write(contentsOf: data)
-+      return true
-+    } catch {
-+      return false
-+    }
-+  }
-+
-   func show(preedit: String, selRange: NSRange, caretPos: Int) {
-     guard let client = client else { return }
-     // print("[DEBUG] showPreeditString: '\(preedit)'")

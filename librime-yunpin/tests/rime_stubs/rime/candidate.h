@@ -17,9 +17,13 @@ class Candidate {
   Candidate(const string& type, size_t start, size_t end, double quality = 0.)
       : type_(type), start_(start), end_(end), quality_(quality) {}
   virtual ~Candidate() = default;
+  static an<Candidate> GetGenuineCandidate(const an<Candidate>& candidate) {
+    return candidate;
+  }
   const string& type() const { return type_; }
   size_t start() const { return start_; }
   size_t end() const { return end_; }
+  double quality() const { return quality_; }
   virtual const string& text() const = 0;
   virtual string comment() const { return string(); }
   virtual string preedit() const { return string(); }

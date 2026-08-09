@@ -18,11 +18,15 @@ No personal snapshot is bundled; the read-only bridge activates only when a
 reviewed `yunpin/private.tsv` exists in the isolated user directory.
 
 The module merge and symbol are build-verified. A headless librime fixture also
-verifies initial-based and full-pinyin long-phrase ranking, the two-personal
-candidate cap, upstream deduplication, candidate commit and immediate
-private-mode suppression. Real InputMethodKit host evidence has not passed yet.
-Learning events, encrypted SQLite refresh and cloud sync also remain
-disconnected.
+verifies short-input filtering, initial-based and full-pinyin long-phrase
+ranking, the two-personal candidate cap, upstream deduplication, candidate
+commit, immediate private-mode suppression, and the real librime session flow
+`日长 → Backspace×2 → 日常 → requery`. Real InputMethodKit host evidence has
+not passed yet. The in-process correction is not persisted; encrypted SQLite
+refresh, a desktop habit monitor and cloud sync remain disconnected.
+Expression search/favorite is likewise deferred: the preview never interprets
+candidate commit text as a browser or file-system command and injects no action
+candidate until a typed, explicitly armed native channel exists.
 `preview-manifest.json` records those gates separately so a merged module is not
 confused with end-to-end acceptance.
 
@@ -120,10 +124,10 @@ delete it.
 
 ## Remaining native acceptance gates
 
-Before a signed release, verify the merged read-only filter through real
-InputMethodKit hosts. Connect the
-encrypted SQLite/background snapshot refresh and learning bridge, with secure
-and private input suppressing both ranking and learning. Then test on real
+Before a signed release, verify the merged filter and in-process correction
+through real InputMethodKit hosts. Connect encrypted SQLite/background snapshot
+refresh and habit reporting, strengthen host deletion/secure-context evidence,
+and keep private input suppressing both ranking and learning. Then test on real
 hardware in TextEdit, Safari, Office and Terminal, including native and Rosetta
 hosts, marked text, numbered selection, caret movement, dark/light candidate
 placement, secure text fields, sleep/login, upgrade and uninstall.

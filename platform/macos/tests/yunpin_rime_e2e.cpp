@@ -67,6 +67,19 @@ std::size_t CountPrivatePhrases(const std::vector<std::string>& candidates) {
                        });
 }
 
+bool Contains(const std::vector<std::string>& candidates,
+              const std::string& text) {
+  return std::find(candidates.begin(), candidates.end(), text) !=
+         candidates.end();
+}
+
+void PrintCandidates(const std::vector<std::string>& candidates) {
+  for (const auto& candidate : candidates) {
+    std::cerr << " [" << candidate << ']';
+  }
+  std::cerr << '\n';
+}
+
 bool ExpectCommit(RimeApi* api, RimeSessionId session, const char* input) {
   std::vector<std::string> candidates;
   if (!Compose(api, session, input, &candidates) || candidates.empty() ||
@@ -84,6 +97,25 @@ bool ExpectCommit(RimeApi* api, RimeSessionId session, const char* input) {
   if (!matches) {
     std::cerr << "YunPin commit text did not match the selected candidate\n";
   }
+  return matches;
+}
+
+bool SelectAndDrain(RimeApi* api,
+                    RimeSessionId session,
+                    const std::vector<std::string>& candidates,
+                    const std::string& text) {
+  const auto found = std::find(candidates.begin(), candidates.end(), text);
+  if (found == candidates.end() ||
+      !api->select_candidate(
+          session, static_cast<int>(found - candidates.begin()))) {
+    return false;
+  }
+  RIME_STRUCT(RimeCommit, commit);
+  if (!api->get_commit(session, &commit)) {
+    return false;
+  }
+  const bool matches = commit.text && text == commit.text;
+  api->free_commit(&commit);
   return matches;
 }
 
@@ -130,8 +162,24 @@ int main(int argc, char** argv) {
            "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi") &&
        ok;
 
+  std::vector<std::string> short_candidates;
+  if (!Compose(api, session, "he", &short_candidates) ||
+      Contains(short_candidates, "合并为") ||
+      !Contains(short_candidates, "和")) {
+    std::cerr << "short-input guard did not remove only the long prediction\n";
+    PrintCandidates(short_candidates);
+    ok = false;
+  }
+
+  std::vector<std::string> initials_candidates;
+  if (!Compose(api, session, "zgsh", &initials_candidates) ||
+      CountPrivatePhrases(initials_candidates) != 1) {
+    std::cerr << "short initials recalled a non-pinned long private phrase\n";
+    ok = false;
+  }
+
   std::vector<std::string> capped_candidates;
-  if (!Compose(api, session, "zgsh", &capped_candidates) ||
+  if (!Compose(api, session, "zhongguoshihua", &capped_candidates) ||
       CountPrivatePhrases(capped_candidates) != 2) {
     std::cerr << "YunPin did not enforce the two-personal-candidate page cap\n";
     ok = false;
@@ -153,6 +201,41 @@ int main(int argc, char** argv) {
            "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi") &&
        ok;
 
+  std::vector<std::string> initial_correction_candidates;
+  if (!Compose(api, session, "richang", &initial_correction_candidates) ||
+      initial_correction_candidates.empty() ||
+      initial_correction_candidates.front() != "日长" ||
+      !SelectAndDrain(api, session, initial_correction_candidates, "日长")) {
+    std::cerr << "failed to establish the correction-learning fixture\n";
+    ok = false;
+  }
+  if (!api->simulate_key_sequence(session, "{BackSpace}{BackSpace}")) {
+    std::cerr << "failed to deliver correction Backspace events\n";
+    ok = false;
+  }
+  std::vector<std::string> replacement_candidates;
+  if (!Compose(api, session, "richang", &replacement_candidates) ||
+      !SelectAndDrain(api, session, replacement_candidates, "日常")) {
+    std::cerr << "failed to commit the intended replacement word\n";
+    ok = false;
+  }
+  std::vector<std::string> reranked_candidates;
+  if (!Compose(api, session, "richang", &reranked_candidates)) {
+    std::cerr << "failed to requery corrected pinyin\n";
+    ok = false;
+  } else {
+    const auto right = std::find(reranked_candidates.begin(),
+                                 reranked_candidates.end(), "日常");
+    const auto wrong = std::find(reranked_candidates.begin(),
+                                 reranked_candidates.end(), "日长");
+    if (right == reranked_candidates.end() ||
+        wrong == reranked_candidates.end() || right >= wrong) {
+      std::cerr << "explicit correction did not rerank 日常 ahead of 日长\n";
+      PrintCandidates(reranked_candidates);
+      ok = false;
+    }
+  }
+
   api->set_option(session, "yunpin_private_mode", True);
   std::vector<std::string> private_candidates;
   if (!Compose(api, session, "zgsh", &private_candidates) ||
@@ -167,7 +250,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::cout
-      << "verified merged YunPin ranking, quota, deduplication, commit, and "
-         "private-mode suppression\n";
+      << "verified merged YunPin short guard, ranking, quota, deduplication, "
+         "commit, session correction, and private-mode suppression\n";
   return 0;
 }

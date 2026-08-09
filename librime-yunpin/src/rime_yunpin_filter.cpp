@@ -2,15 +2,19 @@
 #include "rime_yunpin_filter.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <rime/candidate.h>
 #include <rime/context.h>
 #include <rime/engine.h>
+#include <rime/key_event.h>
 #include <rime/schema.h>
 #include <rime/segmentation.h>
 #include <rime/service.h>
@@ -19,28 +23,94 @@
 namespace rime {
 namespace {
 
-constexpr char kSearchActionPrefix[] = "yunpin-search:";
-constexpr char kFavoriteActionPrefix[] = "yunpin-fav:";
+bool IsCjkIdeograph(std::uint32_t codepoint) noexcept {
+  return (codepoint >= 0x3400 && codepoint <= 0x4dbf) ||
+         (codepoint >= 0x4e00 && codepoint <= 0x9fff) ||
+         (codepoint >= 0xf900 && codepoint <= 0xfaff) ||
+         (codepoint >= 0x20000 && codepoint <= 0x2fa1f) ||
+         (codepoint >= 0x30000 && codepoint <= 0x323af);
+}
 
-class YunPinSearchCandidate : public SimpleCandidate {
- public:
-  explicit YunPinSearchCandidate(std::size_t start,
-                                std::size_t end,
-                                const std::string& input)
-      : SimpleCandidate("yunpin-search", start, end,
-                        kSearchActionPrefix + input,
-                        "点击联网搜索：GIF / 图片（梗图）") {}
-};
+// Returns true only after validating the complete UTF-8 string. Malformed,
+// overlong, surrogate and out-of-range encodings are kept as ordinary upstream
+// data rather than guessed at or suppressed.
+bool IsPureCjkAtLeast(std::string_view text,
+                      std::size_t minimum_scalars) noexcept {
+  std::size_t scalars = 0;
+  bool pure_cjk = true;
+  for (std::size_t offset = 0; offset < text.size();) {
+    const unsigned char first = static_cast<unsigned char>(text[offset]);
+    std::uint32_t codepoint = 0;
+    std::size_t width = 0;
+    std::uint32_t minimum = 0;
+    if (first < 0x80) {
+      codepoint = first;
+      width = 1;
+    } else if ((first & 0xe0) == 0xc0) {
+      codepoint = first & 0x1f;
+      width = 2;
+      minimum = 0x80;
+    } else if ((first & 0xf0) == 0xe0) {
+      codepoint = first & 0x0f;
+      width = 3;
+      minimum = 0x800;
+    } else if ((first & 0xf8) == 0xf0) {
+      codepoint = first & 0x07;
+      width = 4;
+      minimum = 0x10000;
+    } else {
+      return false;
+    }
+    if (offset + width > text.size()) {
+      return false;
+    }
+    for (std::size_t index = 1; index < width; ++index) {
+      const unsigned char continuation =
+          static_cast<unsigned char>(text[offset + index]);
+      if ((continuation & 0xc0) != 0x80) {
+        return false;
+      }
+      codepoint = (codepoint << 6) | (continuation & 0x3f);
+    }
+    if ((width > 1 && codepoint < minimum) || codepoint > 0x10ffff ||
+        (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
+      return false;
+    }
+    pure_cjk = pure_cjk && IsCjkIdeograph(codepoint);
+    ++scalars;
+    offset += width;
+  }
+  return pure_cjk && scalars >= minimum_scalars;
+}
 
-class YunPinFavoriteCandidate : public SimpleCandidate {
- public:
-  explicit YunPinFavoriteCandidate(std::size_t start,
-                                  std::size_t end,
-                                  const std::string& input)
-      : SimpleCandidate("yunpin-fav", start, end,
-                        kFavoriteActionPrefix + input,
-                        "点击收藏到表情收藏夹") {}
-};
+bool IsShortNormalizedPinyin(std::string_view input) {
+  const std::string normalized = yunpin::NormalizePinyin(input);
+  return !normalized.empty() && normalized.size() <= 2;
+}
+
+yunpin::LearningContext LearningContextFor(const Context* context) {
+  if (!context) {
+    return yunpin::LearningContext::kPrivate;
+  }
+  if (context->get_option("password_mode")) {
+    return yunpin::LearningContext::kPassword;
+  }
+  if (context->get_option("yunpin_one_shot") ||
+      context->get_option("one_shot_mode") ||
+      context->get_option("one_time_input")) {
+    return yunpin::LearningContext::kOneShot;
+  }
+  if (context->get_option("yunpin_private_mode") ||
+      context->get_option("incognito_mode")) {
+    return yunpin::LearningContext::kPrivate;
+  }
+  return yunpin::LearningContext::kNormal;
+}
+
+bool IsWordCandidateType(std::string_view type) noexcept {
+  return type == "phrase" || type == "user_phrase" || type == "table" ||
+         type == "user_table" || type == "completion";
+}
 
 class YunPinCandidate : public SimpleCandidate {
  public:
@@ -58,29 +128,24 @@ class YunPinCandidate : public SimpleCandidate {
   std::string id_;
 };
 
-// Ordering contract: `front` candidates (private phrases) take the head of the
-// list, then upstream. `deferred` candidates are parked at `deferred_offset`
-// so that they never occupy a head slot -- the first candidate is what the
-// space bar commits, and 1/2 are the most used selection keys. When upstream
-// runs dry before the offset the deferred candidates are still emitted rather
-// than silently dropped.
+// Ordering contract: bounded private phrases take the head of the list, then
+// the ordinary upstream translation. Expression actions are deliberately not
+// injected until a frontend can carry a typed, explicitly armed action without
+// encoding it as ordinary commit text.
 class YunPinMergedTranslation : public Translation {
  public:
   YunPinMergedTranslation(an<Translation> upstream,
                           std::vector<of<Candidate>> front,
-                          std::vector<of<Candidate>> deferred,
-                          std::size_t deferred_offset)
+                          bool suppress_long_cjk_upstream,
+                          std::function<std::int32_t(std::string_view)>
+                              correction_score)
       : upstream_(std::move(upstream)),
         front_(std::move(front)),
-        deferred_(std::move(deferred)),
-        deferred_offset_(deferred_offset) {
+        suppress_long_cjk_upstream_(suppress_long_cjk_upstream) {
     for (const auto& candidate : front_) {
       injected_text_.insert(candidate->text());
     }
-    for (const auto& candidate : deferred_) {
-      injected_text_.insert(candidate->text());
-    }
-    SkipDuplicateUpstream();
+    PrepareUpstreamWindow(correction_score);
     RefreshExhausted();
   }
 
@@ -89,17 +154,19 @@ class YunPinMergedTranslation : public Translation {
       case Source::kFront:
         ++front_cursor_;
         break;
-      case Source::kDeferred:
-        ++deferred_cursor_;
+      case Source::kWindow:
+        ++window_cursor_;
+        if (window_cursor_ == upstream_window_.size()) {
+          SkipSuppressedUpstream();
+        }
         break;
       case Source::kUpstream:
         upstream_->Next();
-        SkipDuplicateUpstream();
+        SkipSuppressedUpstream();
         break;
       case Source::kNone:
         return false;
     }
-    ++emitted_;
     RefreshExhausted();
     return true;
   }
@@ -108,8 +175,8 @@ class YunPinMergedTranslation : public Translation {
     switch (SelectSource()) {
       case Source::kFront:
         return front_[front_cursor_];
-      case Source::kDeferred:
-        return deferred_[deferred_cursor_];
+      case Source::kWindow:
+        return upstream_window_[window_cursor_];
       case Source::kUpstream:
         return upstream_->Peek();
       case Source::kNone:
@@ -119,7 +186,7 @@ class YunPinMergedTranslation : public Translation {
   }
 
  private:
-  enum class Source { kFront, kDeferred, kUpstream, kNone };
+  enum class Source { kFront, kWindow, kUpstream, kNone };
 
   // Single decision point shared by Peek and Next so the two can never
   // disagree about which candidate is current.
@@ -127,39 +194,68 @@ class YunPinMergedTranslation : public Translation {
     if (front_cursor_ < front_.size()) {
       return Source::kFront;
     }
-    const bool upstream_available = upstream_ && !upstream_->exhausted();
-    const bool deferred_available = deferred_cursor_ < deferred_.size();
-    if (deferred_available &&
-        (emitted_ >= deferred_offset_ || !upstream_available)) {
-      return Source::kDeferred;
+    if (window_cursor_ < upstream_window_.size()) {
+      return Source::kWindow;
     }
-    if (upstream_available) {
+    if (upstream_ && !upstream_->exhausted()) {
       return Source::kUpstream;
     }
-    return deferred_available ? Source::kDeferred : Source::kNone;
+    return Source::kNone;
   }
 
-  void SkipDuplicateUpstream() {
+  bool Suppressed(const an<Candidate>& candidate) const {
+    if (!candidate) {
+      return false;
+    }
+    const bool duplicate = injected_text_.find(candidate->text()) !=
+                           injected_text_.end();
+    const bool overlong_short_input_prediction =
+        suppress_long_cjk_upstream_ &&
+        IsPureCjkAtLeast(candidate->text(), 3);
+    return duplicate || overlong_short_input_prediction;
+  }
+
+  void SkipSuppressedUpstream() {
     while (upstream_ && !upstream_->exhausted()) {
       const auto candidate = upstream_->Peek();
-      if (!candidate || injected_text_.find(candidate->text()) ==
-                            injected_text_.end()) {
+      if (!candidate || !Suppressed(candidate)) {
         break;
       }
       upstream_->Next();
     }
   }
 
+  void PrepareUpstreamWindow(
+      const std::function<std::int32_t(std::string_view)>& correction_score) {
+    constexpr std::size_t kMaxRankingWindow = 8;
+    while (upstream_ && !upstream_->exhausted() &&
+           upstream_window_.size() < kMaxRankingWindow) {
+      const auto candidate = upstream_->Peek();
+      if (!candidate) {
+        break;
+      }
+      if (!Suppressed(candidate)) {
+        upstream_window_.push_back(candidate);
+      }
+      upstream_->Next();
+    }
+    std::stable_sort(
+        upstream_window_.begin(), upstream_window_.end(),
+        [&](const of<Candidate>& left, const of<Candidate>& right) {
+          return correction_score(left->text()) > correction_score(right->text());
+        });
+    SkipSuppressedUpstream();
+  }
+
   void RefreshExhausted() { set_exhausted(SelectSource() == Source::kNone); }
 
   an<Translation> upstream_;
   std::vector<of<Candidate>> front_;
-  std::vector<of<Candidate>> deferred_;
+  std::vector<of<Candidate>> upstream_window_;
   std::set<std::string> injected_text_;
   std::size_t front_cursor_{0};
-  std::size_t deferred_cursor_{0};
-  std::size_t deferred_offset_{0};
-  std::size_t emitted_{0};
+  std::size_t window_cursor_{0};
+  bool suppress_long_cjk_upstream_{false};
 };
 
 bool IsSafeRelativePath(const std::string& path) {
@@ -192,38 +288,54 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
     config->GetString(name_space_ + "/tag", &tag_);
     config->GetString(name_space_ + "/snapshot", &snapshot_path_);
     config->GetBool(name_space_ + "/enabled", &enabled_);
-    config->GetBool(name_space_ + "/expression_search", &expression_search_);
+    config->GetBool(name_space_ + "/short_input_guard", &short_input_guard_);
+    config->GetBool(name_space_ + "/session_learning",
+                    &session_learning_enabled_);
     int configured_limit = static_cast<int>(max_candidates_);
     if (config->GetInt(name_space_ + "/max_candidates", &configured_limit)) {
       max_candidates_ = static_cast<std::size_t>(
           std::clamp(configured_limit, 0, 2));
     }
   }
-  // The module master switch still wins: a deployment that turns the filter
-  // off must not regain the expression actions through a stale overlay.
-  if (!enabled_) {
-    expression_search_ = false;
-  }
-  // Snapshot availability now only gates the private phrases. Previously a
-  // missing snapshot disabled the whole filter and a present one silently
-  // switched the expression actions on.
   if (enabled_ && max_candidates_ > 0) {
     private_ready_ = LoadSnapshot(snapshot_path_);
   }
+  if (session_learning_enabled_ && engine_ && engine_->context()) {
+    session_learning_ = std::make_unique<yunpin::SessionLearning>();
+    Context* context = engine_->context();
+    commit_connection_ = context->commit_notifier().connect(
+        [this](Context* ctx) { OnCommit(ctx); });
+    update_connection_ = context->update_notifier().connect(
+        [this](Context* ctx) { OnContextUpdate(ctx); });
+    unhandled_key_connection_ = context->unhandled_key_notifier().connect(
+        [this](Context* ctx, const KeyEvent& key) {
+          OnUnhandledKey(ctx, key);
+        });
+    option_update_connection_ = context->option_update_notifier().connect(
+        [this](Context*, const string&) {
+          if (session_learning_) {
+            session_learning_->BreakAdjacency();
+          }
+        });
+    delete_connection_ = context->delete_notifier().connect(
+        [this](Context*) {
+          if (session_learning_) {
+            session_learning_->BreakAdjacency();
+          }
+        });
+  }
+}
+
+YunPinFilter::~YunPinFilter() {
+  commit_connection_.disconnect();
+  update_connection_.disconnect();
+  unhandled_key_connection_.disconnect();
+  option_update_connection_.disconnect();
+  delete_connection_.disconnect();
 }
 
 bool YunPinFilter::Active() const {
-  return enabled_ && (private_ready_ || expression_search_);
-}
-
-std::size_t YunPinFilter::PageSize() const {
-  if (engine_ && engine_->schema()) {
-    const int configured = engine_->schema()->page_size();
-    if (configured > 0) {
-      return static_cast<std::size_t>(configured);
-    }
-  }
-  return 5;
+  return enabled_ || short_input_guard_ || session_learning_enabled_;
 }
 
 bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
@@ -235,7 +347,8 @@ bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
       Service::instance().deployer().user_data_dir / relative_path;
   std::ifstream input(snapshot.string(), std::ios::in | std::ios::binary);
   if (!input) {
-    LOG(INFO) << "yunpin private snapshot is not present; filter disabled";
+    LOG(INFO) << "yunpin private snapshot is not present; private injection "
+                 "disabled";
     return false;
   }
   auto result = yunpin::ParsePrivateSnapshot(input);
@@ -251,12 +364,72 @@ bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
 
 bool YunPinFilter::PrivateModeEnabled() const {
   const Context* context = engine_ ? engine_->context() : nullptr;
-  if (!context) {
-    return true;
+  return LearningContextFor(context) != yunpin::LearningContext::kNormal;
+}
+
+void YunPinFilter::OnCommit(Context* context) {
+  if (!session_learning_ || !context ||
+      LearningContextFor(context) != yunpin::LearningContext::kNormal) {
+    if (session_learning_) {
+      session_learning_->BreakAdjacency();
+    }
+    return;
   }
-  return context->get_option("yunpin_private_mode") ||
-         context->get_option("password_mode") ||
-         context->get_option("incognito_mode");
+
+  const auto& composition = context->composition();
+  const std::string& input = context->input();
+  if (composition.empty() || composition.size() > 2) {
+    session_learning_->BreakAdjacency();
+    return;
+  }
+  const Segment& segment = composition.front();
+  if (composition.size() == 2) {
+    const Segment& placeholder = composition.back();
+    if (placeholder.start != input.size() || placeholder.end != input.size() ||
+        placeholder.GetSelectedCandidate()) {
+      session_learning_->BreakAdjacency();
+      return;
+    }
+  }
+  const auto candidate = segment.GetSelectedCandidate();
+  const auto genuine = candidate ? Candidate::GetGenuineCandidate(candidate)
+                                 : an<Candidate>();
+  if (!candidate || segment.status < Segment::kSelected || segment.start != 0 ||
+      segment.end != input.size() || candidate->start() != 0 ||
+      candidate->end() != input.size() ||
+      !genuine || !IsWordCandidateType(genuine->type()) ||
+      context->GetCommitText() != candidate->text()) {
+    session_learning_->BreakAdjacency();
+    return;
+  }
+  session_learning_->ObserveCommit(yunpin::SessionCommit{
+      candidate->text(), input, yunpin::LearningContext::kNormal});
+}
+
+void YunPinFilter::OnContextUpdate(Context* context) {
+  if (!session_learning_) {
+    return;
+  }
+  session_learning_->ObserveComposition(
+      context ? std::string_view(context->input()) : std::string_view(),
+      LearningContextFor(context));
+}
+
+void YunPinFilter::OnUnhandledKey(Context* context,
+                                  const KeyEvent& key_event) {
+  if (!session_learning_) {
+    return;
+  }
+  const bool unmodified_backspace =
+      key_event.modifier() == 0 && key_event.keycode() == XK_BackSpace;
+  session_learning_->ObserveUnhandledKey(unmodified_backspace,
+                                         LearningContextFor(context));
+}
+
+std::vector<yunpin::HabitStat> YunPinFilter::QueryHabits(
+    const yunpin::HabitQuery& query) const {
+  return session_learning_ ? session_learning_->QueryHabits(query)
+                           : std::vector<yunpin::HabitStat>();
 }
 
 bool YunPinFilter::AppliesToSegment(Segment* segment) {
@@ -281,18 +454,11 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   if (active_input_.empty()) {
     return translation;
   }
-  std::string trimmed_input = active_input_;
-  while (!trimmed_input.empty() &&
-         (trimmed_input.front() == ' ' || trimmed_input.front() == '\t')) {
-    trimmed_input.erase(trimmed_input.begin());
-  }
-  while (!trimmed_input.empty() &&
-         (trimmed_input.back() == ' ' || trimmed_input.back() == '\t')) {
-    trimmed_input.pop_back();
-  }
   // Private phrases keep the head slots; max_candidates_ already bounds them.
+  const bool suppress_long_cjk_upstream =
+      short_input_guard_ && IsShortNormalizedPinyin(active_input_);
   std::vector<of<Candidate>> front;
-  if (private_ready_) {
+  if (enabled_ && private_ready_) {
     const auto matches = store_.Query(active_input_, max_candidates_);
     front.reserve(matches.size());
     std::set<std::string> seen;
@@ -305,29 +471,23 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
     }
   }
 
-  std::vector<of<Candidate>> deferred;
-  if (expression_search_ && !trimmed_input.empty()) {
-    deferred.reserve(2);
-    deferred.push_back(
-        New<YunPinSearchCandidate>(active_start_, active_end_, trimmed_input));
-    deferred.push_back(
-        New<YunPinFavoriteCandidate>(active_start_, active_end_, trimmed_input));
+  if (front.empty() && !suppress_long_cjk_upstream) {
+    // A learned correction can still reorder the bounded upstream window.
+    const std::string normalized = yunpin::NormalizePinyin(active_input_);
+    if (!session_learning_ || normalized.empty()) {
+      return translation;
+    }
   }
-
-  if (front.empty() && deferred.empty()) {
-    return translation;
-  }
-
-  // Park the actions in the trailing slots of the first page: visible without
-  // a page turn, but off the space bar and off keys 1-2.
-  std::size_t deferred_offset = front.size();
-  const std::size_t page_size = PageSize();
-  if (page_size > deferred.size()) {
-    deferred_offset = std::max(deferred_offset, page_size - deferred.size());
-  }
-
+  const std::string normalized = yunpin::NormalizePinyin(active_input_);
+  const auto correction_score =
+      [session = session_learning_.get(), normalized](std::string_view text) {
+        return session && !normalized.empty()
+                   ? session->CorrectionScore(normalized, text)
+                   : std::int32_t{0};
+      };
   return New<YunPinMergedTranslation>(std::move(translation), std::move(front),
-                                      std::move(deferred), deferred_offset);
+                                      suppress_long_cjk_upstream,
+                                      correction_score);
 }
 
 }  // namespace rime

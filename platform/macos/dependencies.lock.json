@@ -26,7 +26,7 @@
     },
     {
       "path": "platform/patches/squirrel/0005-yunpin-expression-search-and-favorite.patch",
-      "sha256": "15fc36e6656b4dcc884ae8dcd346f58bc4dd2cd44e697517cccf52285abcffca"
+      "sha256": "aaf2dae4e94da7c00e7a2d8756da8710c1d9d5e38284825855a39171e478c65c"
     }
   ],
   "archives": [

@@ -23,7 +23,9 @@ endif()
 
 set(yunpin_core_src
   "${YUNPIN_ENGINE_ROOT}/src/phrase_engine.cpp"
+  "${YUNPIN_ENGINE_ROOT}/src/correction_learning.cpp"
   src/snapshot_store.cpp
+  src/session_learning.cpp
 )
 
 # When this directory is staged below librime/plugins, librime defines
@@ -75,6 +77,16 @@ else()
     Threads::Threads
   )
   add_test(NAME yunpin_snapshot_tests COMMAND yunpin_snapshot_tests)
+
+  add_executable(yunpin_session_learning_tests
+    tests/session_learning_test.cpp
+  )
+  target_link_libraries(yunpin_session_learning_tests PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  add_test(NAME yunpin_session_learning_tests
+    COMMAND yunpin_session_learning_tests)
 
   # Candidate ordering is decided by the filter, which normally only compiles
   # inside a librime tree. tests/rime_stubs declares the small slice of the

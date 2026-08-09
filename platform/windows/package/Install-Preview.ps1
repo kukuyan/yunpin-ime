@@ -99,6 +99,12 @@ $privateConfig = Get-Content -LiteralPath (Join-Path $bundleRoot "rime-data\rime
 if ($privateConfig -notmatch '(?m)^\s*"yunpin/enabled": false\s*$') {
     throw "Private candidate snapshot must remain disabled in this preview"
 }
+if ($privateConfig -notmatch '(?m)^\s*"yunpin/short_input_guard": true\s*$') {
+    throw "Short-input upstream guard must remain enabled in this preview"
+}
+if ($privateConfig -notmatch '(?m)^\s*"yunpin/session_learning": false\s*$') {
+    throw "Session learning must remain disabled until the Windows secure-input gate passes"
+}
 
 if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
     $InstallRoot = Join-Path $env:LOCALAPPDATA "Programs\YunPinIME\Preview"

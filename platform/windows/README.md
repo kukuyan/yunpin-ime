@@ -30,6 +30,22 @@ disabled with `"yunpin/enabled": false`. The package contains only an empty
 example header, never a real `yunpin/private.tsv`, user database, Sogou file, or
 conversation data.
 
+The independent `"yunpin/short_input_guard": true` remains active. It performs
+only an in-memory check over Rime's already-produced candidates, so Windows can
+drop implausible long pure-CJK predictions for one/two-letter input without
+loading personal data.
+
+`"yunpin/session_learning": false` is a separate Windows safety gate. Session
+correction stays disabled until TSF secure-input and authenticated IPC behavior
+has passed real-host testing; enabling the public short-input guard does not
+silently enable learning.
+
+Expression search/favorite is not connected in this preview. The TSF frontend
+never interprets candidate commit text as a browser or file-system command,
+and the filter injects no action candidate until a typed, explicitly armed
+native channel exists. Command-looking ordinary/imported/synchronized text is
+inserted as text.
+
 ## Isolated preview identity
 
 The patch series assigns YunPin its own TSF CLSID/profile GUID, registry key,

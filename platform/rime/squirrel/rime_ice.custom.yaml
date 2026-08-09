@@ -10,6 +10,7 @@ patch:
   "yunpin/snapshot": yunpin/private.tsv
   "yunpin/max_candidates": 2
   "yunpin/enabled": true
-  # Expression actions reach the network and the local disk, and they occupy
-  # two candidate slots. Opt-in only.
+  "yunpin/short_input_guard": true
+  "yunpin/session_learning": true
+  # Reserved and inert until a typed/armed native action channel exists.
   "yunpin/expression_search": false

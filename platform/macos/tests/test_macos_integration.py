@@ -119,6 +119,30 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("rime.github.io/release/squirrel", sources)
         self.assertIn("encrypted sync is not connected", sources)
 
+    def test_expression_commit_text_cannot_trigger_platform_side_effects(self) -> None:
+        controller = (self.prepared / "sources" / "SquirrelInputController.swift").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("typed, explicitly armed action", controller)
+        self.assertIn("client.insertText(string, replacementRange: .empty)", controller)
+        for forbidden in (
+            "yunpin-search:",
+            "yunpin-fav:",
+            "NSWorkspace.shared.open",
+            "persistFavorite",
+            "favorites.jsonl",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, controller)
+
+        filter_source = (ROOT / "librime-yunpin" / "src" / "rime_yunpin_filter.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("YunPinSearchCandidate", filter_source)
+        self.assertNotIn("YunPinFavoriteCandidate", filter_source)
+        self.assertNotIn("yunpin-search:", filter_source)
+        self.assertNotIn("yunpin-fav:", filter_source)
+
     def test_original_artwork_replaces_upstream_visible_assets(self) -> None:
         upstream_logo = SQUIRREL / "Rime.icon" / "Assets" / "logo.svg"
         prepared_logo = self.prepared / "Rime.icon" / "Assets" / "logo.svg"
@@ -138,6 +162,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertTrue(manifest["yunpin_module_merged"])
         self.assertTrue(manifest["yunpin_ranking_headless_e2e"])
         self.assertFalse(manifest["yunpin_ranking_native_host_e2e"])
+        self.assertTrue(manifest["yunpin_session_correction_librime_e2e"])
         self.assertFalse(manifest["yunpin_learning_bridge"])
         self.assertFalse(manifest["encrypted_cloud_sync"])
         self.assertFalse(manifest["production_signed"])
@@ -149,6 +174,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("engine/filters/@before 0\": yunpin_filter@yunpin", overlay)
         self.assertIn("yunpin/snapshot\": yunpin/private.tsv", overlay)
         self.assertIn("yunpin/max_candidates\": 2", overlay)
+        self.assertIn("yunpin/short_input_guard\": true", overlay)
+        self.assertIn("yunpin/session_learning\": true", overlay)
 
     def test_dependency_fetch_initializes_librime_before_runtime_copy(self) -> None:
         fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(encoding="utf-8")

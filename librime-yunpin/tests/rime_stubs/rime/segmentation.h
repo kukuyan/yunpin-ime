@@ -9,6 +9,7 @@
 // moves librime, re-check these signatures against the real headers; the
 // commit above is pinned by tools/importer/tests/test_platform_configs.py.
 #pragma once
+#include <rime/candidate.h>
 #include <rime/common.h>
 namespace rime {
 struct Segment {
@@ -21,5 +22,7 @@ struct Segment {
   Segment() = default;
   Segment(int s, int e) : start(s), end(e), length(e - s) {}
   bool HasTag(const string& tag) const { return tags.find(tag) != tags.end(); }
+  an<Candidate> GetSelectedCandidate() const { return selected_candidate_; }
+  an<Candidate> selected_candidate_;
 };
 }  // namespace rime

@@ -135,6 +135,34 @@ void TestPinnedShortPhraseInitialsRemainAvailable() {
         "a long pin must still wait for two complete full-pinyin syllables");
 }
 
+void TestShortPrefixDoesNotInjectLongPhrases() {
+  PhraseIndex index({
+      Entry("merge-as", "合并为", "he bing wei", PhraseOrigin::kPublic, 0,
+            1000),
+      Entry("and", "和", "he", PhraseOrigin::kPublic, 0, 900),
+      Entry("merge", "合并", "he bing", PhraseOrigin::kPublic, 0, 800),
+      Entry("personal-two", "合约", "he yue", PhraseOrigin::kPersonal, 8,
+            700),
+      Entry("pinned-long", "河北石家庄公司", "he bei shi jia zhuang gong si",
+            PhraseOrigin::kPersonal, 10, 100, true),
+  });
+
+  const auto one_syllable = index.Query("he");
+  Check(!ContainsId(one_syllable, "merge-as"),
+        "one complete syllable must not inject a non-pinned three-syllable phrase");
+  Check(!ContainsId(one_syllable, "pinned-long"),
+        "one complete syllable must not inject a pinned long phrase");
+  Check(ContainsId(one_syllable, "and") &&
+            ContainsId(one_syllable, "merge"),
+        "the short-prefix guard must retain one- and two-syllable candidates");
+  Check(!ContainsId(index.Query("h"), "personal-two"),
+        "one incomplete letter must not inject a multi-syllable personal phrase");
+  Check(ContainsId(index.Query("hebing"), "merge-as"),
+        "two complete syllables must recall a non-pinned long phrase");
+  Check(!ContainsId(index.Query("hb"), "merge-as"),
+        "two short initials must not inject a non-pinned long phrase");
+}
+
 void TestSourcePrecedenceAndFirstPageQuota() {
   PhraseIndex index({
       Entry("pinned", "固定公司", "gong si", PhraseOrigin::kPersonal, 1,
@@ -390,6 +418,7 @@ int main() {
   try {
     TestAcceptanceAndRecallThresholds();
     TestPinnedShortPhraseInitialsRemainAvailable();
+    TestShortPrefixDoesNotInjectLongPhrases();
     TestSourcePrecedenceAndFirstPageQuota();
     TestLearningGateAndTombstones();
     TestConcurrentQueriesAndTombstone();
