@@ -5,6 +5,8 @@
 - Shared ranking/recall engine and golden tests.
 - Offline private-vocabulary importer with sensitive-data preview.
 - Opaque encrypted-envelope sync API and Docker Compose.
+- Reusable headless desktop sync worker with durable idempotent upload state,
+  verified/decrypted download merge, and strict endpoint configuration.
 - Weasel/Squirrel configuration overlays and pinned upstream strategy.
 - Source-only and explicitly unsigned development builds.
 
@@ -47,6 +49,9 @@ keyboard extension network access.
 - Build Weasel x86/x64 TSF components plus x64 service.
 - Build Squirrel Universal arm64/x86_64 InputMethodKit package.
 - Complete encrypted local SQLite, OS keychain adapters, atomic snapshot reload, installers and cross-application smoke tests.
+- Connect the headless sync worker to DPAPI/Credential Manager and Keychain,
+  native learning events, scheduled retry/backoff and atomic Rime snapshot
+  reload; transport-only tests do not satisfy this desktop gate.
 
 ## Signed desktop release
 

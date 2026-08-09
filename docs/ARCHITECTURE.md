@@ -38,6 +38,19 @@ The reference local store uses record-level encrypted SQLite and an encrypted ou
 
 The Go service stores opaque signed envelopes in SQLite WAL. It has no phrase decryption key. `/v1/sync` performs idempotent exchange by `(device_id, device_seq)` and cursor. Network failure only grows a local outbox; input remains available.
 
+The shared `syncclient` worker runs outside the input key-event path. It stages
+the exact ciphertext wire record before upload, maintains the signed device
+sequence/previous-hash chain, retries a lost response idempotently, verifies
+and decrypts downloaded records locally, merges the CRDT into `localstore`, and
+only then advances its cursor. The local checkpoint contains ciphertext and
+relay metadata but never the bearer token or private keys.
+
+This headless path does not yet make either native frontend synchronized.
+Windows DPAPI/Credential Manager and macOS Keychain adapters, authenticated
+pairing/keyring persistence, a single-instance background scheduler, native
+learning hooks, atomic snapshot rebuilding and Rime reload remain desktop
+acceptance gates.
+
 ## Clipboard sync (Preview 0.2)
 
 Clipboard sync uses the existing account/device trust graph but a separate

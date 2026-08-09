@@ -1,17 +1,15 @@
-module github.com/kukuyan/yunpin-ime/integration
+module github.com/kukuyan/yunpin-ime/syncclient
 
 go 1.25.0
 
 require (
 	github.com/kukuyan/yunpin-ime/localstore v0.0.0
 	github.com/kukuyan/yunpin-ime/protocol v0.0.0
-	github.com/kukuyan/yunpin-ime/sync v0.0.0
-	github.com/kukuyan/yunpin-ime/syncclient v0.0.0
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.8.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
@@ -27,10 +25,6 @@ require (
 	modernc.org/sqlite v1.39.1 // indirect
 )
 
-replace github.com/kukuyan/yunpin-ime/protocol => ../protocol
-
-replace github.com/kukuyan/yunpin-ime/sync => ../sync
-
 replace github.com/kukuyan/yunpin-ime/localstore => ../localstore
 
-replace github.com/kukuyan/yunpin-ime/syncclient => ../syncclient
+replace github.com/kukuyan/yunpin-ime/protocol => ../protocol

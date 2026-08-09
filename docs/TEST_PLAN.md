@@ -13,6 +13,11 @@
 
 - Shared deterministic vectors for opaque object IDs, recovery text, canonical envelope encoding, encryption, signature validation, and X25519 pairing.
 - A real `protocol.Seal().ToWire()` envelope is accepted, downloaded, reconstructed with the relay-provided source device ID, signature-verified, and decrypted through the sync HTTP handler.
+- Two synthetic headless desktop workers create/recover one account over a real
+  `httptest` TCP server, exchange encrypted localstore phrase records in both
+  directions, converge their CRDT counts, and retry the exact prepared envelope
+  after a simulated lost HTTP response without advancing the device sequence
+  twice.
 - Duplicate device sequences are idempotent; tampering, wrong signatures, future versions, oversize batches, expired pairing, repeated claim, and revoked tokens fail closed.
 - G-Counters, HLC-LWW fields, and remove-wins tombstones converge for duplicate and permuted events.
 - Server database and captured logs do not contain synthetic plaintext phrase/Pinyin probes.

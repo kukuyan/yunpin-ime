@@ -135,8 +135,41 @@ INSERT OR IGNORE INTO metadata(key, value) VALUES('generation', 0);`
 	const clockMetadata = `
 INSERT OR IGNORE INTO metadata(key, value) VALUES('hlc_wall_ms', 0);
 INSERT OR IGNORE INTO metadata(key, value) VALUES('hlc_counter', 0);`
-	if _, err := store.db.ExecContext(ctx, schema+clockMetadata); err != nil {
+	const syncSchema = `
+CREATE TABLE IF NOT EXISTS sync_state (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  device_id TEXT NOT NULL CHECK(length(device_id) = 32),
+  cursor INTEGER NOT NULL DEFAULT 0 CHECK(cursor >= 0),
+  next_device_sequence INTEGER NOT NULL DEFAULT 1 CHECK(next_device_sequence >= 1),
+  previous_hash BLOB CHECK(previous_hash IS NULL OR length(previous_hash) = 32),
+  prepared_event_id INTEGER,
+  prepared_event_version INTEGER,
+  prepared_device_sequence INTEGER,
+  prepared_wire BLOB,
+  prepared_hash BLOB,
+  CHECK (
+    (prepared_event_id IS NULL AND prepared_event_version IS NULL AND
+     prepared_device_sequence IS NULL AND prepared_wire IS NULL AND prepared_hash IS NULL)
+    OR
+    (prepared_event_id > 0 AND prepared_event_version > 0 AND
+     prepared_device_sequence > 0 AND length(prepared_wire) > 0 AND length(prepared_hash) = 32)
+  )
+);`
+	if _, err := store.db.ExecContext(ctx, schema+clockMetadata+syncSchema); err != nil {
 		return fmt.Errorf("initialize local store: %w", err)
+	}
+	if store.syncEnabled {
+		if _, err := store.db.ExecContext(ctx, `INSERT OR IGNORE INTO sync_state(singleton, device_id)
+VALUES(1, ?)`, store.deviceID); err != nil {
+			return fmt.Errorf("initialize sync state: %w", err)
+		}
+		var persistedDeviceID string
+		if err := store.db.QueryRowContext(ctx, "SELECT device_id FROM sync_state WHERE singleton = 1").Scan(&persistedDeviceID); err != nil {
+			return fmt.Errorf("load sync device binding: %w", err)
+		}
+		if persistedDeviceID != store.deviceID {
+			return errors.New("local store is bound to a different sync device")
+		}
 	}
 	return nil
 }

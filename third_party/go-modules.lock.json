@@ -217,9 +217,23 @@
       "license_source": "../../LICENSE"
     },
     {
+      "module": "github.com/kukuyan/yunpin-ime/localstore",
+      "version": "v0.0.0",
+      "replacement": "../localstore",
+      "license": "Apache-2.0",
+      "license_source": "../../LICENSE"
+    },
+    {
       "module": "github.com/kukuyan/yunpin-ime/sync",
       "version": "v0.0.0",
       "replacement": "../sync",
+      "license": "Apache-2.0",
+      "license_source": "../../LICENSE"
+    },
+    {
+      "module": "github.com/kukuyan/yunpin-ime/syncclient",
+      "version": "v0.0.0",
+      "replacement": "../syncclient",
       "license": "Apache-2.0",
       "license_source": "../../LICENSE"
     }

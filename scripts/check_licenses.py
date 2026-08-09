@@ -10,7 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "third_party" / "upstreams.lock.json"
 GO_LICENSE_LOCK = ROOT / "third_party" / "go-modules.lock.json"
-GO_MODULE_DIRS = ("protocol", "localstore", "sync", "integration")
+GO_MODULE_DIRS = ("protocol", "localstore", "sync", "syncclient", "integration")
 APPROVED_LICENSES = {
     "Apache-2.0",
     "BSD-2-Clause",
