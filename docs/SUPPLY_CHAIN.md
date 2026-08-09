@@ -13,6 +13,8 @@ license.
 - `protocol/go.sum`
 - `localstore/go.sum`
 - `sync/go.sum`
+- `syncclient/go.sum`
+- `desktopagent/go.sum`
 - `integration/go.sum`
 
 The map includes versions represented only by a `/go.mod` checksum because they

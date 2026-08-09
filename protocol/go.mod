@@ -1,6 +1,6 @@
 module github.com/kukuyan/yunpin-ime/protocol
 
-go 1.25.0
+go 1.25.12
 
 require (
 	github.com/fxamacker/cbor/v2 v2.8.0

@@ -2,7 +2,7 @@
 
 | Area | License | Notes |
 |---|---|---|
-| `engine/`, `localstore/`, `sync/`, `syncclient/`, `integration/`, `tools/`, `protocol/`, root scripts and docs | Apache-2.0 | Original YunPin work unless a file states otherwise. |
+| `engine/`, `localstore/`, `sync/`, `syncclient/`, `desktopagent/`, `integration/`, `tools/`, `protocol/`, root scripts and docs | Apache-2.0 | Original YunPin work unless a file states otherwise. |
 | `platform/patches/weasel/`, `platform/windows/`, and Windows derivative distribution | GPL-3.0-only | The preview preserves the exact Weasel base, ordered patches, runtime notices, and corresponding-source archive. Production still requires Authenticode and native-host acceptance. |
 | `platform/patches/squirrel/`, `platform/macos/`, macOS frontend overlays and derivative distribution | GPL-3.0-only | The development preview preserves the exact Squirrel base, ordered patches, source archive and notices. Production distribution still requires native-plugin and host acceptance. |
 | `platform/ios/` | Apache-2.0-compatible only | Phase two; must not copy or link GPL desktop frontend code. |
@@ -20,7 +20,7 @@
 The root `LICENSE` applies only where no narrower license is declared. A desktop binary combining Apache code with GPL frontend code is distributed under GPL-3.0-compatible terms. The iOS implementation must remain independent from GPL desktop code.
 
 Every distinct external Go `module@version`, including go.mod-only checksum
-rows retained in any of the five `go.sum` files, is listed in
+rows retained in any of the six `go.sum` files, is listed in
 `third_party/go-modules.lock.json` with a reviewed SPDX identifier and a
 versioned license source. `scripts/check_licenses.py` requires exact coverage
 and rejects stale rows, unknown licenses, uncovered requirements, and local

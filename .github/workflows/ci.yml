@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: sync/go.mod
           cache-dependency-path: sync/go.sum
@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: syncclient/go.mod
           cache-dependency-path: |
@@ -142,12 +142,40 @@ jobs:
       - run: go test -race ./...
         working-directory: syncclient
 
+  desktopagent:
+    name: desktopagent-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: desktopagent/go.mod
+          cache-dependency-path: |
+            desktopagent/go.sum
+            syncclient/go.sum
+            localstore/go.sum
+            protocol/go.sum
+      - run: go mod verify
+        working-directory: desktopagent
+      - run: go vet ./...
+        working-directory: desktopagent
+      - run: go test ./...
+        if: runner.os == 'Windows'
+        working-directory: desktopagent
+      - run: go test -race ./...
+        if: runner.os != 'Windows'
+        working-directory: desktopagent
+
   protocol:
     name: protocol
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: protocol/go.mod
           cache-dependency-path: protocol/go.sum
@@ -163,7 +191,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: localstore/go.mod
           cache-dependency-path: |
@@ -200,10 +228,10 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, protocol, sync, syncclient, macos-client]
+    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, protocol, sync, syncclient, desktopagent, macos-client]
     runs-on: ubuntu-24.04
     steps:
       - name: Verify required jobs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: test "$RESULTS" = "success success success success success success success success success success"
+        run: test "$RESULTS" = "success success success success success success success success success success success"

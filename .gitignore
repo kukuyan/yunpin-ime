@@ -26,6 +26,7 @@ sync/data/
 *.db-*
 *.sqlite
 *.sqlite-*
+*.dpapi
 
 # Personal dictionaries and exports MUST stay outside Git.
 private/
