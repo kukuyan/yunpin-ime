@@ -149,19 +149,29 @@ void TestSourcePrecedenceAndFirstPageQuota() {
             1000),
       Entry("public-b", "公共公司乙", "gong si", PhraseOrigin::kPublic, 0,
             900),
-      Entry("base", "基础公司", "gong si", PhraseOrigin::kBase, 0, 500),
+      Entry("public-c", "公共公司丙", "gong si", PhraseOrigin::kPublic, 0,
+            800),
+      Entry("public-d", "公共公司丁", "gong si", PhraseOrigin::kPublic, 0,
+            700),
+      Entry("base-a", "基础公司甲", "gong si", PhraseOrigin::kBase, 0, 500),
+      Entry("base-b", "基础公司乙", "gong si", PhraseOrigin::kBase, 0, 400),
   });
 
-  const auto candidates = index.Query("gongsi", 8);
-  Check(candidates.size() == 7, "all seven matching candidates should return");
+  const auto candidates = index.Query("gongsi", 10);
+  Check(candidates.size() == 10, "all ten matching candidates should return");
   Check(candidates[0].id == "pinned", "manual pin must be first");
   Check(candidates[1].id == "imported",
         "highest-frequency personal/import candidate must follow pin");
-  Check(candidates[2].origin == PhraseOrigin::kPublic &&
-            candidates[3].origin == PhraseOrigin::kPublic &&
-            candidates[4].origin == PhraseOrigin::kBase,
-        "public then base candidates must fill the first-page quota");
-  const std::size_t first_page_limit = std::min<std::size_t>(8, candidates.size());
+  Check(std::all_of(candidates.begin() + 2, candidates.begin() + 6,
+                    [](const Candidate& candidate) {
+                      return candidate.origin == PhraseOrigin::kPublic;
+                    }) &&
+            std::all_of(candidates.begin() + 6, candidates.begin() + 8,
+                        [](const Candidate& candidate) {
+                          return candidate.origin == PhraseOrigin::kBase;
+                        }),
+        "public then base candidates must fill the eight-item first page");
+  constexpr std::size_t first_page_limit = 8;
   const std::size_t first_page_personal = static_cast<std::size_t>(
       std::count_if(candidates.begin(), candidates.begin() + first_page_limit,
                     [](const Candidate& candidate) {
@@ -169,7 +179,7 @@ void TestSourcePrecedenceAndFirstPageQuota() {
                     }));
   Check(first_page_personal == 2,
         "the first eight candidates must contain at most two personal items");
-  Check(candidates[5].id == "history" && candidates[6].id == "personal",
+  Check(candidates[8].id == "history" && candidates[9].id == "personal",
         "deferred personal candidates must retain deterministic frequency order");
 }
 

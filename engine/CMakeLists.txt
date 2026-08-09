@@ -4,6 +4,12 @@ project(yunpin_phrase_engine LANGUAGES CXX)
 
 find_package(Threads REQUIRED)
 
+if(MSVC)
+  # Source and test fixtures contain Chinese UTF-8 text.  Do not let a
+  # machine's active Windows code page change how MSVC tokenizes the files.
+  add_compile_options(/utf-8)
+endif()
+
 add_library(yunpin_phrase_engine STATIC src/phrase_engine.cpp)
 target_include_directories(yunpin_phrase_engine PUBLIC include)
 target_compile_features(yunpin_phrase_engine PUBLIC cxx_std_17)

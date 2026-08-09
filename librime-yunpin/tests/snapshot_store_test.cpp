@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "yunpin/snapshot_store.hpp"
 
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <sstream>
 #include <string>

@@ -2,6 +2,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(rime_yunpin LANGUAGES CXX)
 
+if(MSVC)
+  # The adapter, tests and snapshot fixtures contain Chinese UTF-8 text.
+  # This also applies when the plugin is merged into librime on Windows.
+  add_compile_options(/utf-8)
+endif()
+
 set(YUNPIN_ENGINE_ROOT "" CACHE PATH "Path to the YunPin phrase engine")
 if(NOT YUNPIN_ENGINE_ROOT)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/engine/src/phrase_engine.cpp")
