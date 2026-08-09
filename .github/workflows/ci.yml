@@ -123,6 +123,25 @@ jobs:
       - run: docker build --target runtime -t yunpin-sync:runtime ./sync
       - run: sh sync/scripts/smoke-container.sh yunpin-sync:runtime
 
+  syncclient:
+    name: syncclient
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: syncclient/go.mod
+          cache-dependency-path: |
+            syncclient/go.sum
+            localstore/go.sum
+            protocol/go.sum
+      - run: go mod verify
+        working-directory: syncclient
+      - run: go vet ./...
+        working-directory: syncclient
+      - run: go test -race ./...
+        working-directory: syncclient
+
   protocol:
     name: protocol
     runs-on: ubuntu-24.04
@@ -181,10 +200,10 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, protocol, sync, macos-client]
+    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, protocol, sync, syncclient, macos-client]
     runs-on: ubuntu-24.04
     steps:
       - name: Verify required jobs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: test "$RESULTS" = "success success success success success success success success success"
+        run: test "$RESULTS" = "success success success success success success success success success success"
