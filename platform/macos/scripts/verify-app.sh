@@ -42,9 +42,8 @@ for required in \
 done
 
 [[ -d "$shared_support/cn_dicts" && -d "$shared_support/lua" && -d "$shared_support/opencc" ]] || die "Rime Ice runtime directories are incomplete"
-if ! codesign --verify --deep --strict "$app" >/dev/null 2>&1; then
-  printf 'warning: skipping strict bundle signature verification for unsigned preview artifact\n'
-fi
+codesign --verify --deep --strict "$app" >/dev/null 2>&1 || \
+  die "YunPin app does not have a valid strict deep signature"
 otool -L "$executable" | grep -Fq '@rpath/librime.1.dylib' || die "YunPin executable does not link bundled librime"
 
 bundled_librime="$app/Contents/Frameworks/librime.1.dylib"

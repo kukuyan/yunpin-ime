@@ -23,9 +23,8 @@ cleanup_package_staging() {
 trap cleanup_package_staging EXIT
 mkdir -p "$package_root/Library/Input Methods"
 ditto "$app" "$package_root/Library/Input Methods/YunPin.app"
-if ! codesign --verify --strict "$package_root/Library/Input Methods/YunPin.app" >/dev/null 2>&1; then
-  printf 'warning: skipping strict signature verification for unsigned preview artifact\n'
-fi
+codesign --verify --deep --strict "$package_root/Library/Input Methods/YunPin.app" >/dev/null 2>&1 || \
+  die "staged YunPin app does not have a valid strict deep signature"
 pkgbuild --analyze --root "$package_root" "$component_plist"
 /usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$component_plist"
 [[ "$(plutil -extract 0.BundleIsRelocatable raw -o - "$component_plist")" == false ]] || \

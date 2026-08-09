@@ -64,6 +64,12 @@ existing user configuration. Personal dictionaries are not bundled.
 The app and input-source art are original YunPin vector shapes. The build
 replaces Squirrel's upstream icon source with `YunPin.icon` and replaces
 `rime.pdf` with a newly rendered `yunpin.pdf` before Xcode sees the project.
+Xcode registers macOS application products from DerivedData as a normal final
+build step. To keep those development copies out of the input-source menu, the
+preview build unregisters only its exact generated `YunPin.app` path after all
+verification and then confirms that path is absent from LaunchServices. It
+does not delete the build artifact or unregister the installed
+`/Library/Input Methods/YunPin.app`.
 
 ## Local verification
 
@@ -100,6 +106,11 @@ deployment target. Outputs are under
   installer, for controlled development testing only;
 - `YunPin-IME-development-preview-source.tar.gz` — matching GPL corresponding
   source, patches, build scripts and licenses.
+
+Installation refreshes the TIS registration for the fixed system app even
+when YunPin is already enabled, while preserving the user's enabled modes.
+Registration failure is returned to the package installer instead of being
+reported as a successful install.
 
 The GitHub `macos-client` job selects the runner's pinned Xcode 26.3 and repeats
 the static tests, merged Universal librime build and headless ranking fixture,

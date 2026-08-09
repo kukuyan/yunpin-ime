@@ -73,7 +73,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(5, len(patches))
+        self.assertEqual(6, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -149,6 +149,26 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("SquirrelApp.userDir.path()", sources)
         self.assertNotIn("rime.github.io/release/squirrel", sources)
         self.assertIn("encrypted sync is not connected", sources)
+
+    def test_registration_refreshes_tis_without_changing_enabled_modes(self) -> None:
+        source = (self.prepared / "sources" / "InputSource.swift").read_text(
+            encoding="utf-8"
+        )
+        register = source[
+            source.index("  func register() -> Bool {") : source.index("  func enable(")
+        ]
+        refresh = register.index("TISRegisterInputSource(SquirrelApp.appDir as CFURL)")
+        enabled_branch = register.index("if !enabledInputModes.isEmpty")
+        self.assertLess(refresh, enabled_branch)
+        self.assertIn("preserving enabled YunPin method(s)", register)
+        self.assertIn("return false", register)
+        self.assertIn("return true", register)
+        self.assertNotIn("TISDisableInputSource", register)
+        self.assertNotIn("TISSelectInputSource", register)
+        self.assertNotIn("Already registered", register)
+        main = (self.prepared / "sources" / "Main.swift").read_text(encoding="utf-8")
+        self.assertIn("guard installer.register() else", main)
+        self.assertIn("exit(EXIT_FAILURE)", main)
 
     def test_expression_commit_text_cannot_trigger_platform_side_effects(self) -> None:
         controller = (self.prepared / "sources" / "SquirrelInputController.swift").read_text(
@@ -299,13 +319,140 @@ class MacOSIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(str(developer), result.stdout.strip())
 
-    def test_generated_bundle_xattrs_are_cleared_before_adhoc_signing(self) -> None:
+    def test_generated_bundle_is_signed_bottom_up_and_fails_closed(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(encoding="utf-8")
-        clear_xattrs = build.index("cleanup_bundle_metadata \"$app\"")
-        sign_bundle = build.index('codesign --force --sign - "$app"')
-        self.assertLess(clear_xattrs, sign_bundle)
-        self.assertIn("for attempt in 1 2 3", build)
-        self.assertIn("warning: bundle signing failed", build)
+        # Xcode 26 still schedules RegisterWithLaunchServices for a macOS app,
+        # even when an unsupported similarly named command-line setting is used.
+        # The build must therefore remove and verify the exact staging path.
+        self.assertNotIn("REGISTER_WITH_LAUNCH_SERVICES", build)
+        self.assertNotIn("WRAPPER_EXTENSION", build)
+        self.assertIn('"$lsregister" -u "$app"', build)
+        self.assertIn('"$lsregister" -dump', build)
+        self.assertIn('registration_check_status=("${PIPESTATUS[@]}")', build)
+        self.assertIn("unable to inspect LaunchServices", build)
+        self.assertIn("the exact YunPin build bundle remains registered", build)
+        self.assertNotIn("lsregister -f", build)
+        verify_app = build.index('scripts/verify-app.sh" --require-universal "$app"')
+        unregister = build.index('"$lsregister" -u "$app"')
+        assert_absent = build.index('"$lsregister" -dump')
+        self.assertLess(verify_app, unregister)
+        self.assertLess(unregister, assert_absent)
+        self.assertIn('scripts/sign-app-adhoc.sh" "$app"', build)
+        self.assertLess(
+            build.index('scripts/verify-app.sh" --require-universal "$app"'),
+            build.index('"$lsregister" -u "$app"'),
+        )
+        self.assertNotIn("warning: bundle signing failed", build)
+
+        signing = (MACOS_DIR / "scripts" / "sign-app-adhoc.sh").read_text(
+            encoding="utf-8"
+        )
+        xpc_executable = signing.index("-path '*/Contents/MacOS/*'")
+        xpc_bundle = signing.index("-name '*.xpc'")
+        updater = signing.index('sign_adhoc "$updater"')
+        sparkle = signing.index('sign_adhoc "$sparkle"')
+        librime = signing.index("-name 'librime*.dylib'")
+        plugin = signing.index("-name '*.dylib'")
+        helper = signing.index("-name 'rime*'")
+        root = signing.rindex('sign_adhoc "$app"')
+        verify = signing.index('codesign --verify --deep --strict --verbose=2 "$app"')
+        self.assertEqual(
+            sorted([xpc_executable, xpc_bundle, updater, sparkle, librime, plugin, helper, root, verify]),
+            [xpc_executable, xpc_bundle, updater, sparkle, librime, plugin, helper, root, verify],
+        )
+
+        verifier = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(
+            encoding="utf-8"
+        )
+        package = (MACOS_DIR / "scripts" / "package-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("codesign --verify --deep --strict", verifier)
+        self.assertIn("does not have a valid strict deep signature", verifier)
+        self.assertIn("codesign --verify --deep --strict", package)
+        self.assertIn("does not have a valid strict deep signature", package)
+        self.assertNotIn("skipping strict", verifier + package)
+
+        readme = (MACOS_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn("ad-hoc app signature and unsigned", readme)
+
+    def test_adhoc_signing_script_orders_targets_and_stops_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="yunpin-signing-test-") as temporary:
+            root = Path(temporary)
+            app = root / "YunPin.app"
+            sparkle = app / "Contents" / "Frameworks" / "Sparkle.framework"
+            version = sparkle / "Versions" / "B"
+            xpc_root = version / "XPCServices"
+            targets = [
+                xpc_root / "Downloader.xpc" / "Contents" / "MacOS" / "Downloader",
+                xpc_root / "Installer.xpc" / "Contents" / "MacOS" / "Installer",
+                version / "Updater.app" / "Contents" / "MacOS" / "Updater",
+                version / "Autoupdate",
+                app / "Contents" / "Frameworks" / "librime.1.dylib",
+                app / "Contents" / "Frameworks" / "rime-plugins" / "librime-lua.dylib",
+                app / "Contents" / "MacOS" / "rime_deployer",
+            ]
+            for target in targets:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("fixture\n", encoding="utf-8")
+                target.chmod(0o755)
+            (sparkle / "Versions" / "Current").symlink_to("B")
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            log = root / "codesign.log"
+            fake_codesign = fake_bin / "codesign"
+            fake_codesign.write_text(
+                "#!/bin/bash\n"
+                "set -eu\n"
+                "target=\"${!#}\"\n"
+                "if [[ \"${1:-}\" == --verify ]]; then\n"
+                "  printf 'VERIFY:%s\\n' \"$target\" >> \"$YUNPIN_TEST_CODESIGN_LOG\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "printf '%s\\n' \"$target\" >> \"$YUNPIN_TEST_CODESIGN_LOG\"\n"
+                "if [[ -n \"${YUNPIN_TEST_FAIL_TARGET:-}\" && \"$target\" == *\"$YUNPIN_TEST_FAIL_TARGET\"* ]]; then\n"
+                "  exit 9\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_codesign.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+            env["YUNPIN_TEST_CODESIGN_LOG"] = str(log)
+            script = str(MACOS_DIR / "scripts" / "sign-app-adhoc.sh")
+            run(script, str(app), env=env)
+
+            resolved_version = version.resolve()
+            resolved_xpc_root = resolved_version / "XPCServices"
+            expected = [
+                str(resolved_xpc_root / "Downloader.xpc" / "Contents" / "MacOS" / "Downloader"),
+                str(resolved_xpc_root / "Installer.xpc" / "Contents" / "MacOS" / "Installer"),
+                str(resolved_xpc_root / "Downloader.xpc"),
+                str(resolved_xpc_root / "Installer.xpc"),
+                str(resolved_version / "Updater.app"),
+                str(resolved_version / "Autoupdate"),
+                str(sparkle),
+                str(targets[4]),
+                str(targets[5]),
+                str(targets[6]),
+                str(app),
+                f"VERIFY:{app}",
+            ]
+            self.assertEqual(expected, log.read_text(encoding="utf-8").splitlines())
+
+            log.write_text("", encoding="utf-8")
+            env["YUNPIN_TEST_FAIL_TARGET"] = "Updater.app"
+            failed = subprocess.run(
+                [script, str(app)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(0, failed.returncode)
+            self.assertNotIn(str(app), log.read_text(encoding="utf-8").splitlines())
 
     def test_corresponding_source_staging_stays_with_the_build_root(self) -> None:
         archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
@@ -331,6 +478,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         package = (MACOS_DIR / "scripts" / "package-preview.sh").read_text(
             encoding="utf-8"
         )
+        self.assertIn('Release/YunPin.app"', package)
         self.assertIn('"$package_root/Library/Input Methods/YunPin.app"', package)
         self.assertIn('mktemp "$build_root/.package-components.XXXXXX"', package)
         self.assertNotIn(".package-components.XXXXXX.plist", package)

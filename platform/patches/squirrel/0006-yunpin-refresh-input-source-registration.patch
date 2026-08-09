@@ -1,0 +1,50 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: Refresh the YunPin TIS registration without changing enabled modes
+
+diff --git a/sources/InputSource.swift b/sources/InputSource.swift
+index 7dfe83c..ab5632e 100644
+--- a/sources/InputSource.swift
++++ b/sources/InputSource.swift
+@@ -42,13 +42,18 @@ final class SquirrelInstaller {
+
+-  func register() {
++  @discardableResult
++  func register() -> Bool {
+     let enabledInputModes = enabledModes()
++    let error = TISRegisterInputSource(SquirrelApp.appDir as CFURL)
++    if error != noErr {
++      print("Failed to register input source from \(SquirrelApp.appDir): \(error)")
++      return false
++    }
+     if !enabledInputModes.isEmpty {
+-      print("User already registered YunPin method(s): \(enabledInputModes.map { $0.rawValue })")
+-      // Already registered.
+-      return
++      print("Refreshed input source registration while preserving enabled YunPin method(s): \(enabledInputModes.map { $0.rawValue })")
++    } else {
++      print("Registered input source from \(SquirrelApp.appDir)")
+     }
+-    TISRegisterInputSource(SquirrelApp.appDir as CFURL)
+-    print("Registered input source from \(SquirrelApp.appDir)")
++    return true
+   }
+
+   func enable(modes: [InputMode] = []) {
+
+diff --git a/sources/Main.swift b/sources/Main.swift
+index cc4f87f..53f1172 100644
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -38,7 +38,9 @@ struct SquirrelApp {
+           DistributedNotificationCenter.default().postNotificationName(.init("YunPinReloadNotification"), object: nil)
+           return true
+         case "--register-input-source", "--install":
+-          installer.register()
++          guard installer.register() else {
++            exit(EXIT_FAILURE)
++          }
+           return true
+         case "--enable-input-source":
+           if args.count > 2 {

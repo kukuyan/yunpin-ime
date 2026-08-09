@@ -71,25 +71,26 @@ for package in bopomofo cangjie essay luna-pinyin prelude stroke terra-pinyin; d
 done
 cp "${MACOS_DIR}/preview-manifest.json" "$shared_support/yunpin-preview.json"
 
-cleanup_bundle_metadata() {
-  # Clear Apple metadata/ResourceFork-like attrs that can accumulate in DerivedData
-  # from previous signing attempts and break ad-hoc re-signing in this script.
-  local bundle="$1"
-  find "$bundle" -print0 | xargs -0 -n 50 xattr -c 2>/dev/null || true
-}
-
-signed=false
-for attempt in 1 2 3; do
-  cleanup_bundle_metadata "$app"
-  # Use non-deep signing for development preview to avoid nested Sparkle subcomponent metadata failures.
-  if codesign --force --sign - "$app"; then
-    signed=true
-    break
-  fi
-  sleep 1
-done
-if [[ "$signed" != true ]]; then
-  printf 'warning: bundle signing failed, continuing with unsigned preview app for local testing\n'
-fi
+"${MACOS_DIR}/scripts/sign-app-adhoc.sh" "$app"
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
+lsregister="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
+[[ -x "$lsregister" ]] || die "LaunchServices registration tool is unavailable"
+"$lsregister" -u "$app" >/dev/null || die "failed to unregister the exact YunPin build bundle"
+set +e
+"$lsregister" -dump | /usr/bin/awk -v target="$app" '
+  /^[[:space:]]*path:/ {
+    line = $0
+    sub(/^[[:space:]]*path:[[:space:]]*/, "", line)
+    sub(/[[:space:]]+\(0x[[:xdigit:]]+\)$/, "", line)
+    if (line == target) found = 1
+  }
+  END { exit found ? 0 : 1 }
+'
+registration_check_status=("${PIPESTATUS[@]}")
+set -e
+[[ "${registration_check_status[0]}" -eq 0 ]] || die "unable to inspect LaunchServices after unregistering the YunPin build bundle"
+if [[ "${registration_check_status[1]}" -eq 0 ]]; then
+  die "the exact YunPin build bundle remains registered with LaunchServices"
+fi
+[[ "${registration_check_status[1]}" -eq 1 ]] || die "unable to verify the YunPin build bundle registration state"
 printf 'built YunPin development preview: %s\n' "$app"
