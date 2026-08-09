@@ -7,6 +7,12 @@
 - Opaque encrypted-envelope sync API and Docker Compose.
 - Reusable headless desktop sync worker with durable idempotent upload state,
   verified/decrypted download merge, and strict endpoint configuration.
+- Read-only librime private overlay, independent short-input upstream guard and
+  bounded word-scoped session correction connected to librime notifiers, with
+  protected-context filtering and first-eight stable reranking.
+- Desktop-agent skeleton for non-synchronizing macOS Keychain, current-user
+  Windows DPAPI, local status, one-shot sync and single-instance retry loop;
+  production account creation remains fail-closed.
 - Weasel/Squirrel configuration overlays and pinned upstream strategy.
 - Source-only and explicitly unsigned development builds.
 
@@ -48,10 +54,28 @@ keyboard extension network access.
 - Integrate the engine as a merged librime plugin.
 - Build Weasel x86/x64 TSF components plus x64 service.
 - Build Squirrel Universal arm64/x86_64 InputMethodKit package.
-- Complete encrypted local SQLite, OS keychain adapters, atomic snapshot reload, installers and cross-application smoke tests.
-- Connect the headless sync worker to DPAPI/Credential Manager and Keychain,
-  native learning events, scheduled retry/backoff and atomic Rime snapshot
-  reload; transport-only tests do not satisfy this desktop gate.
+- Harden and package the Keychain/current-user DPAPI background agent, including
+  rollback-safe account provisioning, authenticated device roster, pairing,
+  recovery, revoke and key rotation.
+- Strengthen the existing librime correction bridge with trusted native
+  protected-context and host-deletion evidence, then connect its word-level
+  aggregates and scores to encrypted local persistence and an explicit local
+  habit-monitor UI/CLI.
+- Rebuild immutable candidate snapshots after learning or sync, atomically swap
+  generations and trigger Rime reload; transport-only tests do not satisfy this
+  desktop gate.
+- Complete installers, signed background-service registration and
+  cross-application smoke tests.
+
+## Deferred expression search and favorites
+
+- Keep `expression_search` fail-closed: no action candidate, browser launch or
+  favorite-file write is enabled in the development preview.
+- Design an unforgeable typed/armed native action channel before restoring any
+  action. Ordinary dictionary, import and synchronized text must remain data.
+- Define provider/licensing, content-safety and confirmation policy, a bounded
+  image/GIF object model, cache/delete behavior and a separate end-to-end
+  encrypted favorite envelope before claiming a WeChat-like experience.
 
 ## Signed desktop release
 

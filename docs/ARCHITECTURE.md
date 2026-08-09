@@ -15,9 +15,27 @@ macOS InputMethodKit       ┘                         │
 
 ## Desktop frontends
 
-The planned Windows client follows Weasel's TSF architecture: both x86 and x64 TSF components communicate with a single x64 input service. The planned macOS client follows Squirrel's InputMethodKit architecture and targets a Universal arm64/x86_64 package for macOS 13+. The bootstrap repository contains the shared engine and configuration overlays, but not yet the native adapters or installers. The platforms will share behavior and semantic theme tokens, not UI source code.
+The Windows development preview follows Weasel's TSF architecture: both x86
+and x64 TSF components communicate with a single x64 input service. The macOS
+development preview follows Squirrel's InputMethodKit architecture and targets
+a Universal arm64/x86_64 package for macOS 13+. Pinned upstream sources, patch
+sets, native build/package scripts and unsigned preview installers now exist.
+They are not signed releases. A merged librime C API test covers ranking,
+short-input filtering and session correction, while native host UI, persistent
+learning and synchronization still require end-to-end acceptance. The platforms share behavior and
+semantic theme tokens, not UI source code.
 
-The current shared engine provides Pinyin segmentation, full-Pinyin prefix and initials indexes, and deterministic ranking. The desktop-alpha integration will expose it as `librime-yunpin`, connect learning events, and make a background process atomically swap immutable snapshots into the input process. The adapter acceptance gate requires proof that no key event waits for network or disk.
+The shared engine provides Pinyin segmentation, full-Pinyin prefix and initials
+indexes, deterministic ranking, revision-aware correction feedback and a
+word-scoped in-memory correction monitor. `librime-yunpin` supplies a read-only
+private-snapshot filter, a public short-input guard, and a bounded session
+learner connected to librime commit/update/unhandled-key/option/delete
+notifiers. It recognizes only same-pinyin replacement after an exact Unicode
+scalar count of unmodified Backspaces within five seconds and stable-reranks
+the first eight upstream candidates. Encrypted correction persistence, a
+desktop habit-report bridge, and a background process that atomically swaps
+rebuilt snapshots into the input process are not connected. The adapter
+acceptance gate requires proof that no key event waits for network or disk.
 
 ## Candidate policy
 
@@ -30,9 +48,35 @@ The first page contains eight entries. At most two are personal. Within the merg
 
 Pinned long phrases activate after two complete syllables or four initials. Automatically learned phrases become sync-eligible after two explicit selections. Tombstones are remove-wins and normal counters cannot resurrect them.
 
+For one- or two-letter normalized Pinyin, the librime adapter independently
+filters only upstream predictions made entirely of at least three CJK
+ideographs. It retains one- and two-character words plus English, mixed and
+malformed text. This guard is enabled in the Windows preview even while private
+snapshot injection is disabled. Non-pinned engine entries with three or more
+syllables additionally require two complete full-Pinyin syllables and cannot be
+recalled through short initials.
+
+Expression search and favorite actions are deliberately disconnected. Rime
+commit text is untrusted dictionary data, so neither frontend interprets magic
+text prefixes as browser or filesystem commands. The reserved configuration is
+inert until an unforgeable, explicitly armed native action channel exists.
+
 ## Local state
 
-The reference local store uses record-level encrypted SQLite and an encrypted outbox. Production desktop adapters must keep private keys in the OS credential store and update candidate snapshots through an atomic generation swap. Password fields, private mode, and one-time inputs bypass learning in the reference implementation; native host detection remains a desktop-alpha gate.
+The reference local store uses record-level encrypted SQLite and an encrypted
+outbox. The `desktopagent` skeleton serializes a bounded credential bundle into
+non-synchronizing macOS Keychain storage or current-user Windows DPAPI storage.
+Its `status`, `sync-once` and single-instance `run` paths remain outside the IME
+key-event process. Production `init-account` fails closed because the relay
+does not yet support rollback-safe account provisioning. Installer registration
+and signed background services remain incomplete.
+
+Password fields, private mode and one-time inputs bypass correction monitoring
+in the core model and librime option bridge, but native hosts do not yet provide
+a fully trusted secure-context signal or proof of the host editor buffer after
+Backspace. Production adapters must persist aggregates in the encrypted store,
+expose reports only on explicit local request, and update candidate snapshots
+through an atomic generation swap.
 
 ## Sync service
 
@@ -45,11 +89,11 @@ and decrypts downloaded records locally, merges the CRDT into `localstore`, and
 only then advances its cursor. The local checkpoint contains ciphertext and
 relay metadata but never the bearer token or private keys.
 
-This headless path does not yet make either native frontend synchronized.
-Windows DPAPI/Credential Manager and macOS Keychain adapters, authenticated
-pairing/keyring persistence, a single-instance background scheduler, native
-learning hooks, atomic snapshot rebuilding and Rime reload remain desktop
-acceptance gates.
+This headless path does not yet make either native frontend synchronized. The
+desktop agent has current-user DPAPI and macOS Keychain adapters plus a
+single-instance runner skeleton, but authenticated cross-device trust roster,
+pairing/recovery UI, rotation, persistent native learning, encrypted candidate
+snapshot rebuilding and Rime reload remain desktop acceptance gates.
 
 ## Clipboard sync (Preview 0.2)
 

@@ -1,5 +1,7 @@
 # YunPin IME 交接文档（供 Claude Code 评审）
 
+> **SUPERSEDED / 已废弃：请勿把本文作为当前实现状态。** 这是早期送审快照；当前评审入口是 [`HANDOVER_CODEX_FROM_REVIEW.md`](HANDOVER_CODEX_FROM_REVIEW.md)。本文所述表情动作候选、Bing 打开和 JSONL 收藏写入均已从当前行为移除；表情搜索/收藏现为 fail-closed 延期功能，普通魔法前缀文本只按文本处理。
+
 本文用于把当前工作转交给 Claude Code 做同行评审，聚焦“开发预览阶段当前能否继续推进到稳定版”。
 
 ## 一、送审时的分支与仓库状态
