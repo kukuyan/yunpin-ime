@@ -172,6 +172,57 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('source_dir="$(cd "$source_dir" && pwd)"', build)
         self.assertIn('scripts/test-merged-ranking.sh', build)
 
+    def test_xcode_resolver_respects_the_active_versioned_selection(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="yunpin-xcode-select-") as temporary:
+            root = Path(temporary)
+            developer = root / "Xcode_26.3.app" / "Contents" / "Developer"
+            developer_bin = developer / "usr" / "bin"
+            developer_bin.mkdir(parents=True)
+            xcodebuild = developer_bin / "xcodebuild"
+            xcodebuild.write_text(
+                "#!/bin/sh\nprintf 'Xcode 26.3\\nBuild version TEST\\n'\n",
+                encoding="utf-8",
+            )
+            xcodebuild.chmod(0o755)
+
+            fallback_app = root / "Xcode.app"
+            fallback_bin = fallback_app / "Contents" / "Developer" / "usr" / "bin"
+            fallback_bin.mkdir(parents=True)
+            fallback_xcodebuild = fallback_bin / "xcodebuild"
+            fallback_xcodebuild.write_text(
+                "#!/bin/sh\nprintf 'Xcode 16.4\\nBuild version FALLBACK\\n'\n",
+                encoding="utf-8",
+            )
+            fallback_xcodebuild.chmod(0o755)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            xcode_select = fake_bin / "xcode-select"
+            xcode_select.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$YUNPIN_TEST_DEVELOPER_DIR\"\n",
+                encoding="utf-8",
+            )
+            xcode_select.chmod(0o755)
+
+            env = os.environ.copy()
+            env.pop("DEVELOPER_DIR", None)
+            env.pop("YUNPIN_XCODE_APP_PATH", None)
+            env["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+            env["YUNPIN_TEST_DEVELOPER_DIR"] = str(developer)
+            result = run(
+                "bash",
+                "-c",
+                (
+                    'source "$1"; YUNPIN_DEFAULT_XCODE_PATHS=("$2"); '
+                    'require_full_xcode; printf "%s\\n" "$DEVELOPER_DIR"'
+                ),
+                "yunpin-xcode-resolver-test",
+                str(MACOS_DIR / "scripts" / "common.sh"),
+                str(fallback_app),
+                env=env,
+            )
+            self.assertEqual(str(developer), result.stdout.strip())
+
     def test_generated_bundle_xattrs_are_cleared_before_adhoc_signing(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(encoding="utf-8")
         clear_xattrs = build.index("cleanup_bundle_metadata \"$app\"")

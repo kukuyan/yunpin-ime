@@ -38,6 +38,20 @@ resolve_developer_dir() {
     return
   fi
 
+  # Respect the active developer directory before probing conventional app
+  # locations. CI selects a versioned Xcode bundle with xcode-select; choosing
+  # /Applications/Xcode.app first can silently replace that selection with an
+  # older default Xcode.
+  local xcode_select_path=""
+  if xcode_select_path="$(xcode-select -p 2>/dev/null)"; then
+    if [[ -x "$xcode_select_path/usr/bin/xcodebuild" && "$xcode_select_path" != *"/CommandLineTools" ]]; then
+      DEVELOPER_DIR="$xcode_select_path"
+      export DEVELOPER_DIR
+      export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
+      return
+    fi
+  fi
+
   local selected=""
   for candidate in "${YUNPIN_DEFAULT_XCODE_PATHS[@]}"; do
     if [[ -x "$candidate/Contents/Developer/usr/bin/xcodebuild" ]]; then
@@ -58,16 +72,6 @@ resolve_developer_dir() {
     export DEVELOPER_DIR
     export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
     return
-  fi
-
-  local xcode_select_path=""
-  if xcode_select_path="$(xcode-select -p 2>/dev/null)"; then
-    if [[ -x "$xcode_select_path/usr/bin/xcodebuild" && "$xcode_select_path" != *"/CommandLineTools" ]]; then
-      DEVELOPER_DIR="$xcode_select_path"
-      export DEVELOPER_DIR
-      export PATH="$DEVELOPER_DIR/usr/bin:$PATH"
-      return
-    fi
   fi
 }
 
