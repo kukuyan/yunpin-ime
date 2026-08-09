@@ -6,11 +6,16 @@ patch:
   "menu/alternative_select_keys": "12345678"
   "schema/name": "云拼开发预览（Rime Ice）"
   "engine/filters/@before 0": yunpin_filter@yunpin
+  # Stateless local correction reuses ScriptTranslator's dictionary/context
+  # score. It never waits for disk, network, sync, or a language model.
+  "translator/enable_correction": true
+  "translator/corrector_component": yunpin_corrector
   "yunpin/tag": abc
   "yunpin/snapshot": yunpin/private.tsv
   "yunpin/max_candidates": 2
   "yunpin/enabled": true
   "yunpin/short_input_guard": true
   "yunpin/session_learning": true
+  "yunpin/typo_correction": true
   # Reserved and inert until a typed/armed native action channel exists.
   "yunpin/expression_search": false

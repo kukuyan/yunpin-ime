@@ -9,11 +9,28 @@
 - 排序固定为：手动置顶个人词组 → 高频个人/迁移词组 → 公共高频词包 → Rime 基础候选。
 - 置顶长词在两个完整音节或四个首字母后即可召回；完整拼音精确匹配排第一。
 - 自动学习词使用两次后才进入同步词库；首页八项中个人候选最多两项。
+- 本地确定性拼音纠错覆盖 QWERTY 邻键、漏键、多键、相邻转置，以及经人工审核的单向 `you` → `yao` 混淆；短的精确拼音仍优先。
 - 候选热路径只读内存快照，不访问网络或磁盘。
 - 个人词库在客户端加密；服务端只保存随机标识、令牌哈希和密文信封。
 - 支持本地预览并导入 ChatGPT 导出、Codex 摘要、文本词库，以及通过独立 ImeWlConverter 迁移 `.scel`/`.bin`。
 
 黄金测试包含长机构名“`中国石化销售股份有限公司河北石家庄石油分公司`”：`zhongguo...`、`zhongguoshihua...` 或 `zgsh...` 均应进入前三，完整拼音应为第一候选。该字符串是公开验收夹具，不是个人词库数据。
+
+拼写纠错由独立的 `yunpin_corrector` 接入 ScriptTranslator，而不是用全局
+spelling algebra 扩散派生。macOS 的 librime 1.16 与 Windows 的 librime
+1.17 分别使用按上游提交锁定并校验哈希的最小补丁，让 YunPin schema
+选择这一组件，并以 `(spelling_id, consumed length)` 区分精确前缀与纠错边，
+而不改变其他 Rime schema 的默认 `corrector`。Prism 验证、去重和确定性排序
+后，每个输入 offset 最多保留 16 条纠错边。真实 merged Rime C API 合成
+测试覆盖邻键、漏键、多键、转置、审核的 `you` → `yao`，
+以及同时修正两处错误的 `shouxubijiakuaideshihou`，并保护精确短输入
+`xu`、`you`。`shangban` 碰撞夹具还让纠错候选“山班”的词典权重达到精确
+“上班”的 50 倍，仍要求“上班”在前且“山班”存在。最终按键的 100 次热
+样本 P95 门槛为 20 ms；本轮两次独立复测中，双错误与
+37 字节 `you` → `yao` 长输入实测范围分别为 534–841 µs 和
+907–1611 µs。该测试使用
+小型合成词典，不等同于完整 Rime Ice、真实用户词库或桌面宿主的生产性能
+证明。
 
 ## 快速验证
 
@@ -76,6 +93,11 @@ Copy-Item -LiteralPath "$PWD\platform\windows\rime\rime_ice.custom.yaml" -Destin
 公共词包来自锁定版本的 Rime Ice、Rime Essay、THUOCL 与 phrase-pinyin-data；更新任务只提交待审核 PR。输入过程中绝不在线查询。历史对话只在本地提取短语、拼音和粗粒度频次，过滤原句、URL、IP、邮箱、路径、凭据、令牌、长数字与代码块。
 
 真实个人词库、对话导出、搜狗原文件、服务数据库、密钥和签名材料均不得进入 Git、CI、日志、测试夹具或发行包。详见 [隐私模型](PRIVACY.md)、[安全政策](SECURITY.md) 与 [数据来源](docs/DATA_SOURCES.md)。
+
+当前纠错不使用语言模型，也不发送输入内容。后续若试验本地模型，只能是
+可选、默认关闭的独立 sidecar：不得联网，必须有严格超时，超时、崩溃或
+结果校验失败时 fail closed 到现有确定性/精确候选路径。中英混输仍只是
+下一版研究方向，当前预览不宣称已实现。
 
 ## 目录
 

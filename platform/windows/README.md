@@ -25,10 +25,16 @@ the phrase engine; both TSF architectures talk to the x64 service's merged
 librime.
 
 The preview Rime overlay inserts `yunpin_filter` before the normal Rime
-candidate stream and caps it at two candidates. Its private snapshot remains
-disabled with `"yunpin/enabled": false`. The package contains only an empty
-example header, never a real `yunpin/private.tsv`, user database, Sogou file, or
-conversation data.
+candidate stream and caps it at two candidates. It also enables the unique
+`yunpin_corrector`, selected through a base-commit and SHA-256-locked minimal
+patch for librime 1.17. The patch also keys exact classification by `(spelling
+ID, consumed input length)`, so a corrected longer spelling cannot inherit a
+shorter exact-prefix match and escape the correction penalty. The module does
+not replace librime's process-global `corrector`, so another schema retains
+upstream behavior. Its private snapshot
+remains disabled with `"yunpin/enabled": false`. The package contains only an
+empty example header, never a real `yunpin/private.tsv`, user database, Sogou
+file, or conversation data.
 
 The independent `"yunpin/short_input_guard": true` remains active. It performs
 only an in-memory check over Rime's already-produced candidates, so Windows can
@@ -39,6 +45,31 @@ loading personal data.
 correction stays disabled until TSF secure-input and authenticated IPC behavior
 has passed real-host testing; enabling the public short-input guard does not
 silently enable learning.
+
+Stateless typing correction is independent and enabled by
+`translator/enable_correction`, `translator/corrector_component: yunpin_corrector`
+and `yunpin/typo_correction: true`. It deterministically
+generates bounded one-edit spellings for physical QWERTY neighbours, one
+missing key, one extra key, an adjacent transposition and the reviewed one-way
+`you` → `yao` confusion. Only spellings already present in the in-memory Prism
+are accepted; it reads no personal snapshot, file, network service or model.
+Exact short-input regressions require `xu` and `you` to keep their normal first
+candidates. Prism-validated variants are deduplicated, deterministically
+ordered and capped at 16 correction edges per input offset before dictionary
+traversal.
+
+The portable unit suite and real merged Universal librime fixture cover these
+rules, including the two-error `shouxubijiakuaideshihou` long phrase. The
+two independent synthetic final-key runs measured P95 534–841 µs for that
+input and 907–1611 µs for the 37-byte reviewed `you` → `yao` input, below the
+20 ms test gate. This is
+shared-engine evidence, not a Weasel/TSF or production Rime Ice benchmark;
+Windows still needs the same candidate and latency checks on host 195. Stock
+librime assigns all correction edges the same fixed `log(0.01)` credibility,
+so full-dictionary collision and pollution testing remains required. The
+synthetic `shangban` regression keeps exact “上班” before corrected “山班” even
+at 50 times the weight while retaining both; it does not prove arbitrary
+production weights cannot overcome the fixed penalty.
 
 Expression search/favorite is not connected in this preview. The TSF frontend
 never interprets candidate commit text as a browser or file-system command,
@@ -128,3 +159,9 @@ python3 scripts/check_supply_chain.py
 
 CI performs the real Visual Studio build and uploads the runtime plus
 corresponding-source archive for seven days.
+
+No local language model is implemented. Any future experiment must be an
+optional, default-off sidecar with no network access, bounded IPC and a strict
+timeout that fails closed to exact/deterministic candidates. Chinese-English
+mixed input remains a future segmentation/ranking direction and must not be
+treated as a capability of this Windows preview.

@@ -10,13 +10,54 @@
 - Read-only librime private overlay, independent short-input upstream guard and
   bounded word-scoped session correction connected to librime notifiers, with
   protected-context filtering and first-eight stable reranking.
+- Schema-local `yunpin_corrector` for deterministic QWERTY-neighbour,
+  missing-key, extra-key, adjacent-transposition and reviewed `you` → `yao`
+  recovery. The exact librime 1.16/1.17 compatibility patches are version and
+  hash locked, and real merged-Rime synthetic E2E protects short exact input
+  plus a 50× exact-prefix collision while enforcing a 20 ms
+  corrected-final-key P95 gate. The adapter exposes at most 16 deterministic
+  correction edges per input offset.
 - Desktop-agent skeleton for non-synchronizing macOS Keychain, current-user
   Windows DPAPI, local status, one-shot sync and single-instance retry loop;
   production account creation remains fail-closed.
 - Weasel/Squirrel configuration overlays and pinned upstream strategy.
 - Source-only and explicitly unsigned development builds.
 
-## Preview 0.2: encrypted clipboard sync
+## Preview 0.2: typing quality and encrypted clipboard sync
+
+### Typing quality
+
+- Run the same correction/collision suite against the locked production Rime
+  Ice/public packs and a 50,000-entry synthetic personal index. Report exact
+  candidates displaced, page pollution, candidate count, memory and final-key
+  P50/P95/P99; the current small synthetic E2E is not this acceptance result.
+- Keep short exact Pinyin ahead of correction results. Stock librime gives all
+  correction edges the same fixed `log(0.01)` credibility, so use production
+  measurements to decide whether a separately reviewed custom translator or a
+  further version-locked scoring patch is needed. Do not treat generator edit
+  cost as a production ranking score. Retain the `(spelling ID, consumed
+  length)` exact-prefix regression and the 16-edge-per-offset graph budget.
+- Expand reviewed valid-syllable confusions only through corpus evidence,
+  explicit negative tests and one-way review. Keep each per-syllable variant
+  one edit and the overall search bounded; measure multi-error long phrases
+  separately.
+- Prototype Chinese-English mixed-input segmentation, English passthrough and
+  boundary ranking. This is a direction only; no current preview capability or
+  acceptance claim follows from this roadmap item.
+- Consider a local model only as an optional, default-off offline sidecar after
+  the deterministic baseline is measured. It must have no network access, a
+  minimal bounded IPC payload, a strict deadline and fail-closed fallback that
+  preserves exact/deterministic results when the process times out or crashes.
+
+Typing-quality acceptance requires the locked production-dictionary suite on
+both desktop runtimes, no short-exact regression, no network or disk wait in a
+key event, and documented collision/latency budgets. The current synthetic run
+measured corrected-final-key P95 ranges of 534–841 µs for the two-error
+`shouxubijiakuaideshihou` case and 907–1611 µs for the 37-byte reviewed
+`you` → `yao` case across two independent runs, but those figures are evidence for that fixture and machine,
+not production guarantees.
+
+### Encrypted clipboard sync
 
 - Add an opt-in background clipboard agent for Windows and macOS. Clipboard
   capture, encryption, transport and replay remain outside the IME key-event
@@ -44,7 +85,7 @@
   [UIPasteControl](https://developer.apple.com/documentation/uikit/uipastecontrol)
   and [custom keyboard open access](https://developer.apple.com/documentation/uikit/configuring-open-access-for-a-custom-keyboard).
 
-Acceptance requires encrypted Windows↔macOS transfer, offline/duplicate replay
+Clipboard acceptance requires encrypted Windows↔macOS transfer, offline/duplicate replay
 without clipboard loops, expiry and remote clear, negative tests for protected
 content, and an iOS user-driven send/receive flow that works without giving the
 keyboard extension network access.

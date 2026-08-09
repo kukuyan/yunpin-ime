@@ -126,6 +126,9 @@ foreach ($pattern in @(
     '(?m)^\s*"yunpin/enabled": false\s*$',
     '(?m)^\s*"yunpin/short_input_guard": true\s*$',
     '(?m)^\s*"yunpin/session_learning": false\s*$',
+    '(?m)^\s*"translator/enable_correction": true\s*$',
+    '(?m)^\s*"translator/corrector_component": yunpin_corrector\s*$',
+    '(?m)^\s*"yunpin/typo_correction": true\s*$',
     '(?m)^\s*"yunpin/max_candidates": 2\s*$'
 )) {
     if ($config -notmatch $pattern) {

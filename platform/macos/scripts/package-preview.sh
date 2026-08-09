@@ -5,6 +5,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 require_macos
 require_full_xcode
+require_clean_repository
 
 build_root="${YUNPIN_MACOS_BUILD_ROOT:-${REPO_ROOT}/build/macos}"
 app="$build_root/DerivedData/Build/Products/Release/YunPin.app"

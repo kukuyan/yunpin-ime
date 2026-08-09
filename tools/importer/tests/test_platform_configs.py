@@ -103,6 +103,19 @@ class PlatformConfigTests(unittest.TestCase):
                 self.assertIn('"yunpin/expression_search": false', overlay)
                 self.assertNotIn('"yunpin/expression_search": true', overlay)
 
+    def test_desktop_overlays_enable_stateless_native_typo_correction(self):
+        for path in (
+            self.repository / "platform" / "windows" / "rime" / "rime_ice.custom.yaml",
+            self.repository / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml",
+        ):
+            overlay = path.read_text(encoding="utf-8")
+            with self.subTest(overlay=path):
+                self.assertIn('"translator/enable_correction": true', overlay)
+                self.assertIn(
+                    '"translator/corrector_component": yunpin_corrector', overlay
+                )
+                self.assertIn('"yunpin/typo_correction": true', overlay)
+
 
 if __name__ == "__main__":
     unittest.main()

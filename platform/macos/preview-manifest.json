@@ -10,8 +10,15 @@
   "yunpin_module_merged": true,
   "yunpin_ranking_headless_e2e": true,
   "yunpin_ranking_native_host_e2e": false,
+  "yunpin_typo_correction_librime_e2e": true,
+  "yunpin_typo_correction_exact_prefix_collision_e2e": true,
+  "yunpin_typo_correction_max_edges_per_offset": 16,
+  "yunpin_typo_correction_native_host_e2e": false,
+  "yunpin_typo_correction_production_dictionary_e2e": false,
   "yunpin_session_correction_librime_e2e": true,
   "yunpin_learning_bridge": false,
+  "yunpin_local_model_sidecar": false,
+  "mixed_chinese_english_input": false,
   "encrypted_cloud_sync": false,
   "production_signed": false
 }

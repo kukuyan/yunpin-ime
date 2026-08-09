@@ -32,6 +32,10 @@ translator:
   dictionary: yunpin_e2e
   enable_user_dict: false
   enable_sentence: false
+  enable_correction: true
+  corrector_component: yunpin_corrector
+  spelling_hints: 32
+  always_show_comments: true
 
 yunpin:
   tag: abc
@@ -40,3 +44,4 @@ yunpin:
   enabled: true
   short_input_guard: true
   session_learning: true
+  typo_correction: true

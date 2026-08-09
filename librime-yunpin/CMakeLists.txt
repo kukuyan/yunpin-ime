@@ -26,6 +26,7 @@ set(yunpin_core_src
   "${YUNPIN_ENGINE_ROOT}/src/correction_learning.cpp"
   src/snapshot_store.cpp
   src/session_learning.cpp
+  src/typo_correction.cpp
 )
 
 # When this directory is staged below librime/plugins, librime defines
@@ -36,6 +37,7 @@ set(yunpin_core_src
 if(DEFINED rime_library)
   add_library(rime-yunpin-objs OBJECT
     ${yunpin_core_src}
+    src/rime_yunpin_corrector.cpp
     src/rime_yunpin_filter.cpp
     src/yunpin_module.cpp
   )
@@ -87,6 +89,16 @@ else()
   )
   add_test(NAME yunpin_session_learning_tests
     COMMAND yunpin_session_learning_tests)
+
+  add_executable(yunpin_typo_correction_tests
+    tests/typo_correction_test.cpp
+  )
+  target_link_libraries(yunpin_typo_correction_tests PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  add_test(NAME yunpin_typo_correction_tests
+    COMMAND yunpin_typo_correction_tests)
 
   # Candidate ordering is decided by the filter, which normally only compiles
   # inside a librime tree. tests/rime_stubs declares the small slice of the

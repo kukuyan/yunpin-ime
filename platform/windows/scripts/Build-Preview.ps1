@@ -162,11 +162,11 @@ foreach ($required in @(
     }
 }
 
-foreach ($patchEntry in $lock.weasel.patches) {
+foreach ($patchEntry in @($lock.weasel.patches) + @($lock.librime.patches)) {
     $patchPath = Join-Path $repoRoot $patchEntry.path
     $observed = (Get-FileHash -Algorithm SHA256 -LiteralPath $patchPath).Hash.ToLowerInvariant()
     if ($observed -ne ([string]$patchEntry.sha256).ToLowerInvariant()) {
-        throw "Weasel patch hash mismatch: $($patchEntry.path)"
+        throw "Source patch hash mismatch: $($patchEntry.path)"
     }
 }
 
@@ -236,6 +236,35 @@ foreach ($dependency in $lock.librime.dependencies.PSObject.Properties) {
     $dependencyCheckout = Join-Path $librimeCheckout $dependency.Name
     $dependencyDestination = Join-Path $stagedLibrime $dependency.Name
     Export-GitTree -Checkout $dependencyCheckout -Destination $dependencyDestination -ScratchRoot $scratchRoot
+}
+
+$previousGitCeilingDirectories = $env:GIT_CEILING_DIRECTORIES
+try {
+    $env:GIT_CEILING_DIRECTORIES = $repoRoot
+    foreach ($patchEntry in $lock.librime.patches) {
+        $patchPath = Join-Path $repoRoot $patchEntry.path
+        Push-Location $stagedLibrime
+        try {
+            Invoke-Checked -FilePath "git" -ArgumentList @(
+                "apply", "--check", "--whitespace=error-all", $patchPath
+            )
+            Invoke-Checked -FilePath "git" -ArgumentList @(
+                "apply", "--whitespace=error-all", $patchPath
+            )
+        } finally {
+            Pop-Location
+        }
+    }
+} finally {
+    if ($null -eq $previousGitCeilingDirectories) {
+        Remove-Item Env:GIT_CEILING_DIRECTORIES -ErrorAction SilentlyContinue
+    } else {
+        $env:GIT_CEILING_DIRECTORIES = $previousGitCeilingDirectories
+    }
+}
+$patchedTranslator = Get-Content -LiteralPath (Join-Path $stagedLibrime "src\rime\gear\script_translator.cc") -Raw
+if (-not $patchedTranslator.Contains("corrector_component")) {
+    throw "Staged librime does not expose the locked corrector component selector"
 }
 
 $stagedPlugin = Join-Path $stagedLibrime "plugins\librime-yunpin"

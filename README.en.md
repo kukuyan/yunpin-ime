@@ -10,6 +10,9 @@ Key properties:
 - Pinned long phrases can be recalled after two complete syllables or four initials; exact full Pinyin ranks first.
 - Automatic vocabulary is eligible for sync after two explicit selections.
 - Personal phrases occupy at most two of the first eight candidates.
+- A bounded local corrector covers physical QWERTY neighbours, one missing or
+  extra key, adjacent transposition, and a small reviewed valid-syllable list;
+  exact short Pinyin remains preferred.
 - The keystroke path reads an immutable in-memory snapshot and never waits for disk or network.
 - Personal data is encrypted client-side; the server stores opaque envelopes and token hashes.
 - ChatGPT/Codex/text imports are previewed and filtered locally. SCEL/BIN conversion is delegated to a pinned, offline ImeWlConverter process operating on a copy.
@@ -28,6 +31,12 @@ Start the development sync service with `docker compose up --build`, then visit 
 You can point clients to a local NAS relay by setting a local URL such as `http://192.168.1.127:8787`; client-side behavior is unchanged.
 
 The original shared code is Apache-2.0. Weasel/Squirrel derivative patches and desktop distributions are GPL-3.0. Third-party dictionaries retain their upstream licenses. See [the license matrix](docs/LICENSE_MATRIX.md), [privacy model](PRIVACY.md), and [architecture](docs/ARCHITECTURE.md).
+
+The current corrector is deterministic and does not call a model or network
+service. A future local-model experiment, if justified, will remain an
+optional default-off sidecar with a strict deadline and fail-closed fallback;
+Chinese-English mixed-input ranking is also a documented future direction,
+not a current preview capability.
 
 ### If you still see only 5 candidates locally
 

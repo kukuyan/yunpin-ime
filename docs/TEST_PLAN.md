@@ -17,6 +17,58 @@
 - `中国石化销售股份有限公司河北石家庄石油分公司` is top three for `zhongguo...`, `zhongguoshihua...`, and `zgsh...`, and first for the complete Pinyin.
 - 50,000 synthetic personal phrases, warm P95 no more than 20 ms.
 
+## Deterministic Pinyin typo correction
+
+- Unit-test the bounded generator for physical QWERTY neighbours, one missing
+  key, one extra key, one adjacent transposition and the reviewed one-way
+  `you` → `yao` confusion. Reject non-lowercase, one-letter and 128-byte-or-more
+  adversarial segments; enforce the six-byte syllable and 768-raw-variant caps.
+  After Prism validation/deduplication, assert deterministic ordering and no
+  more than 16 correction edges at any input offset.
+- Apply the exact version-locked component-selector/exact-classification patch
+  to clean librime 1.16 and 1.17 trees, verify each locked SHA-256, and reject
+  base-commit drift. Register `yunpin_corrector` only; assert that the global
+  `corrector` is not replaced for other schemas. Verify exact matches are keyed
+  by `(spelling ID, consumed input length)`, not spelling ID alone.
+- Through the real merged ScriptTranslator, Dictionary, Prism and Rime C API,
+  require all of these first-candidate results from synthetic public fixtures:
+  exact `shousubijiaokuaideshihou`, neighbour-only `shouxubijiaokuaideshihou`,
+  missing `shosubijiaokuaideshihou`, omitted `o` in
+  `shousubijiakuaideshihou`, extra-key `shouusubijiaokuaideshihou`, transposed
+  `shuosubijiaokuaideshihou`, reviewed
+  `youjubeiyidingdejiucuolianxiangnengli`, and missing final key
+  `zhuantai`. The original two-error input
+  `shouxubijiakuaideshihou` must also return `手速比较快的时候` first and expose
+  canonical spelling in its correction comment.
+- Protect short exact input in the same real pipeline: `xu` must keep `需`
+  first and `you` must keep `有` first. For `shangban`, include both exact
+  “上班” and extra-key correction “山班”, give the correction 50 times the
+  synthetic dictionary weight, and require exact before correction while
+  retaining both candidates. This catches a regression where a corrected
+  `shan` consuming five bytes inherits the exact four-byte-prefix match. Add
+  production-dictionary collision probes before claiming this as a hard
+  ordering guarantee for every exact entry; generator non-emission of an
+  unchanged spelling alone is insufficient.
+- For each corrected long performance probe, warm 10 times, then time only the
+  final key and enumerate the resulting candidates for 100 samples. P95 must be
+  no more than 20 ms. The completed merged-librime synthetic run measured
+  534–841 µs for the two-error `shouxubijiakuaideshihou` input and
+  907–1611 µs for the 37-byte reviewed `you` → `yao` input across two
+  independent runs. Record future machine/runtime changes;
+  these two numbers are not full Rime Ice or desktop-host guarantees.
+- Run collision and pollution tests against the locked production public packs
+  and a 50,000-entry synthetic personal snapshot. Stock librime applies one
+  fixed `log(0.01)` credibility to every correction edge, so explicitly test
+  whether dictionary/context weights let a corrected candidate displace an
+  exact candidate beyond the existing 50× collision; YunPin edit cost is not a
+  fine-grained ranking penalty.
+- No correction test may open the network or read a model. A future optional
+  local-model sidecar needs separate deadline, crash, malformed-output and
+  offline tests proving timeout fails closed to existing exact/deterministic
+  results without delaying the key path. Chinese-English mixed-input tests are
+  deferred until a concrete segmenter/ranker exists; listing that direction is
+  not an acceptance result.
+
 ## Correction learning and expression safety
 
 - Recognize only an immediate single-word commit, exactly one unmodified

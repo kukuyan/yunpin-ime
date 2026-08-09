@@ -23,6 +23,12 @@
     "version": "1.17.0",
     "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4",
     "license": "BSD-3-Clause",
+    "patches": [
+      {
+        "path": "platform/patches/librime-1.17/0001-configurable-corrector-component.patch",
+        "sha256": "328cdb019720cc9720e60f41a60247b46c7de21ccd4be28f08423778af0a5d77"
+      }
+    ],
     "dependencies": {
       "deps/glog": "7b134a5c82c0c0b5698bb6bf7a835b230c5638e4",
       "deps/googletest": "f8d7d77c06936315286eb55f8de22cd23c188571",

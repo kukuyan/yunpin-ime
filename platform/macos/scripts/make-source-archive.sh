@@ -3,6 +3,7 @@
 set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
+require_clean_repository
 
 build_root="${YUNPIN_MACOS_BUILD_ROOT:-${REPO_ROOT}/build/macos}"
 source_dir="$build_root/squirrel"
@@ -34,6 +35,7 @@ git -C "$REPO_ROOT" archive HEAD -- \
   LICENSE NOTICE THIRD_PARTY_NOTICES.md \
   platform/LICENSE-BOUNDARIES.md platform/upstream-lock.json \
   platform/macos platform/rime platform/patches/squirrel \
+  platform/patches/librime-1.16 \
   engine librime-yunpin | \
   tar -C "$staging/YunPin-IME/YunPin" -xf -
 

@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# YunPin compatibility patch for librime 1.17.0.
+# Base-Commit: 33e78140250125871856cdc5b42ddc6a5fcd3cd4
+diff --git a/src/rime/gear/script_translator.cc b/src/rime/gear/script_translator.cc
+--- a/src/rime/gear/script_translator.cc
++++ b/src/rime/gear/script_translator.cc
+@@ -182,23 +182,26 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
+ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
+     : Translator(ticket), Memory(ticket), TranslatorOptions(ticket) {
+   if (!engine_)
+     return;
++  string corrector_component = "corrector";
+   if (Config* config = engine_->schema()->config()) {
+     config->GetInt(name_space_ + "/spelling_hints", &spelling_hints_);
+     config->GetInt(name_space_ + "/max_word_length", &max_word_length_);
+     config->GetInt(name_space_ + "/core_word_length", &core_word_length_);
+     config->GetBool(name_space_ + "/always_show_comments",
+                     &always_show_comments_);
+     config->GetBool(name_space_ + "/enable_correction", &enable_correction_);
++    config->GetString(name_space_ + "/corrector_component",
++                      &corrector_component);
+     if (!config->GetBool(name_space_ + "/enable_word_completion",
+                          &enable_word_completion_)) {
+       enable_word_completion_ = enable_completion_;
+     }
+     config->GetInt(name_space_ + "/max_homophones", &max_homophones_);
+     poet_.reset(new Poet(language(), config));
+   }
+   if (enable_correction_) {
+-    if (auto* corrector = Corrector::Require("corrector")) {
++    if (auto* corrector = Corrector::Require(corrector_component)) {
+       corrector_.reset(corrector->Create(ticket));
+     }
+   }
+ }
+diff --git a/src/rime/algo/syllabifier.cc b/src/rime/algo/syllabifier.cc
+--- a/src/rime/algo/syllabifier.cc
++++ b/src/rime/algo/syllabifier.cc
+@@ -65,11 +65,11 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+     // see where we can go by advancing a syllable
+     vector<Prism::Match> matches;
+-    set<SyllableId> exact_match_syllables;
++    set<pair<SyllableId, size_t>> exact_matches;
+     auto current_input = input.substr(begin_pos);
+     prism.CommonPrefixSearch(current_input, &matches);
+     if (corrector_) {
+       for (auto& m : matches) {
+-        exact_match_syllables.insert(m.value);
++        exact_matches.insert({m.value, m.length});
+       }
+       Corrections corrections;
+       corrector_->ToleranceSearch(prism, current_input, &corrections, 5);
+@@ -114,8 +114,8 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+             props.end_pos = end_pos;
+             // add a syllable with properties to the edge's
+             // spelling-to-syllable map
+-            if (corrector_ && exact_match_syllables.find(m.value) ==
+-                                  exact_match_syllables.end()) {
++            if (corrector_ && exact_matches.find({m.value, m.length}) ==
++                                  exact_matches.end()) {
+               props.is_correction = true;
+               props.credibility = kCorrectionCredibility;
+             }

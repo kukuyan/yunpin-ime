@@ -122,6 +122,16 @@ $WeaselSource = [IO.Path]::GetFullPath($WeaselSource)
 $lockPath = Join-Path $repoRoot "platform\windows\dependencies.lock.json"
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
 
+if (Test-Path (Join-Path $repoRoot ".git")) {
+    $repositoryState = @(& git -C $repoRoot status --porcelain --untracked-files=normal)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect repository state before packaging"
+    }
+    if ($repositoryState.Count -ne 0) {
+        throw "Packaging requires a clean YunPin repository so binaries and corresponding source use the same commit"
+    }
+}
+
 $packageRoot = Join-Path $OutputRoot "package-staging"
 $artifactsRoot = Join-Path $OutputRoot "artifacts"
 $scratchRoot = Join-Path $OutputRoot "scratch"
@@ -263,6 +273,7 @@ foreach ($file in @(".gitignore", "CMakeLists.txt", "Makefile", "README.md")) {
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/windows" -Destination (Join-Path $sourceRoot "platform\windows") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/rime" -Destination (Join-Path $sourceRoot "platform\rime") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/weasel" -Destination (Join-Path $sourceRoot "platform\patches\weasel") -ScratchRoot $scratchRoot
+Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/librime-1.17" -Destination (Join-Path $sourceRoot "platform\patches\librime-1.17") -ScratchRoot $scratchRoot
 foreach ($file in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $file) -Destination $sourceRoot -Force
 }
@@ -281,6 +292,7 @@ $sourceMetadata = [ordered]@{
     weaselBase = $lock.weasel.commit
     patches = $lock.weasel.patches
     librime = $lock.librime.commit
+    librimePatches = $lock.librime.patches
     librimeDependencies = $lock.librime.dependencies
     rimeIce = $lock.rimeIce.commit
     boostSourceSha256 = $lock.boost.sha256

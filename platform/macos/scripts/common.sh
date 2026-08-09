@@ -105,6 +105,14 @@ require_macos() {
   [[ "$(uname -s)" == "Darwin" ]] || die "the native macOS build requires Darwin"
 }
 
+require_clean_repository() {
+  local dirty
+  dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal)" ||
+    die "unable to inspect the YunPin repository state"
+  [[ -z "$dirty" ]] ||
+    die "packaging requires a clean YunPin repository so binaries and corresponding source use the same commit"
+}
+
 require_full_xcode() {
   resolve_developer_dir
   command -v xcodebuild >/dev/null 2>&1 || die "xcodebuild is unavailable; install full Xcode"

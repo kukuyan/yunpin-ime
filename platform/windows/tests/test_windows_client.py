@@ -145,6 +145,39 @@ class WindowsClientTests(unittest.TestCase):
             self.assertNotIn("yunpin-search:", filter_source)
             self.assertNotIn("yunpin-fav:", filter_source)
 
+        for row in self.lock["librime"]["patches"]:
+            patch = ROOT / row["path"]
+            self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), row["sha256"])
+            patch_text = patch.read_text(encoding="utf-8")
+            self.assertIn(self.lock["librime"]["commit"], patch_text)
+            self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
+            self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
+
+        librime_archive = subprocess.run(
+            ["git", "-C", str(ROOT / "third_party" / "librime"), "archive", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+        with tempfile.TemporaryDirectory(prefix="yunpin-librime-patches-") as directory:
+            target = Path(directory)
+            with tarfile.open(fileobj=io.BytesIO(librime_archive), mode="r:") as stream:
+                stream.extractall(target)
+            for row in self.lock["librime"]["patches"]:
+                subprocess.run(
+                    ["git", "apply", "--check", str(ROOT / row["path"])],
+                    cwd=target,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "apply", str(ROOT / row["path"])],
+                    cwd=target,
+                    check=True,
+                )
+            translator = (target / "src" / "rime" / "gear" / "script_translator.cc").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("corrector_component", translator)
+
     def test_build_stages_real_merged_plugin_for_both_architectures(self) -> None:
         build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(encoding="utf-8")
         for required in (
@@ -169,6 +202,7 @@ class WindowsClientTests(unittest.TestCase):
             'Join-Path $boostRoot "bin.v2"',
             'Join-Path $boostRoot "stage"',
             'GIT_CEILING_DIRECTORIES',
+            'Staged librime does not expose the locked corrector component selector',
             'Generated Weasel source is missing YunPin patch marker',
             'Built setup binary does not carry the isolated YunPin runtime identity',
             'Merged librime build did not produce',
@@ -185,6 +219,15 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"\\xE2\\x98\\x85"', filter_source)
         self.assertNotIn('"★"', filter_source)
         self.assertTrue((ROOT / "librime-yunpin" / "src" / "yunpin_module.cpp").is_file())
+        module = (ROOT / "librime-yunpin" / "src" / "yunpin_module.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('Register("yunpin_corrector"', module)
+        self.assertNotIn('Register("corrector"', module)
+        corrector = (
+            ROOT / "librime-yunpin" / "src" / "rime_yunpin_corrector.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kMaxCorrectionsPerOffset = 16", corrector)
         self.assertTrue((ROOT / "engine" / "src" / "phrase_engine.cpp").is_file())
 
     def test_original_windows_icon_replaces_upstream_brand_asset(self) -> None:
@@ -255,6 +298,10 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("Export-GitSubtree", package)
         self.assertIn('-Tree "platform/windows"', package)
         self.assertIn('-Tree "librime-yunpin"', package)
+        self.assertIn("status --porcelain --untracked-files=normal", package)
+        self.assertIn(
+            "binaries and corresponding source use the same commit", package
+        )
         self.assertIn("privateCandidateSnapshotEnabled = $false", package)
         self.assertIn("Packaged setup binary has the wrong runtime identity", (
             WINDOWS / "scripts" / "Test-Package.ps1"

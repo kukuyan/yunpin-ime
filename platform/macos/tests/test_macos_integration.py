@@ -93,6 +93,37 @@ class MacOSIntegrationTests(unittest.TestCase):
                 digest = hashlib.sha256((ROOT / row["path"]).read_bytes()).hexdigest()
                 self.assertEqual(digest, row["sha256"])
 
+    def test_librime_patch_is_version_locked_and_selects_a_unique_corrector(self) -> None:
+        lock = json.loads((MACOS_DIR / "dependencies.lock.json").read_text(encoding="utf-8"))
+        rows = lock["librime_patches"]
+        patch_dir = ROOT / "platform" / "patches" / "librime-1.16"
+        self.assertEqual(
+            [ROOT / row["path"] for row in rows], sorted(patch_dir.glob("*.patch"))
+        )
+        for row in rows:
+            patch = ROOT / row["path"]
+            self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), row["sha256"])
+            patch_text = patch.read_text(encoding="utf-8")
+            self.assertIn(lock["nested_submodules"]["librime"], patch_text)
+            self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
+            self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
+            subprocess.run(
+                ["git", "-C", str(SQUIRREL / "librime"), "apply", "--check", str(patch)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        module = (ROOT / "librime-yunpin" / "src" / "yunpin_module.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('Register("yunpin_corrector"', module)
+        self.assertNotIn('Register("corrector"', module)
+        adapter = (
+            ROOT / "librime-yunpin" / "src" / "rime_yunpin_corrector.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kMaxCorrectionsPerOffset = 16", adapter)
+
     def test_preview_has_unique_input_method_identity_and_offline_updates(self) -> None:
         with (self.prepared / "resources" / "Info.plist").open("rb") as stream:
             info = plistlib.load(stream)
@@ -162,8 +193,17 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertTrue(manifest["yunpin_module_merged"])
         self.assertTrue(manifest["yunpin_ranking_headless_e2e"])
         self.assertFalse(manifest["yunpin_ranking_native_host_e2e"])
+        self.assertTrue(manifest["yunpin_typo_correction_librime_e2e"])
+        self.assertTrue(
+            manifest["yunpin_typo_correction_exact_prefix_collision_e2e"]
+        )
+        self.assertEqual(16, manifest["yunpin_typo_correction_max_edges_per_offset"])
+        self.assertFalse(manifest["yunpin_typo_correction_native_host_e2e"])
+        self.assertFalse(manifest["yunpin_typo_correction_production_dictionary_e2e"])
         self.assertTrue(manifest["yunpin_session_correction_librime_e2e"])
         self.assertFalse(manifest["yunpin_learning_bridge"])
+        self.assertFalse(manifest["yunpin_local_model_sidecar"])
+        self.assertFalse(manifest["mixed_chinese_english_input"])
         self.assertFalse(manifest["encrypted_cloud_sync"])
         self.assertFalse(manifest["production_signed"])
 
@@ -176,6 +216,11 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("yunpin/max_candidates\": 2", overlay)
         self.assertIn("yunpin/short_input_guard\": true", overlay)
         self.assertIn("yunpin/session_learning\": true", overlay)
+        self.assertIn("translator/enable_correction\": true", overlay)
+        self.assertIn(
+            "translator/corrector_component\": yunpin_corrector", overlay
+        )
+        self.assertIn("yunpin/typo_correction\": true", overlay)
 
     def test_dependency_fetch_initializes_librime_before_runtime_copy(self) -> None:
         fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(encoding="utf-8")
@@ -198,6 +243,10 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("grep -Fq 'rime_require_module_yunpin'", build)
         self.assertIn('source_dir="$(cd "$source_dir" && pwd)"', build)
         self.assertIn('scripts/test-merged-ranking.sh', build)
+        self.assertIn(".yunpin-librime-patchset", stage)
+        self.assertIn("apply --reverse --check", stage)
+        self.assertIn('git -C "$source_dir/librime" diff --quiet', stage)
+        self.assertIn("tracked changes outside the locked patch series", stage)
 
     def test_xcode_resolver_respects_the_active_versioned_selection(self) -> None:
         with tempfile.TemporaryDirectory(prefix="yunpin-xcode-select-") as temporary:
@@ -271,6 +320,12 @@ class MacOSIntegrationTests(unittest.TestCase):
         )
         self.assertIn('git -C "$REPO_ROOT" archive HEAD --', archive)
         self.assertNotIn('cp -R "${REPO_ROOT}/$path"', archive)
+        self.assertIn("require_clean_repository", archive)
+        common = (MACOS_DIR / "scripts" / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("status --porcelain --untracked-files=normal", common)
+        self.assertIn(
+            "binaries and corresponding source use the same commit", common
+        )
 
     def test_installer_is_rooted_and_cannot_relocate_to_a_build_copy(self) -> None:
         package = (MACOS_DIR / "scripts" / "package-preview.sh").read_text(
@@ -282,6 +337,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("Set :0:BundleIsRelocatable false", package)
         self.assertIn('--root "$package_root"', package)
         self.assertIn('--component-plist "$component_plist"', package)
+        self.assertIn("require_clean_repository", package)
         self.assertNotIn('--component "$app"', package)
         self.assertNotIn('--install-location "/Library/Input Methods"', package)
 
