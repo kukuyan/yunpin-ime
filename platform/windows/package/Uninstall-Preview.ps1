@@ -8,22 +8,100 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function ConvertTo-NativeCommandLineArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Argument)
+
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $quoted = New-Object Text.StringBuilder
+    [void]$quoted.Append([char]34)
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq [char]34) {
+            [void]$quoted.Append([char]92, (2 * $backslashes) + 1)
+            [void]$quoted.Append([char]34)
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append([char]92, $backslashes)
+            $backslashes = 0
+        }
+        [void]$quoted.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append([char]92, 2 * $backslashes)
+    }
+    [void]$quoted.Append([char]34)
+    return $quoted.ToString()
+}
+
 function Invoke-CheckedExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $false)][string[]]$Arguments = @()
     )
-    $startParameters = @{
-        FilePath = $FilePath
-        Wait = $true
-        PassThru = $true
-    }
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     if ($Arguments.Count -gt 0) {
-        $startParameters.ArgumentList = $Arguments
+        $startInfo.Arguments = (($Arguments | ForEach-Object {
+            ConvertTo-NativeCommandLineArgument -Argument $_
+        }) -join " ")
     }
-    $process = Start-Process @startParameters
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Failed to start executable: $FilePath"
+    }
+    $process.WaitForExit()
     if ($process.ExitCode -ne 0) {
         throw "Command failed with exit code $($process.ExitCode): $FilePath $($Arguments -join ' ')"
+    }
+}
+
+function Remove-YunPinMachineRegistry64 {
+    param([Parameter(Mandatory = $true)][string]$ExpectedRuntimeRoot)
+
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        [Microsoft.Win32.RegistryView]::Registry64
+    )
+    $path = "Software\YunPin\IME"
+    try {
+        $key = $base.OpenSubKey($path)
+        try {
+            if (-not $key) {
+                return
+            }
+            $registeredRoot = $key.GetValue("WeaselRoot")
+            if ($registeredRoot -and $registeredRoot -ne $ExpectedRuntimeRoot) {
+                throw "Refusing to remove a different 64-bit YunPin runtime: $registeredRoot"
+            }
+        } finally {
+            if ($key) {
+                $key.Dispose()
+            }
+        }
+        $parent = $base.OpenSubKey("Software\YunPin", $true)
+        try {
+            if ($parent) {
+                $parent.DeleteSubKeyTree("IME", $false)
+            }
+        } finally {
+            if ($parent) {
+                $parent.Dispose()
+            }
+        }
+    } finally {
+        $base.Dispose()
     }
 }
 
@@ -48,6 +126,7 @@ if (Test-Path $server -PathType Leaf) {
     & $server "/quit" | Out-Null
 }
 Invoke-CheckedExecutable -FilePath $setup -Arguments @('/u')
+Remove-YunPinMachineRegistry64 -ExpectedRuntimeRoot $current
 $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 Remove-ItemProperty -Path $runKey -Name "YunPinIMEPreview" -ErrorAction SilentlyContinue
 

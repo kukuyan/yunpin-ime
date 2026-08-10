@@ -9,22 +9,104 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function ConvertTo-NativeCommandLineArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Argument)
+
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $quoted = New-Object Text.StringBuilder
+    [void]$quoted.Append([char]34)
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq [char]34) {
+            [void]$quoted.Append([char]92, (2 * $backslashes) + 1)
+            [void]$quoted.Append([char]34)
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append([char]92, $backslashes)
+            $backslashes = 0
+        }
+        [void]$quoted.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append([char]92, 2 * $backslashes)
+    }
+    [void]$quoted.Append([char]34)
+    return $quoted.ToString()
+}
+
 function Invoke-CheckedExecutable {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $false)][string[]]$Arguments = @()
     )
-    $startParameters = @{
-        FilePath = $FilePath
-        Wait = $true
-        PassThru = $true
-    }
+    $startInfo = New-Object Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     if ($Arguments.Count -gt 0) {
-        $startParameters.ArgumentList = $Arguments
+        $startInfo.Arguments = (($Arguments | ForEach-Object {
+            ConvertTo-NativeCommandLineArgument -Argument $_
+        }) -join " ")
     }
-    $process = Start-Process @startParameters
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "Failed to start executable: $FilePath"
+    }
+    $process.WaitForExit()
     if ($process.ExitCode -ne 0) {
         throw "Command failed with exit code $($process.ExitCode): $FilePath $($Arguments -join ' ')"
+    }
+}
+
+function Set-YunPinMachineRegistry64 {
+    param([Parameter(Mandatory = $true)][string]$RuntimeRoot)
+
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        [Microsoft.Win32.RegistryView]::Registry64
+    )
+    $path = "Software\YunPin\IME"
+    try {
+        $existing = $base.OpenSubKey($path)
+        try {
+            if ($existing) {
+                $registeredRoot = $existing.GetValue("WeaselRoot")
+                if ($registeredRoot -and $registeredRoot -ne $RuntimeRoot) {
+                    throw "A different 64-bit YunPin runtime is already registered: $registeredRoot"
+                }
+            }
+        } finally {
+            if ($existing) {
+                $existing.Dispose()
+            }
+        }
+        $key = $base.CreateSubKey($path)
+        try {
+            $key.SetValue(
+                "WeaselRoot",
+                $RuntimeRoot,
+                [Microsoft.Win32.RegistryValueKind]::String
+            )
+            $key.SetValue(
+                "ServerExecutable",
+                "YunPinServer.exe",
+                [Microsoft.Win32.RegistryValueKind]::String
+            )
+        } finally {
+            $key.Dispose()
+        }
+    } finally {
+        $base.Dispose()
     }
 }
 
@@ -153,6 +235,7 @@ try {
     Invoke-CheckedExecutable -FilePath $setup -Arguments @(('/userdir:' + $UserDataRoot))
     Invoke-CheckedExecutable -FilePath $setup -Arguments @('/du')
     Invoke-CheckedExecutable -FilePath $setup -Arguments @('/s')
+    Set-YunPinMachineRegistry64 -RuntimeRoot $current
     Invoke-CheckedExecutable -FilePath $deployer -Arguments @('/deploy')
 
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
@@ -167,6 +250,7 @@ try {
         userData = $UserDataRoot
         userOverlayBackup = $userBackup
         previousRuntime = $(if (Test-Path $previous) { $previous } else { $null })
+        registry64Runtime = $current
         unsignedDevelopmentBuild = $true
     }
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $InstallRoot "install-state.json") -Encoding UTF8

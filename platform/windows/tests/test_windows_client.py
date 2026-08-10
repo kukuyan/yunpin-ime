@@ -276,19 +276,28 @@ class WindowsClientTests(unittest.TestCase):
             "AcceptUnsignedDevelopmentBuild",
             "Assert-BundleManifest",
             "Copy-OverlayWithBackup",
-            "Start-Process @startParameters",
-            "PassThru = $true",
-            "Wait = $true",
+            "ConvertTo-NativeCommandLineArgument",
+            "Diagnostics.ProcessStartInfo",
+            "$process.WaitForExit()",
+            "Set-YunPinMachineRegistry64",
+            "Registry64",
+            "registry64Runtime = $current",
             "$process.ExitCode",
             '"YunPinIMEPreview"',
         ):
             self.assertIn(required, installer)
         self.assertNotIn("$LASTEXITCODE", installer)
+        self.assertNotIn("Start-Process @startParameters", installer)
         self.assertRegex(installer, r"-Arguments\s+@\((?:'/du'|\"/du\")\)")
         self.assertIn("ConfirmUninstall", uninstaller)
-        self.assertIn("Start-Process @startParameters", uninstaller)
+        self.assertIn("ConvertTo-NativeCommandLineArgument", uninstaller)
+        self.assertIn("Diagnostics.ProcessStartInfo", uninstaller)
+        self.assertIn("$process.WaitForExit()", uninstaller)
+        self.assertIn("Remove-YunPinMachineRegistry64", uninstaller)
+        self.assertIn("Registry64", uninstaller)
         self.assertIn("$process.ExitCode", uninstaller)
         self.assertNotIn("$LASTEXITCODE", uninstaller)
+        self.assertNotIn("Start-Process @startParameters", uninstaller)
         self.assertIn("userDataRetained = $true", uninstaller)
         self.assertIn("MANIFEST.sha256", package)
         self.assertIn("development-preview-source.zip", package)

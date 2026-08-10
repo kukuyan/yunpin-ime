@@ -138,8 +138,14 @@ PowerShell -ExecutionPolicy Bypass -File .\Install-Preview.ps1 `
 The installer verifies all hashes before mutation, keeps the runtime under
 `%LOCALAPPDATA%\Programs\YunPinIME\Preview`, backs up replaced Rime config, and
 uses `%APPDATA%\YunPin\Rime` for user data. Windows asks for elevation only when
-the upstream registration helper installs the TSF components. Uninstall retires
-the runtime to a recoverable directory and retains user dictionaries:
+the upstream registration helper installs the TSF components. Native helper
+arguments use explicit Windows command-line quoting rather than PowerShell 5.1
+`Start-Process`, whose trailing whitespace can make Weasel's exact option parser
+fall through to an invisible dialog in a non-interactive session. The installer
+also records the runtime root in both 32-bit and 64-bit registry views so either
+TSF architecture can restart the x64 service. Uninstall retires the runtime to
+a recoverable directory, removes the matching 64-bit runtime record, and retains
+user dictionaries:
 
 ```powershell
 PowerShell -ExecutionPolicy Bypass -File .\Uninstall-Preview.ps1 `
