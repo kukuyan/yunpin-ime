@@ -117,10 +117,13 @@ when YunPin is already enabled, while preserving the user's enabled modes.
 Registration failure is returned to the package installer instead of being
 reported as a successful install.
 
-The GitHub `macos-client` job selects the runner's pinned Xcode 26.3 and repeats
+The GitHub `macos-client` job pairs the `macos-26` runner with its pinned Xcode
+26.4.1 and repeats
 the static tests, merged Universal librime build and headless ranking fixture,
 Universal Xcode build, bundle symbol verification, package build and artifact
-upload on `macos-15`. A successful CI build proves source/build portability,
+upload. Keeping the host OS and Xcode on the same runner generation avoids the
+AssetCatalogAgent system-symbol mismatch seen when Xcode 26 ran on `macos-15`.
+A successful CI build proves source/build portability,
 that the app contains the module, and the synthetic candidate flow; it does not
 prove InputMethodKit composition, candidate-window placement or application
 compatibility.

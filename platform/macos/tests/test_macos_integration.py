@@ -350,6 +350,21 @@ class MacOSIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(str(developer), result.stdout.strip())
 
+    def test_ci_pairs_xcode_26_with_the_macos_26_runner(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        macos_job = workflow[
+            workflow.index("  macos-client:\n") : workflow.index("  required:\n")
+        ]
+        self.assertIn("runs-on: macos-26", macos_job)
+        self.assertIn(
+            "sudo xcode-select --switch /Applications/Xcode_26.4.1.app",
+            macos_job,
+        )
+        self.assertNotIn("macos-15", macos_job)
+        self.assertNotIn("Xcode_26.3.app", macos_job)
+
     def test_generated_bundle_is_signed_bottom_up_and_fails_closed(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(encoding="utf-8")
         # Xcode 26 still schedules RegisterWithLaunchServices for a macOS app,
