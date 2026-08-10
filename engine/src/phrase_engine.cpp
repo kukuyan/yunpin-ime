@@ -511,9 +511,15 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries)
 PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
                          FuzzyConfig fuzzy_config)
     : fuzzy_config_(fuzzy_config) {
+  const std::size_t private_exact_count = static_cast<std::size_t>(
+      std::count_if(entries.begin(), entries.end(),
+                    [](const PhraseEntry& entry) {
+                      return entry.private_exact_code_only;
+                    }));
   entries_.reserve(entries.size());
-  full_index_.reserve(entries.size());
-  initials_index_.reserve(entries.size());
+  full_index_.reserve(entries.size() - private_exact_count);
+  initials_index_.reserve(entries.size() - private_exact_count);
+  private_exact_code_index_.reserve(private_exact_count);
 
   std::unordered_set<std::string> ids;
   ids.reserve(entries.size());
@@ -521,6 +527,10 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
   for (PhraseEntry& entry : entries) {
     if (entry.id.empty() || entry.text.empty() || entry.syllables.empty()) {
       throw std::invalid_argument("phrase entries require id, text and pinyin");
+    }
+    if (entry.private_exact_code_only && !IsPersonalOrigin(entry.origin)) {
+      throw std::invalid_argument(
+          "exact-code-only compatibility is restricted to personal entries");
     }
     if (!ids.insert(entry.id).second) {
       throw std::invalid_argument("duplicate phrase id: " + entry.id);
@@ -539,13 +549,22 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
       full += syllable;
       initials.push_back(syllable.front());
     }
+    if (entry.private_exact_code_only && full.size() < 2) {
+      throw std::invalid_argument(
+          "exact-code-only personal entries require at least two letters");
+    }
     entry.syllables = std::move(normalized_syllables);
 
     const std::size_t index = entries_.size();
     entries_.push_back(
         IndexedEntry{std::move(entry), std::move(full), std::move(initials)});
-    full_index_.push_back(KeyRef{entries_.back().full_pinyin, index});
-    initials_index_.push_back(KeyRef{entries_.back().initials, index});
+    if (entries_.back().entry.private_exact_code_only) {
+      private_exact_code_index_.push_back(
+          KeyRef{entries_.back().full_pinyin, index});
+    } else {
+      full_index_.push_back(KeyRef{entries_.back().full_pinyin, index});
+      initials_index_.push_back(KeyRef{entries_.back().initials, index});
+    }
   }
 
   const auto by_key_then_index = [](const KeyRef& left, const KeyRef& right) {
@@ -556,6 +575,8 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
   };
   std::sort(full_index_.begin(), full_index_.end(), by_key_then_index);
   std::sort(initials_index_.begin(), initials_index_.end(), by_key_then_index);
+  std::sort(private_exact_code_index_.begin(),
+            private_exact_code_index_.end(), by_key_then_index);
 
   if (!entries_.empty()) {
     tombstones_ = std::make_unique<std::atomic_bool[]>(entries_.size());
@@ -613,6 +634,23 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
       if (!inserted && MatchTier(kind) > MatchTier(position->second.kind)) {
         position->second = MatchRecord{kind, alias};
       }
+    }
+  }
+
+  // Legacy personal codes are never consulted through a generated fuzzy
+  // alias or a prefix range. Only a literal, complete normalized code may
+  // enter the candidate set.
+  if (!private_exact_code_index_.empty()) {
+    const auto exact_begin = std::lower_bound(
+        private_exact_code_index_.begin(), private_exact_code_index_.end(),
+        std::string_view(query),
+        [](const KeyRef& key_ref, std::string_view value) {
+          return key_ref.key < value;
+        });
+    for (auto it = exact_begin;
+         it != private_exact_code_index_.end() && it->key == query; ++it) {
+      matches.emplace(it->entry_index,
+                      MatchRecord{MatchKind::kExactFull, query});
     }
   }
 

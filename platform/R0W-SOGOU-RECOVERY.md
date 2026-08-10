@@ -108,6 +108,10 @@ For `.scel`, use `--source-format scel`. For Sogou text exports, use the normal
   are explicitly counted rather than guessed online.
 - The confirmed private TSV reports 94,382 retained entries and no
   `over_private_snapshot_capacity` rejection for the reviewed R0W source.
+- Every reviewed non-standard personal code is either rejected or stored in the
+  private exact-only index. Its two/three-letter prefix and fuzzy aliases must
+  return no candidate; only the complete literal code may match. A one-letter
+  private code is always rejected.
 - Long organization phrases can be found from full pinyin and initials after
   they enter the local YunPin index.
 - A repository-wide scan finds no original Sogou file, converted personal TSV,

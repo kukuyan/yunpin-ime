@@ -26,8 +26,14 @@ struct SnapshotLoadResult {
 
 // Parses the importer's tab-separated private snapshot format. The first four
 // columns are phrase, pinyin, source and use_count. An optional fifth `pinned`
-// column accepts 1/true/yes/pinned. Invalid rows are counted but their private
-// contents are never returned as diagnostics or written to logs.
+// column accepts 1/true/yes/pinned. Standard Pinyin validation is supplemented
+// only here by a finite legacy-personal compatibility set: explicitly split
+// single ASCII letters and three reviewed historical spellings. Any row using
+// that set is placed in a literal whole-code-only index: it cannot match a
+// full-pinyin prefix, initials prefix or fuzzy alias. This does not extend
+// public dictionaries, the general segmenter or typo correction.
+// Invalid rows are counted but their private contents are never returned as
+// diagnostics or written to logs.
 [[nodiscard]] SnapshotLoadResult ParsePrivateSnapshot(std::istream& input);
 
 // Owns one immutable index. Replace builds off the query path and publishes a

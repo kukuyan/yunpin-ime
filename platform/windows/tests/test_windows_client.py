@@ -328,9 +328,14 @@ class WindowsClientTests(unittest.TestCase):
             "binaries and corresponding source use the same commit", package
         )
         self.assertIn("privateCandidateSnapshotEnabled = $false", package)
-        self.assertIn("Packaged setup binary has the wrong runtime identity", (
+        package_test = (
             WINDOWS / "scripts" / "Test-Package.ps1"
-        ).read_text(encoding="utf-8"))
+        ).read_text(encoding="utf-8")
+        self.assertIn("Packaged setup binary has the wrong runtime identity", package_test)
+        self.assertIn('"translator/enable_correction": false', package_test)
+        self.assertIn('"yunpin/typo_correction": false', package_test)
+        self.assertNotIn('"translator/enable_correction": true', package_test)
+        self.assertNotIn('"yunpin/typo_correction": true', package_test)
 
     def test_runtime_rename_map_has_no_stock_identity(self) -> None:
         mapping = self.lock["package"]["runtimeFiles"]

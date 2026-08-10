@@ -75,6 +75,12 @@
 - Keep importer and runtime hard caps aligned at 100,000. Verify frequency sort
   before truncation, duplicate merge and `over_private_snapshot_capacity`
   accounting with synthetic data.
+- For legacy Sogou rows containing explicitly separated letter codes or the
+  finite reviewed non-standard spellings, require a private exact-only index.
+  Test three-token and 64-token rows: two/three-letter prefixes, initials and
+  fuzzy aliases are absent; the complete literal code is present. Reject an
+  unknown pseudo-syllable, a one-letter private code, and any attempt to mark a
+  public entry exact-only.
 - Treat the R0W 94,382-row conversion as incoming only. Before deployment,
   verify the immutable source hash, complete TSV row count, zero capacity loss,
   output outside Git and a newly built 100k-capable binary. The currently

@@ -43,6 +43,10 @@ struct PhraseEntry {
   // remains a separate signal so an accidental choice cannot be disguised as
   // repeated intentional use.
   std::int32_t correction_score{0};
+  // Set only by the private snapshot compatibility loader. Such an entry is
+  // available solely when its complete normalized code equals the literal
+  // query; it never participates in full-prefix, initials or fuzzy matching.
+  bool private_exact_code_only{false};
 };
 
 struct Candidate {
@@ -162,6 +166,7 @@ class PhraseIndex {
   std::vector<IndexedEntry> entries_;
   std::vector<KeyRef> full_index_;
   std::vector<KeyRef> initials_index_;
+  std::vector<KeyRef> private_exact_code_index_;
   std::unique_ptr<std::atomic_bool[]> tombstones_;
   std::unique_ptr<std::atomic<std::int32_t>[]> correction_scores_;
   std::atomic<std::uint32_t> revision_{0};

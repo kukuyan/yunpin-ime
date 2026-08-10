@@ -2,6 +2,7 @@
 #include "yunpin/snapshot_store.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <iomanip>
@@ -107,6 +108,25 @@ bool IsExpectedHeader(const std::vector<std::string>& fields) {
           (fields.size() == 5 && fields[4] == "pinned"));
 }
 
+bool IsLegacyPrivateSnapshotToken(std::string_view syllable) {
+  // Long-lived personal dictionaries can contain an explicitly separated
+  // Latin initial (for example a product or acronym letter). Keep that legacy
+  // code private to this snapshot loader; do not add it to the process-wide
+  // PinyinSegmenter, fuzzy aliases, public dictionaries or typo correction.
+  if (syllable.size() == 1 && syllable.front() >= 'a' &&
+      syllable.front() <= 'z') {
+    return true;
+  }
+
+  // These finite, tone-free spellings are emitted by the reviewed legacy
+  // personal-dictionary source but are outside the standard Hanyu Pinyin set.
+  // An exact allowlist avoids accepting arbitrary alphabetic pseudo-syllables.
+  static constexpr std::array<std::string_view, 3> kLegacyPrivateSpellings = {
+      "fiao", "kei", "tei"};
+  return std::binary_search(kLegacyPrivateSpellings.begin(),
+                            kLegacyPrivateSpellings.end(), syllable);
+}
+
 }  // namespace
 
 SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
@@ -151,12 +171,25 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
 
     std::uint64_t use_count = 0;
     const std::vector<std::string> syllables = SplitPinyin(fields[1]);
-    const bool all_syllables_valid =
-        !syllables.empty() &&
-        std::all_of(syllables.begin(), syllables.end(),
-                    [&segmenter](const std::string& syllable) {
-                      return segmenter.IsSyllable(syllable);
-                    });
+    bool all_syllables_valid = !syllables.empty();
+    bool private_exact_code_only = false;
+    for (const std::string& syllable : syllables) {
+      if (segmenter.IsSyllable(syllable)) {
+        continue;
+      }
+      if (IsLegacyPrivateSnapshotToken(syllable)) {
+        private_exact_code_only = true;
+        continue;
+      }
+      all_syllables_valid = false;
+      break;
+    }
+    if (private_exact_code_only && NormalizePinyin(fields[1]).size() < 2) {
+      // A one-letter private code is too broad to distinguish from ordinary
+      // typing intent. Keep the same minimum as the personal-initial recall
+      // gate instead of letting compatibility bypass the short-input guard.
+      all_syllables_valid = false;
+    }
     if (!all_syllables_valid || !ParseCount(fields[3], &use_count)) {
       ++result.rejected_rows;
       continue;
@@ -177,6 +210,7 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     entry.static_weight = 0;
     entry.pinned = has_pinned && ParsePinned(fields[4]);
     entry.learned = use_count >= 2;
+    entry.private_exact_code_only = private_exact_code_only;
     result.entries.push_back(std::move(entry));
     ++result.accepted_rows;
   }

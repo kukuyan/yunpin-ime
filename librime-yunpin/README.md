@@ -27,6 +27,14 @@ are counted without logging the phrase or pinyin. If the file is absent or
 malformed, private injection stays disabled; the filter remains available for
 the short-input upstream guard.
 
+Some long-lived Sogou personal rows use explicitly separated Latin letters or
+a small reviewed legacy spelling set instead of standard syllables. Those rows
+are marked private exact-code-only: they live in a separate index and can be
+recalled only when the complete literal code is entered. They never participate
+in full-Pinyin prefixes, initials prefixes, fuzzy aliases, public dictionaries
+or typo correction. Unknown pseudo-syllables and one-letter private codes are
+rejected.
+
 For a normalized one- or two-letter pinyin input, the merged translation skips
 only upstream candidates that are valid UTF-8, consist entirely of CJK
 ideographs, and contain at least three Unicode scalars. Thus `he` cannot expose
