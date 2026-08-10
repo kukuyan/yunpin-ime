@@ -25,16 +25,17 @@ the phrase engine; both TSF architectures talk to the x64 service's merged
 librime.
 
 The preview Rime overlay inserts `yunpin_filter` before the normal Rime
-candidate stream and caps it at two candidates. It also enables the unique
-`yunpin_corrector`, selected through a base-commit and SHA-256-locked minimal
-patch for librime 1.17. The patch also keys exact classification by `(spelling
-ID, consumed input length)`, so a corrected longer spelling cannot inherit a
-shorter exact-prefix match and escape the correction penalty. The module does
-not replace librime's process-global `corrector`, so another schema retains
-upstream behavior. Its private snapshot
-remains disabled with `"yunpin/enabled": false`. The package contains only an
-empty example header, never a real `yunpin/private.tsv`, user database, Sogou
-file, or conversation data.
+candidate stream and caps it at two candidates. It reserves the unique
+`yunpin_corrector` through a base-commit and SHA-256-locked minimal patch for
+librime 1.17, but the shipped overlay keeps both
+`translator/enable_correction: false` and `yunpin/typo_correction: false`.
+When disabled, the component factory returns no corrector; it does not fall
+back to NearSearch. The patch keys exact classification by `(spelling ID,
+consumed input length)` for an explicitly enabled experiment, without replacing
+librime's process-global `corrector` or changing another schema's behavior. Its
+private snapshot remains disabled with `"yunpin/enabled": false`. The package
+contains only an empty example header, never a real `yunpin/private.tsv`, user
+database, Sogou file, or conversation data.
 
 The independent `"yunpin/short_input_guard": true` remains active. It performs
 only an in-memory check over Rime's already-produced candidates, so Windows can
@@ -46,30 +47,35 @@ correction stays disabled until TSF secure-input and authenticated IPC behavior
 has passed real-host testing; enabling the public short-input guard does not
 silently enable learning.
 
-Stateless typing correction is independent and enabled by
-`translator/enable_correction`, `translator/corrector_component: yunpin_corrector`
-and `yunpin/typo_correction: true`. It deterministically
-generates bounded one-edit spellings for physical QWERTY neighbours, one
-missing key, one extra key, an adjacent transposition and the reviewed one-way
-`you` → `yao` confusion. Only spellings already present in the in-memory Prism
-are accepted; it reads no personal snapshot, file, network service or model.
-Exact short-input regressions require `xu` and `you` to keep their normal first
-candidates. Prism-validated variants are deduplicated, deterministically
-ordered and capped at 16 correction edges per input offset before dictionary
-traversal.
+Automatic typing correction is fail-closed in this preview:
 
-The portable unit suite and real merged Universal librime fixture cover these
-rules, including the two-error `shouxubijiakuaideshihou` long phrase. The
-two independent synthetic final-key runs measured P95 534–841 µs for that
-input and 907–1611 µs for the 37-byte reviewed `you` → `yao` input, below the
-20 ms test gate. This is
-shared-engine evidence, not a Weasel/TSF or production Rime Ice benchmark;
-Windows still needs the same candidate and latency checks on host 195. Stock
-librime assigns all correction edges the same fixed `log(0.01)` credibility,
-so full-dictionary collision and pollution testing remains required. The
-synthetic `shangban` regression keeps exact “上班” before corrected “山班” even
-at 50 times the weight while retaining both; it does not prove arbitrary
-production weights cannot overcome the fixed penalty.
+```yaml
+translator/enable_correction: false
+translator/corrector_component: yunpin_corrector
+yunpin/typo_correction: false
+yunpin/typo_reviewed_confusions: false
+yunpin/long_correction_guard: true
+yunpin/long_correction_min_chars: 12
+```
+
+An explicit experiment may enable both translator and YunPin correction. If the
+whole normalized input already has a normal exact path, correction expansion is
+globally suppressed. Otherwise the graph permits only one bridge from a
+forward exact-reachable offset to a reverse exact-suffix-reachable end, so the
+whole composition can use at most one correction offset. Analysis is limited to
+32 correction searches and input shorter than 128 bytes; each searched offset
+keeps at most 16 deduplicated, Prism-validated edges. The reviewed valid-Pinyin
+confusion set is a separate default-off experiment. No correction path reads a
+personal snapshot, file, network service, or model.
+
+For normalized correction input of at least 12 characters, the filter retains
+at most one automatic correction candidate. It may occupy only total rank 2
+when there is no private head, or total rank 3 when there is one private head;
+with two private heads, a correction-only upstream, or no available target slot,
+it is hidden and does not spill to a later page. Earlier synthetic correction,
+weight-collision, and timing statements are not current Windows capability or
+performance evidence. The opt-in experiment still needs fresh full-dictionary
+candidate and latency acceptance through real Weasel/TSF.
 
 Expression search/favorite is not connected in this preview. The TSF frontend
 never interprets candidate commit text as a browser or file-system command,
@@ -98,7 +104,12 @@ real hosts:
 - authenticated learning IPC and crash/reconnect behavior;
 - Notepad, Office, Chrome, Terminal, and 32/64-bit host testing.
 
-R0W is not contacted by any build, package, install, or test script.
+R0W is not contacted by any build, package, install, or test script. The reviewed
+offline conversion contains 94,382 merged rows, but its complete TSV remains in
+incoming staging and has not been deployed. The currently installed legacy
+private-snapshot binary is limited to 50,000 rows; the full conversion must not
+be enabled until a 100,000-row-capable binary is rebuilt and tested. The preview
+package still carries no real private snapshot and keeps `yunpin/enabled: false`.
 
 ## Reproducible build
 
@@ -168,6 +179,7 @@ corresponding-source archive for seven days.
 
 No local language model is implemented. Any future experiment must be an
 optional, default-off sidecar with no network access, bounded IPC and a strict
-timeout that fails closed to exact/deterministic candidates. Chinese-English
-mixed input remains a future segmentation/ranking direction and must not be
-treated as a capability of this Windows preview.
+timeout; failure leaves only the ordinary exact candidate path. There is no
+NearSearch or model fallback in the shipped disabled configuration.
+Chinese-English mixed input remains a future segmentation/ranking direction and
+must not be treated as a capability of this Windows preview.

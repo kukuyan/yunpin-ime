@@ -45,6 +45,16 @@ exports/
 conversations.json
 chat.html
 
+# YunPin Replay Lab traces contain real input and must stay outside Git,
+# regardless of which directory a user selected for the local lab/export.
+**/*.yunpinreplay
+**/*replay*.jsonl
+**/*replay*.ndjson
+**/*replay*.db
+**/*replay*.db-*
+**/*replay*.sqlite
+**/*replay*.sqlite-*
+
 # Secrets and signing material
 .env
 .env.*

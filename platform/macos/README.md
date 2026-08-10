@@ -24,17 +24,22 @@ reviewed `yunpin/private.tsv` exists in the isolated user directory.
 The module merge and symbol are build-verified. A headless librime fixture also
 verifies short-input filtering, initial-based and full-pinyin long-phrase
 ranking, the two-personal candidate cap, upstream deduplication, candidate
-commit, immediate private-mode suppression, deterministic Pinyin typo
+commit, immediate private-mode suppression, conservative Pinyin typo
 correction, and the real librime session flow
-`日长 → Backspace×2 → 日常 → requery`. Typo goldens cover a QWERTY neighbour,
-missing key, extra key, adjacent transposition, reviewed one-way `you` → `yao`,
-and the user's two-error `shouxubijiakuaideshihou` sample while keeping exact
-`xu` and `you` first. It also keeps exact “上班” before a present corrected
-“山班” whose synthetic dictionary weight is 50 times higher. After Prism
-validation, the adapter exposes no more than 16 deterministic correction edges
-per input offset. Real InputMethodKit host evidence has not passed yet. The
-in-process correction is not persisted; encrypted SQLite refresh, a desktop
-habit monitor and cloud sync remain disconnected.
+`日长 → Backspace×2 → 日常 → requery`. Its regression boundary now matches the
+shipped policy: correct `shujukushiyongdeshinagebanben` stays on “数据库使用的是
+哪个版本”; complete valid Pinyin such as `shouxu...`, `you...` and `shangban`
+does not invite spelling expansion; one invalid trailing key may create one
+exact-prefix-to-exact-suffix bridge at total rank #2; and two invalid regions
+produce no correction. The synthetic `youceshizhanghaoma` pair is retained only
+as exact homophone evidence, not presented as a spelling-correction success.
+The fixture's echo translator supplies the ordinary #1 fail-safe candidate
+needed to exercise the real long-correction rank guard. After Prism validation,
+the adapter exposes no more than 16 deterministic edges at one bridge offset
+and performs no more than 32 variant searches per input. Real InputMethodKit
+host evidence has not passed yet. The in-process correction is not persisted;
+encrypted SQLite refresh, a desktop habit monitor and cloud sync remain
+disconnected.
 Expression search/favorite is likewise deferred: the preview never interprets
 candidate commit text as a browser or file-system command and injects no action
 candidate until a typed, explicitly armed native channel exists.
@@ -120,16 +125,19 @@ that the app contains the module, and the synthetic candidate flow; it does not
 prove InputMethodKit composition, candidate-window placement or application
 compatibility.
 
-The real merged-Rime fixture warms each corrected long input 10 times and times
-the final key plus candidate enumeration for 100 samples, failing above P95
-20 ms. On the completed synthetic run, the two-error
-`shouxubijiakuaideshihou` case measured 534–841 µs and the 37-byte reviewed
-`you` → `yao` case measured 907–1611 µs across two independent runs. These are current-machine, small synthetic
-dictionary results, not full Rime Ice, 50,000-personal-entry or InputMethodKit
-performance guarantees. Stock librime also gives every correction edge the
-same fixed `log(0.01)` credibility, so production word weights and context can
-still expose exact-versus-corrected ranking collisions beyond the tested 50×
-prefix case.
+The real merged-Rime fixture warms each final-key path 10 times and times the
+final key plus candidate enumeration for 100 samples, failing above P95 20 ms.
+It covers both an exact database sentence and a single trailing-extra-key
+bridge. A separate real-Prism O2 probe measured correct whole-input paths at
+P95 4.4–6.5 µs with zero `ToleranceSearch` calls, the tail bridge at 0.591 ms
+with 13 bounded searches, and a 32-search stress case at 1.303 ms on the current
+machine. These are small synthetic/current-machine results; this merged E2E
+does not layer the 100,000-entry personal snapshot benchmark and is not a full
+Rime Ice or InputMethodKit performance guarantee. Selecting a late bridge
+without several read-only prefix attempts remains a P1 optimization. Stock
+librime gives every correction edge the same fixed
+`log(0.01)` credibility, so production word weights and context still require
+the display-time #2/#3 guard.
 
 With pinned dependencies already prepared, the merged runtime can be checked
 independently of Xcode's app build:

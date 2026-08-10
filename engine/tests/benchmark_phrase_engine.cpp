@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr std::size_t kEntryCount = 50000;
+constexpr std::size_t kEntryCount = 100000;
 constexpr double kP95BudgetMilliseconds = 20.0;
 
 const std::vector<std::string> kSyllables = {

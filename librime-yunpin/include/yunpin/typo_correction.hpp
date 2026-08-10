@@ -33,7 +33,9 @@ struct TypoCorrectionOptions {
   bool adjacent_transposition{true};
   bool extra_key{true};
   bool missing_key{true};
-  bool reviewed_confusions{true};
+  // Valid-Pinyin substitutions are much riskier than repairs of an invalid
+  // spelling. Keep them off unless an explicitly reviewed experiment opts in.
+  bool reviewed_confusions{false};
   // A 128-byte adversarial segment fails closed before variant generation.
   std::size_t max_input_bytes{128};
   std::size_t max_syllable_bytes{6};

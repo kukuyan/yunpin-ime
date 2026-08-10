@@ -204,6 +204,30 @@ jobs:
       - run: go test -race ./...
         working-directory: localstore
 
+  replaylab:
+    name: replaylab-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: replaylab/go.mod
+          cache: false
+      - run: go mod verify
+        working-directory: replaylab
+      - run: go vet ./...
+        working-directory: replaylab
+      - run: go test ./...
+        if: runner.os == 'Windows'
+        working-directory: replaylab
+      - run: go test -race ./...
+        if: runner.os != 'Windows'
+        working-directory: replaylab
+
   macos-client:
     name: macos-client
     runs-on: macos-15
@@ -228,10 +252,10 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, protocol, sync, syncclient, desktopagent, macos-client]
+    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, replaylab, protocol, sync, syncclient, desktopagent, macos-client]
     runs-on: ubuntu-24.04
     steps:
       - name: Verify required jobs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: test "$RESULTS" = "success success success success success success success success success success success"
+        run: test "$RESULTS" = "success success success success success success success success success success success success"

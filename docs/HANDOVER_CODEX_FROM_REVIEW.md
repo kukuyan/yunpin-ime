@@ -8,9 +8,11 @@
 |---|---|---|
 | 八候选 | 发行 overlay 固定 `page_size: 8` 与 `12345678`，私有候选上限为 2 | 已安装用户目录不会自动迁移；仍需分别刷新配置并做 macOS/Windows 候选窗实机验收 |
 | 短输入保护 | 一至两个规范化拼音字母会过滤 upstream 中“三个及以上 Unicode 标量且全部为 CJK”的候选；`he` 不再出现 `合并为`，但保留一至二字、英文、混合文本和无效 UTF-8 的原顺序 | 这不是通用语言模型，也不能替代真实宿主测试；输入达到三个字母后不启用该 upstream 过滤 |
-| 确定性拼音纠错 | 独立 `yunpin_corrector` 覆盖邻键、漏键、多键、相邻转置和审核后的单向 `you` → `yao`；真实 merged Rime 合成 E2E 验证单错、双错、短精确保护和 final-key P95 | 合成小词典不是完整 Rime Ice/个人词库或 Windows/macOS 宿主性能证明；stock librime 的统一修正 penalty 不能提供按错误类型精细排序 |
-| 私有长词召回 | 私有候选最多占首页 2 项；置顶长词仍要求两个完整音节或四个首字母，非置顶三音节以上词要求两个完整音节且不接受短简拼 | Windows development preview 的私有快照仍关闭；尚无会话纠错/学习 → 加密库 → 新快照的持久闭环 |
+| 自动拼写纠错 | Windows/macOS 发行 overlay 均默认 OFF；显式实验模式有整句 normal-exact 禁纠错、精确前缀/后缀单桥、最多一个纠错 offset、32 次 search 与长句候选 #2/#3 保护 | 不是当前默认能力；关闭时 `yunpin_corrector` 返回空，不回退 `NearSearchCorrector`；旧“双错首位”和默认 `you` → `yao` 不能作为现状证据 |
+| 私有长词与容量 | 私有候选最多占首页 2 项；原生 snapshot 上限已提高到 100,000；100k 高碰撞合成基准 P95 1.672 ms、峰值增量 80.172 MiB | Windows development preview 私有快照仍关闭；当前已安装旧 binary 仍是 50,000 上限，100k 结果不是生产词库/宿主保证 |
 | 纠错学习 | `CorrectionLearning` 与 `SessionLearning` 已接入 librime commit/update/unhandled-key/option/delete notifier；真实 Rime C API 已验证“日长 → 两次退格 → 日常 → 重新查询重排” | 仅在当前输入法进程会话内生效；宿主编辑器缓冲区删除证明、可靠安全上下文、加密持久化、桌面监控 UI/CLI 与跨重启保留尚未完成 |
+| Replay Lab | 有本地 `EventV1`、append-only store、生命周期 CLI、导出/规则报告、native frame 解析器及默认关闭的固定 C++ ring 基础 | Squirrel/Weasel native producer 和后台 sink 未接；执行 `start` 只建立本地会话，不等于持续监控已经运行 |
+| R0W 迁移 | 已转换并合并 94,382 条，低于新的 100k hard cap | 完整 TSV 仍处于 incoming/staging，尚未部署；旧 50k binary 不能完整加载该结果 |
 | 表情搜索/收藏 | 当前安全默认是完全 fail-closed；不注入表情动作，普通 `yunpin-search:` / `yunpin-fav:` 文本只按普通文本提交 | 没有图片/GIF 搜索、结果展示、收藏落盘、表情对象模型或云同步；`expression_search` 即使被手工设为 true 也应保持惰性 |
 | macOS 原生预览 | 固定 Squirrel、合并 `librime-yunpin`、Universal arm64/x86_64 与 unsigned 包装路径；真实 Rime C API 已覆盖短输入、配额、提交和会话纠错 | InputMethodKit 宿主 UI/安全输入/跨应用矩阵、持久学习与同步 E2E、签名、公证尚未完成 |
 | Windows 原生预览 | 固定 Weasel，构建 x86/x64 TSF 与 x64 输入服务的开发管线；短输入 guard 独立启用 | 私有快照明确 `enabled: false` 且 `session_learning: false`；当前实机学习/同步、32/64 位宿主矩阵和 Authenticode 尚未完成 |
@@ -38,67 +40,65 @@
 
 共享 phrase engine 另有更严格的长词召回门槛：置顶个人长词需要两个完整全拼音节或四个首字母；非置顶三音节以上词需要两个完整音节，且不能由短首字母注入。请重点确认 librime upstream guard 与 phrase index 门槛没有产生平台间语义分叉。
 
-## 3. 本地确定性拼音键入纠错
+### 100k 私有 snapshot 与 R0W 状态
 
-当前实现不依赖全局 spelling algebra，也没有语言模型或在线请求。
-`librime-yunpin` 注册唯一名称 `yunpin_corrector`；一个按上游提交与 SHA-256
-锁定的最小 librime 补丁让 ScriptTranslator 从
-`translator/corrector_component` 选择它，并把 exact identity 从单独
-spelling ID 改成 `(spelling ID, consumed length)`。这样，消费 `shang` 五个
-字母所得的纠错 `shan` 不会误继承四字母精确前缀的身份并绕过 correction
-penalty。macOS 锁定 librime 1.16 补丁，Windows 锁定 1.17 补丁；模块没有
-覆盖全局 `corrector`，因此同进程其他 schema 应保持 upstream 行为。
+`kMaxPrivateSnapshotEntries` 与 importer 默认/硬上限现在一致为 100,000。
+解析测试明确保留第 50,001 行；独立 snapshot benchmark 构造 100,000 条
+高碰撞合成词、完整解析并建立不可变索引。本轮可复核结果为查询 P95
+1.672 ms、峰值 RSS 增量 80.172 MiB，低于 20 ms / 256 MiB 门禁。该数字只
+对应当前合成夹具和机器，不是安装端或真实个人词库的性能保证。
 
-在每个音节图位置，生成器只产生有界的一次编辑变体，并交给已经加载的
-Prism 验证，不自行猜汉字或读词典：
+R0W 网络与只读恢复入口已经恢复，不再是“等待网络”的 deferred 状态。当前
+转换结果为 94,382 条合并词，能放入新的 100k 上限；但完整 TSV 仍只在
+incoming/staging，尚未部署进任何 YunPin 用户目录。当前已安装旧 binary 仍按
+50,000 上限构建，因此“转换完成”不能写成“94,382 条已经在输入法生效”。部署
+前必须用新 binary、核对完整行数并保留原始快照，真实词库继续留在 Git 之外。
 
-- QWERTY 物理邻键包含对快打有意义的对角邻键，覆盖 `xu` → `su`；
-- 漏一个键、多一个键、相邻两键转置；
-- 人工审核的单向有效音节混淆目前只有 `you` → `yao`。
+## 3. 自动拼写纠错：默认关闭的实验路径
 
-原始生成器最多产生 768 个有界变体；Prism 验证并按 spelling ID 去重后，
-adapter 确定性排序且每个 input offset 最多向音节图提供 16 条纠错边。该值
-是 Dictionary/Table 遍历前的图预算，不是候选窗显示数量。
+Windows 与 macOS 发行 overlay 均设置：
 
-一次变体最多修改当前音节的一个物理动作，但 ScriptTranslator 的完整路径
-可以在不同音节位置采用多个修正。真实 merged ScriptTranslator、Dictionary、
-Prism 与 Rime C API 合成 E2E 已验证以下目标均为第一候选：
+```yaml
+"translator/enable_correction": false
+"translator/corrector_component": yunpin_corrector
+"yunpin/typo_correction": false
+"yunpin/typo_reviewed_confusions": false
+```
 
-- 正确 `shousubijiaokuaideshihou`；
-- 邻键 `shouxubijiaokuaideshihou`；
-- 首音节漏键 `shosubijiaokuaideshihou`；
-- `jiao` 漏 `o` 的 `shousubijiakuaideshihou`；
-- 用户原始双错误 `shouxubijiakuaideshihou`（`xu` → `su` 且 `jia` → `jiao`）；
-- 多键 `shouusubijiaokuaideshihou` 与转置 `shuosubijiaokuaideshihou`；
-- 审核项 `youjubeiyidingdejiucuolianxiangnengli` → “要具备一定的纠错联想能力”；
-- `zhuantai` → “状态”（恢复 `zhuang tai`）。
+因此当前安装默认不执行自动拼写纠错。即使配置仍指向组件，只要
+`yunpin/typo_correction` 为 false，component factory 就返回空指针，不会回退
+到 librime 较宽泛的 `NearSearchCorrector`。这项 fail-closed 行为必须在两端
+保持一致。
 
-同一真实管线还要求短精确输入 `xu` → “需”、`you` → “有”保持第一。
-另有 exact-prefix 碰撞：输入 `shangban` 时必须同时保留精确“上班”和纠错
-“山班”，即使合成词典把“山班”权重设为“上班”的 50 倍，仍要求“上班”
-在前。
-生成器不处理单字母片段且不会把原样拼写作为纠错变体；这与 E2E 一起构成
-当前短输入保护，但尚不能推导出完整生产词典中“所有精确候选永远第一”的
-硬保证。
+显式实验同时开启 translator 与 YunPin 开关后，版本锁定的 librime 1.16/1.17
+补丁先对整段输入建立 normal-exact 可达图：
 
-性能用 10 次预热后 100 次 final-key 样本计时并枚举候选，门禁是 P95
-不超过 20 ms。本轮真实合成 E2E 实测：双错误
-`shouxubijiakuaideshihou` 为 534–841 µs，37 字节的审核 `you` → `yao`
-长输入为 907–1611 µs（两次独立复测范围）。该证据只对应当前机器、merged librime 和小型合成词典；
-完整 Rime Ice、公共词包、50,000 条个人索引及真实 TSF/InputMethodKit 宿主
-仍需单独测试。
+1. 若从头到尾存在任意完整 normal exact path，整段全局禁用纠错，而不是只
+   把精确候选排在纠错之前。
+2. 若不存在完整精确路径，只能从 forward exact-reachable 位置发起搜索，且
+   纠错边结束位置必须 reverse exact-suffix-reachable；即“精确前缀 → 一个纠错
+   bridge → 精确后缀”。
+3. 整段最多允许一个成功加入纠错边的 input offset；搜索调用总预算为 32。
+   每次搜索仍受 128 字节输入、768 原始变体及 Prism 去重后每 offset 最多
+   16 条边约束。
+4. 生成器只做单次邻键、漏键、多键或相邻转置。有效拼音间的审核混淆另有
+   显式实验开关，默认关闭；`you` → `yao` 不能写成默认行为。
 
-需要重点审查的结构限制是：stock librime 对所有 correction edge 使用同一
-个 `log(0.01)` credibility。YunPin 的 edit cost 用于限制/选择变体，不会变成
-按邻键、漏键或审核项细分的候选排名 penalty；生产词频和上下文仍可能让
-修正候选挤过精确候选。50× `shangban` 回归证明该前缀纠错已正确受罚，不
-证明任意生产权重都无法超过统一 penalty。下一版应先做完整词库碰撞/污染
-基准，再决定是否需要独立 custom translator 或另一份版本锁定的评分补丁。
+候选层还有第二道保护：对规范拼音长度至少 12 的长输入，最多保留一条自动
+纠错候选；没有私有头部时只能位于总排名 #2，有一个私有候选时只能位于 #3，
+两个私有候选、没有普通候选、或纠错落在首页窗口之后时都隐藏。其余纠错不
+延后到下一页。
 
-本地模型仅是未来可选方向：若试验，必须作为默认关闭、无网络权限的独立
-sidecar，只接收最小有界 composition，IPC 严格超时，并在超时、崩溃或非法
-结果时 fail closed 回精确/确定性路径；不能让模型可用性影响输入。中英混输
-的分段、英文透传和跨边界排序也只列为方向，当前没有实现或验收声明。
+当前可复核证据包括 portable 生成器边界测试、两端补丁结构/默认关闭静态
+测试，以及 filter 对 #2/#3、双私有头、correction-only 和首页外纠错的行为
+测试。旧 merged-Rime 夹具中“两个不同 offset 的错误仍首位”以及默认
+`you` → `yao` 的结果与当前策略不一致，不能继续作为验收证据；需要用显式
+opt-in 配置重写并重跑“无完整 exact path + 单 bridge”真实 librime E2E。
+在此之前，manifest 中历史的 typo-correction librime-E2E 标记也不能被解释为
+新策略已经通过。
+
+本地模型仍只是未来可选方向。若试验，必须默认关闭、无网络、严格 IPC 超时，
+并在失败时回到普通精确路径；当前没有 NearSearch 或模型 fallback。
 
 ## 4. 表情功能已安全延期
 
@@ -129,13 +129,28 @@ sidecar，只接收最小有界 composition，IPC 严格超时，并在超时、
 
 因此当前可以宣称“真实 librime 会话内纠错重排已接通”，不能宣称“跨重启自动学习、可查看长期习惯或跨设备同步已完成”。
 
+### Replay Lab 边界
+
+`replaylab/` 已有严格有界的本地 `EventV1`、顺序/episode 校验、逐事件 fsync
+的 append-only store、崩溃窗口 metadata 修复，以及 `init`、`start`、`pause`、
+`resume`、`status`、`ingest`、`report`、`export`、`clear` CLI 和规则报告。
+`librime-yunpin` 侧已有默认关闭、
+固定 64 槽的单生产者/单消费者 C++ ring、8 KiB JSON 上限、`drop_count` 与
+native frame 序列化/解析合成测试。
+
+但 Squirrel/Weasel callback producer 与把 ring 持续排空到本地 store 的后台
+sink 均未连接。`start` 只写入本地 session/resume 元数据，不会自动捕获任何
+输入；只有显式 `ingest` 或测试 harness 能产生记录。因此当前可称“Replay Lab
+协议/存储/CLI/报告与 native ring 基础”，不能称“已经开始持续监控”。真实
+trace 必须留在 Git 外，且 native bridge 接通前仍是 P0。
+
 ## 6. macOS 与 Windows 原生预览
 
 ### macOS
 
 Xcode 选择顺序是：有效 `DEVELOPER_DIR`、有效 `YUNPIN_XCODE_APP_PATH`、有效的 `xcode-select -p`（排除 Command Line Tools）、外置盘和常规路径扫描。该顺序避免 CI 或用户已经选择较新 Xcode 时，被较旧的默认 `/Applications/Xcode.app` 覆盖。测试构造了“已选新版本 + 默认旧版本”的场景来固定该行为。
 
-原生管线能构建合并 `librime-yunpin` 的 Universal Squirrel/InputMethodKit development preview；真实 Rime C API 已覆盖 `he` 短输入、`zgsh` 置顶长词、两项个人配额、去重/提交、私密模式抑制、确定性拼音纠错的单错/双错/精确短输入/性能门禁和会话纠错。该证据仍不是 InputMethodKit 跨应用宿主或生产 Rime Ice 验收；manifest 应继续把 native host E2E、安全上下文、持久学习、encrypted cloud sync 和 production signing 标为未完成。正式结论必须来自最终 HEAD 的全新构建和真实应用矩阵，不能复用旧外置盘 artifact。
+原生管线能构建合并 `librime-yunpin` 的 Universal Squirrel/InputMethodKit development preview；真实 Rime C API 已覆盖 `he` 短输入、`zgsh` 置顶长词、两项个人配额、去重/提交、私密模式抑制和会话纠错。发行自动拼写纠错已改为默认关闭；旧单错/双错/审核混淆性能夹具不能替代当前单桥策略的重写与复测。该证据仍不是 InputMethodKit 跨应用宿主或生产 Rime Ice 验收；manifest 应继续把 native host E2E、安全上下文、持久学习、encrypted cloud sync 和 production signing 标为未完成。正式结论必须来自最终 HEAD 的全新构建和真实应用矩阵，不能复用旧外置盘 artifact。
 
 ### Windows
 
@@ -145,12 +160,14 @@ Weasel 管线目标是 x86/x64 TSF 加 x64 服务的 unsigned development previe
 "yunpin/enabled": false
 "yunpin/short_input_guard": true
 "yunpin/session_learning": false
-"translator/enable_correction": true
+"translator/enable_correction": false
 "translator/corrector_component": yunpin_corrector
-"yunpin/typo_correction": true
+"yunpin/typo_correction": false
+"yunpin/typo_reviewed_confusions": false
+"yunpin/long_correction_guard": true
 ```
 
-这意味着私有快照和会话学习未进入 Windows 输入过程，但短输入公共候选过滤与无状态、只使用公共 Prism 的确定性键入纠错仍独立工作。Windows 构建会应用锁定的 librime 1.17 component-selector 补丁并打包该组件；当前真实候选/性能 E2E 证据来自 merged Universal librime，不能替代 195 上的 Weasel/TSF 实机验证。仍需完成 Notepad、Office、Chrome、Terminal、32/64 位宿主、密码框、崩溃重连、安装升级和卸载验收。正式发布还需要 Authenticode。
+这意味着私有快照、会话学习和自动拼写纠错均未进入 Windows 默认输入过程；短输入公共候选过滤独立工作，长纠错候选 guard 只是为显式实验预留。Windows 构建会应用锁定的 librime 1.17 component-selector 补丁并打包组件，但关闭时 factory 返回空且没有 NearSearch fallback。仍需完成 195 上的显式 opt-in 单桥实验，以及 Notepad、Office、Chrome、Terminal、32/64 位宿主、密码框、崩溃重连、安装升级和卸载验收。正式发布还需要 Authenticode。
 
 ## 7. Headless 同步与真实 TCP E2E
 
@@ -214,7 +231,9 @@ CLI 暴露 `status`、`sync-once`、`run` 和 `init-account` 骨架：
 ### P1：候选正确性与未来表情入口
 
 - 对短输入 guard 验证 `he`、一至二字保留、三字纯 CJK 过滤、英文/混合/无效 UTF-8 保留，以及 Windows 私有关闭时仍生效。
-- 在锁定的完整 Rime Ice/公共词包与 50,000 条合成个人词上复跑确定性纠错，统计精确候选被挤过、首页污染、内存与 P50/P95/P99；特别审查 stock fixed `log(0.01)` penalty、`(spelling ID, consumed length)` 前缀判定、每 offset 16 边上限、多个音节位置同时纠错以及 `you` → `yao` 的一向性。若研究本地模型，保持默认关闭、无网络 sidecar、严格超时和 fail-closed；中英混输仍不得写成已实现。
+- 保持两端默认 OFF 且关闭时无 NearSearch fallback。显式实验要验证 whole-normal exact path 全局禁纠错、forward/reverse 单 bridge、整句最多一个 offset、32 次 search 与每 offset 16 边预算；长纠错最多一条且只能位于总排名 #2/#3。用 100,000 条合成个人词复跑污染与 P50/P95/P99，不能复用旧“双错首位”或默认 `you` → `yao` 证据。
+- 复核 100k snapshot 的负载、峰值内存、原子替换和旧 50k binary 拒绝/升级路径；R0W 的 94,382 行完整 TSV 在明确部署验收前必须保持 incoming 且不进入 Git。
+- 为 Replay Lab 接上经过审查的 Squirrel/Weasel producer 与后台 sink，证明按键热路径只尝试写有界 ring、队满只计 `drop_count`、暂停/保护上下文立即生效；`start` 命令本身不得被当作捕获证明。
 - 保持表情功能 fail-closed，直到存在不可伪造的 typed/armed native channel。未来另审内容提供商、许可证、隐私确认、缓存、删除和端到端加密收藏模型。
 
 ### P2：发布与实机矩阵
@@ -234,6 +253,7 @@ make -C engine test
 cmake -S librime-yunpin -B build/librime-yunpin-review
 cmake --build build/librime-yunpin-review --parallel
 ctest --test-dir build/librime-yunpin-review --output-on-failure
+(cd replaylab && go test ./...)
 make -C platform/macos test
 (cd platform/windows && python3 tests/test_windows_client.py -v)
 docker build --target test -f integration/Dockerfile -t yunpin-integration:review .
@@ -249,7 +269,9 @@ python3 scripts/check_submodule_locks.py
 
 1. 可信设备 roster、配对、恢复、撤销和 key rotation 具备端到端正负测试；账户创建可回滚或可清理。
 2. 会话 learning、宿主删除/保护上下文证明、加密持久化、snapshot rebuild/atomic reload 在两端实机闭环；按键路径始终离线且内存读取。
-3. 确定性拼音纠错在锁定生产词库和两端真实宿主上通过精确优先、污染与性能矩阵；任何可选本地 sidecar 均离线、超时 fail-closed，未完成的中英混输不得进入能力声明。
+3. 自动拼写纠错继续默认关闭且无 NearSearch fallback；显式实验在锁定生产词库与两端宿主验证完整 exact path 禁用、单 offset bridge、32-search 预算及 #2/#3 候选限制后，才可讨论开放。
 4. 表情功能在 typed/armed 安全通道和独立加密数据模型完成前继续 fail-closed。
 5. NAS 经 TLS 完成可清理的两设备密文同步、撤销与故障恢复测试。
-6. 当前最终 HEAD 的 Windows/macOS 包在干净环境重建并完成对应源码、签名、公证与跨应用安装矩阵。
+6. 100k-capable binary 完成 R0W 94,382 行 incoming TSV 的可回滚部署验收；旧 50k binary 不得被当作完整迁移结果。
+7. Replay Lab native producer/sink 接通并用合成/授权 trace 证明持续捕获、暂停、丢帧与本地清理边界；`start` 单独不算验收。
+8. 当前最终 HEAD 的 Windows/macOS 包在干净环境重建并完成对应源码、签名、公证与跨应用安装矩阵。

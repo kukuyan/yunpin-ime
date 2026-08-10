@@ -20,6 +20,9 @@ engine:
     - fallback_segmentor
   translators:
     - script_translator
+    # Gives the synthetic typo fixture one ordinary fail-safe candidate, so
+    # the real YunPin filter can prove a correction stays at total rank #2.
+    - echo_translator
   filters:
     - yunpin_filter@yunpin
     - uniquifier
@@ -32,6 +35,7 @@ translator:
   dictionary: yunpin_e2e
   enable_user_dict: false
   enable_sentence: false
+  enable_completion: false
   enable_correction: true
   corrector_component: yunpin_corrector
   spelling_hints: 32
@@ -43,5 +47,8 @@ yunpin:
   max_candidates: 2
   enabled: true
   short_input_guard: true
+  long_correction_guard: true
+  long_correction_min_chars: 12
   session_learning: true
   typo_correction: true
+  typo_reviewed_confusions: false

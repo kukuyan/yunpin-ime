@@ -15,59 +15,88 @@
 - Pinned, demoted, learned-once, learned-twice, imported, public, base, and tombstoned candidates.
 - At most two personal entries among the first eight.
 - `中国石化销售股份有限公司河北石家庄石油分公司` is top three for `zhongguo...`, `zhongguoshihua...`, and `zgsh...`, and first for the complete Pinyin.
-- 50,000 synthetic personal phrases, warm P95 no more than 20 ms.
+- 100,000 synthetic personal phrases, warm P95 no more than 20 ms.
 
-## Deterministic Pinyin typo correction
+## Experimental automatic Pinyin correction
 
+- Assert both shipped overlays set `translator/enable_correction: false`,
+  `yunpin/typo_correction: false` and
+  `yunpin/typo_reviewed_confusions: false`. With the component name present but
+  YunPin correction disabled, its factory must return no corrector and must not
+  instantiate or fall back to `NearSearchCorrector`.
 - Unit-test the bounded generator for physical QWERTY neighbours, one missing
-  key, one extra key, one adjacent transposition and the reviewed one-way
-  `you` → `yao` confusion. Reject non-lowercase, one-letter and 128-byte-or-more
-  adversarial segments; enforce the six-byte syllable and 768-raw-variant caps.
-  After Prism validation/deduplication, assert deterministic ordering and no
-  more than 16 correction edges at any input offset.
-- Apply the exact version-locked component-selector/exact-classification patch
-  to clean librime 1.16 and 1.17 trees, verify each locked SHA-256, and reject
-  base-commit drift. Register `yunpin_corrector` only; assert that the global
-  `corrector` is not replaced for other schemas. Verify exact matches are keyed
-  by `(spelling ID, consumed input length)`, not spelling ID alone.
-- Through the real merged ScriptTranslator, Dictionary, Prism and Rime C API,
-  require all of these first-candidate results from synthetic public fixtures:
-  exact `shousubijiaokuaideshihou`, neighbour-only `shouxubijiaokuaideshihou`,
-  missing `shosubijiaokuaideshihou`, omitted `o` in
-  `shousubijiakuaideshihou`, extra-key `shouusubijiaokuaideshihou`, transposed
-  `shuosubijiaokuaideshihou`, reviewed
-  `youjubeiyidingdejiucuolianxiangnengli`, and missing final key
-  `zhuantai`. The original two-error input
-  `shouxubijiakuaideshihou` must also return `手速比较快的时候` first and expose
-  canonical spelling in its correction comment.
-- Protect short exact input in the same real pipeline: `xu` must keep `需`
-  first and `you` must keep `有` first. For `shangban`, include both exact
-  “上班” and extra-key correction “山班”, give the correction 50 times the
-  synthetic dictionary weight, and require exact before correction while
-  retaining both candidates. This catches a regression where a corrected
-  `shan` consuming five bytes inherits the exact four-byte-prefix match. Add
-  production-dictionary collision probes before claiming this as a hard
-  ordering guarantee for every exact entry; generator non-emission of an
-  unchanged spelling alone is insufficient.
-- For each corrected long performance probe, warm 10 times, then time only the
-  final key and enumerate the resulting candidates for 100 samples. P95 must be
-  no more than 20 ms. The completed merged-librime synthetic run measured
-  534–841 µs for the two-error `shouxubijiakuaideshihou` input and
-  907–1611 µs for the 37-byte reviewed `you` → `yao` input across two
-  independent runs. Record future machine/runtime changes;
-  these two numbers are not full Rime Ice or desktop-host guarantees.
-- Run collision and pollution tests against the locked production public packs
-  and a 50,000-entry synthetic personal snapshot. Stock librime applies one
-  fixed `log(0.01)` credibility to every correction edge, so explicitly test
-  whether dictionary/context weights let a corrected candidate displace an
-  exact candidate beyond the existing 50× collision; YunPin edit cost is not a
-  fine-grained ranking penalty.
+  key, one extra key and one adjacent transposition. Reject non-lowercase,
+  one-letter and 128-byte-or-more adversarial segments; enforce six-byte
+  syllables and 768 raw variants. `you` → `yao` must be absent by default and
+  appear only when the separately reviewed-confusion experiment is explicit.
+- Apply the exact version-locked compatibility patch to clean librime 1.16 and
+  1.17 trees, verify each locked SHA-256 and reject base-commit drift. Keep the
+  schema-local `yunpin_corrector`; do not replace the global corrector used by
+  other schemas.
+- In a revised opt-in real ScriptTranslator/Dictionary/Prism/Rime C API suite,
+  construct inputs with multiple possible segmentations and assert that any
+  complete all-normal exact path suppresses all correction searches for the
+  whole composition.
+- For input without a complete exact path, assert every admitted correction is
+  a single bridge from a forward exact-reachable offset to a reverse
+  exact-suffix-reachable offset. No composition may add corrections at more than
+  one input offset; attempted correction searches are capped at 32, and Prism
+  validation/deduplication exposes at most 16 edges at the searched offset.
+- Do not retain the historical expectation that a two-offset/double-error input
+  must return the intended sentence first. Add a negative test proving the
+  second correction offset is unavailable. Likewise, default mode must never
+  rely on `you` → `yao`.
+- For normalized input of at least 12 characters, assert the filter retains at
+  most one correction: total rank #2 with no private leader, total rank #3 with
+  one, and none with two private leaders, correction-only upstream, or a
+  correction beyond the first-page window. No discarded correction may leak to
+  a later page.
+- Run the revised explicit experiment against locked production public packs
+  and a 100,000-entry synthetic personal snapshot. Warm and time final-key
+  processing, enumerate candidates, report P50/P95/P99 and enforce P95 no more
+  than 20 ms. Historical double-error and reviewed-confusion timings are not
+  evidence for the current graph policy.
 - No correction test may open the network or read a model. A future optional
   local-model sidecar needs separate deadline, crash, malformed-output and
-  offline tests proving timeout fails closed to existing exact/deterministic
-  results without delaying the key path. Chinese-English mixed-input tests are
-  deferred until a concrete segmenter/ranker exists; listing that direction is
-  not an acceptance result.
+  offline tests proving timeout fails closed to the ordinary exact path without
+  delaying the key path. There is no NearSearch/model fallback today.
+
+## Private snapshot capacity and R0W migration
+
+- Parse and retain exactly 100,000 unique snapshot rows, including an explicit
+  regression above the legacy 50,000 boundary. Row 100,001 must be counted as
+  rejected rather than accepted; malformed and duplicate rows also remain
+  explicitly accounted for.
+- Exercise high-collision prefixes in at least five percent of timed queries.
+  Enforce query P95 ≤ 20 ms, parse plus build ≤ 15 seconds and incremental peak
+  RSS ≤ 256 MiB. The verified development run measured P95 1.672 ms and peak
+  increment 80.172 MiB; record machine/runtime details and do not generalize it
+  to native hosts.
+- Keep importer and runtime hard caps aligned at 100,000. Verify frequency sort
+  before truncation, duplicate merge and `over_private_snapshot_capacity`
+  accounting with synthetic data.
+- Treat the R0W 94,382-row conversion as incoming only. Before deployment,
+  verify the immutable source hash, complete TSV row count, zero capacity loss,
+  output outside Git and a newly built 100k-capable binary. The currently
+  installed legacy 50k binary is not valid full-migration acceptance evidence.
+
+## Replay Lab
+
+- Test strict `EventV1` decoding, unknown-field rejection, 8 KiB event limit,
+  UTF-8/text/candidate bounds, one-based selection consistency, canonical time,
+  contiguous sequence and episode lifecycle.
+- Test the append-only local store, fsync-before-metadata crash window, strict
+  status repair, lifecycle CLI, explicit ingest, deterministic report, export
+  outside the lab root and confirmed safe clear. Real traces must be rejected
+  from Git/private-data scans.
+- Test the default-disabled fixed 64-slot C++ SPSC ring, bounded native event
+  validation/serialization, 8 KiB drain boundary, FIFO order, overflow
+  `drop_count`, native-frame parsing and conversion to `EventV1`.
+- Until Squirrel/Weasel producers and a background sink are connected, assert
+  that `start` only creates a session/resume record and captures no input by
+  itself. Native acceptance requires continuous producer→ring→sink→store proof,
+  immediate pause/protected-context suppression, no disk/network wait on the
+  key path and explicit loss accounting.
 
 ## Correction learning and expression safety
 
@@ -155,7 +184,9 @@
 - With Full Access, opt-in learning writeback works while network access remains in the host app.
 - Secure text fields, phone-pad substitution, offline use, memory pressure, extension termination and App Review privacy disclosures are validated.
 
-R0W is deliberately excluded until its network returns and the operator re-authorizes a read-only snapshot procedure.
+R0W network access and the read-only conversion preview have been restored. The
+94,382-row complete TSV remains incoming and must not be described as deployed
+until a 100k-capable binary passes the migration checks above.
 
 ## Supply chain and interface syntax
 

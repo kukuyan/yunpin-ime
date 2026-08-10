@@ -34,13 +34,38 @@ namespace {
 using namespace rime;
 
 const std::string kPhrase = "你好世界";
+const std::string kLongPrivatePhrase = "长期个人候选";
+const std::string kPrivateFirst = "双个人候选一";
+const std::string kPrivateSecond = "双个人候选二";
 const std::string kSearchLikeText = "yunpin-search:nihaoshijie";
 const std::string kFavoriteLikeText = "yunpin-fav:nihaoshijie";
 const std::string kInactive = "<filter inactive>";
 
+struct FakeItem {
+  std::string text;
+  bool correction{false};
+};
+
+FakeItem Ordinary(std::string text) {
+  return FakeItem{std::move(text), false};
+}
+
+FakeItem Correction(std::string text) {
+  return FakeItem{std::move(text), true};
+}
+
 class FakeUpstream : public Translation {
  public:
   explicit FakeUpstream(std::vector<std::string> items)
+      : items_() {
+    items_.reserve(items.size());
+    for (std::string& item : items) {
+      items_.push_back(Ordinary(std::move(item)));
+    }
+    set_exhausted(items_.empty());
+  }
+
+  explicit FakeUpstream(std::vector<FakeItem> items)
       : items_(std::move(items)) {
     set_exhausted(items_.empty());
   }
@@ -57,11 +82,14 @@ class FakeUpstream : public Translation {
     if (cursor_ >= items_.size()) {
       return nullptr;
     }
-    return New<SimpleCandidate>("fake", 0, 5, items_[cursor_]);
+    auto candidate =
+        New<SimpleCandidate>("fake", 0, 5, items_[cursor_].text);
+    candidate->set_correction(items_[cursor_].correction);
+    return candidate;
   }
 
  private:
-  std::vector<std::string> items_;
+  std::vector<FakeItem> items_;
   std::size_t cursor_{0};
 };
 
@@ -82,6 +110,7 @@ struct Harness {
     schema.set_page_size(8);  // the shipped menu/page_size
     config.bools_["yunpin/enabled"] = true;
     config.bools_["yunpin/short_input_guard"] = true;
+    config.bools_["yunpin/long_correction_guard"] = true;
     config.bools_["yunpin/session_learning"] = true;
     config.ints_["yunpin/max_candidates"] = 2;
   }
@@ -100,6 +129,12 @@ void WriteSnapshot(const std::filesystem::path& user_data_dir) {
   std::ofstream out(user_data_dir / "yunpin" / "private.tsv");
   out << "phrase\tpinyin\tsource\tuse_count\tpinned\n";
   out << kPhrase << "\tni hao shi jie\tcodex_history\t9\ttrue\n";
+  out << kLongPrivatePhrase
+      << "\tchang qi ge ren hou xuan\tcodex_history\t8\ttrue\n";
+  out << kPrivateFirst
+      << "\tshuang ge ren hou xuan\tcodex_history\t10\ttrue\n";
+  out << kPrivateSecond
+      << "\tshuang ge ren hou xuan\tcodex_history\t9\ttrue\n";
 }
 
 void EmitCommit(Harness& harness,
@@ -168,6 +203,35 @@ std::vector<std::string> RunWithUpstream(
     Harness& harness,
     const std::string& input,
     std::vector<std::string> upstream,
+    std::size_t limit) {
+  harness.context.input_ = input;
+  Segment segment(0, static_cast<int>(input.size()));
+  segment.tags.insert("abc");
+  if (!filter.AppliesToSegment(&segment)) {
+    return {kInactive};
+  }
+  CandidateList candidates;
+  auto translation =
+      filter.Apply(New<FakeUpstream>(std::move(upstream)), &candidates);
+
+  std::vector<std::string> texts;
+  std::size_t guard = 0;
+  while (translation && !translation->exhausted() && texts.size() < limit) {
+    assert(++guard < 1000 && "translation failed to terminate");
+    auto candidate = translation->Peek();
+    texts.push_back(candidate ? candidate->text() : "<null>");
+    if (!translation->Next()) {
+      break;
+    }
+  }
+  return texts;
+}
+
+std::vector<std::string> RunWithTaggedUpstream(
+    YunPinFilter& filter,
+    Harness& harness,
+    const std::string& input,
+    std::vector<FakeItem> upstream,
     std::size_t limit) {
   harness.context.input_ = input;
   Segment segment(0, static_cast<int>(input.size()));
@@ -294,6 +358,62 @@ void TestLongerInputAndPrivateDedupStayUnchanged() {
          RunWithUpstream(filter, harness, "nihaoshijie",
                          {kPhrase, "中国石化", "tail"}, 5),
          {kPhrase, "中国石化", "tail"});
+}
+
+void TestLongCorrectionGuardIsConservativeAndPageBounded() {
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    Expect("one long correction may use only total rank two",
+           RunWithTaggedUpstream(
+               filter, harness, "changshuruhuigui",
+               {Correction("c0"), Ordinary("o0"), Correction("c1"),
+                Ordinary("o1"), Correction("c2"), Ordinary("o2")},
+               8),
+           {"o0", "c0", "o1", "o2"});
+  }
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    Expect("personal head moves one correction to total rank three",
+           RunWithTaggedUpstream(
+               filter, harness, "changqigerenhouxuan",
+               {Correction("c0"), Ordinary("o0"), Correction("c1"),
+                Ordinary("o1")},
+               8),
+           {kLongPrivatePhrase, "o0", "c0", "o1"});
+  }
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    Expect("two personal heads leave no safe correction slot",
+           RunWithTaggedUpstream(
+               filter, harness, "shuanggerenhouxuan",
+               {Correction("c0"), Ordinary("o0"), Ordinary("o1")}, 8),
+           {kPrivateFirst, kPrivateSecond, "o0", "o1"});
+  }
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    Expect("correction-only upstream fails closed",
+           RunWithTaggedUpstream(filter, harness, "changshuruhuigui",
+                                 {Correction("c0"), Correction("c1")}, 8),
+           {});
+  }
+  {
+    Harness harness;
+    YunPinFilter filter(harness.ticket());
+    Expect("correction after total rank eight is discarded",
+           RunWithTaggedUpstream(
+               filter, harness, "changshuruhuigui",
+               {Ordinary("o0"), Ordinary("o1"), Ordinary("o2"),
+                Ordinary("o3"), Ordinary("o4"), Ordinary("o5"),
+                Ordinary("o6"), Ordinary("o7"), Correction("c8"),
+                Ordinary("tail")},
+               10),
+           {"o0", "o1", "o2", "o3", "o4", "o5", "o6", "o7",
+            "tail"});
+  }
 }
 
 void TestSessionCorrectionReranksBoundedUpstreamWindow() {
@@ -427,6 +547,7 @@ void TestBothFeatureSwitchesOffStayInactive() {
   Harness harness;
   harness.config.bools_["yunpin/enabled"] = false;
   harness.config.bools_["yunpin/short_input_guard"] = false;
+  harness.config.bools_["yunpin/long_correction_guard"] = false;
   harness.config.bools_["yunpin/session_learning"] = false;
   harness.config.bools_["yunpin/expression_search"] = true;
   YunPinFilter filter(harness.ticket());
@@ -467,6 +588,7 @@ int main() {
   TestCommandLikeOrdinaryTextStaysOrdinary();
   TestShortPinyinSuppressesOnlyLongPureCjkUpstream();
   TestLongerInputAndPrivateDedupStayUnchanged();
+  TestLongCorrectionGuardIsConservativeAndPageBounded();
   TestSessionCorrectionReranksBoundedUpstreamWindow();
   TestSessionBridgeFailsClosedOnUnprovenDeletion();
   TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable();

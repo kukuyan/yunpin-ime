@@ -12,6 +12,9 @@
 
 namespace {
 
+static_assert(yunpin::kMaxPrivateSnapshotEntries == 100000,
+              "the reviewed personal vocabulary must fit in one snapshot");
+
 void TestImporterFormatAndPinnedLongPhrase() {
   std::istringstream input(
       "phrase\tpinyin\tsource\tuse_count\tpinned\n"
@@ -68,6 +71,21 @@ void TestDuplicateSnapshotRowsAreRejectedBeforeIndexBuild() {
   assert(parsed.rejected_rows == 1);
 }
 
+void TestRowsBeyondLegacyFiftyThousandLimitAreRetained() {
+  constexpr std::size_t kRows = 50001;
+  std::ostringstream snapshot;
+  snapshot << "phrase\tpinyin\tsource\tuse_count\n";
+  for (std::size_t index = 0; index < kRows; ++index) {
+    snapshot << "synthetic-" << index << "\tyun pin\tsogou_import\t1\n";
+  }
+  std::istringstream input(snapshot.str());
+  const auto parsed = yunpin::ParsePrivateSnapshot(input);
+  assert(parsed.header_valid);
+  assert(parsed.accepted_rows == kRows);
+  assert(parsed.rejected_rows == 0);
+  assert(parsed.entries.size() == kRows);
+}
+
 void TestAtomicReplacementDuringQueries() {
   yunpin::SnapshotStore store;
   std::vector<yunpin::PhraseEntry> first{{
@@ -95,6 +113,7 @@ int main() {
   TestImporterFormatAndPinnedLongPhrase();
   TestHeaderAndLimitsAreClosedByDefault();
   TestDuplicateSnapshotRowsAreRejectedBeforeIndexBuild();
+  TestRowsBeyondLegacyFiftyThousandLimitAreRetained();
   TestAtomicReplacementDuringQueries();
   return 0;
 }

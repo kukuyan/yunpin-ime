@@ -137,11 +137,13 @@ class YunPinMergedTranslation : public Translation {
   YunPinMergedTranslation(an<Translation> upstream,
                           std::vector<of<Candidate>> front,
                           bool suppress_long_cjk_upstream,
+                          bool protect_long_corrections,
                           std::function<std::int32_t(std::string_view)>
                               correction_score)
       : upstream_(std::move(upstream)),
         front_(std::move(front)),
-        suppress_long_cjk_upstream_(suppress_long_cjk_upstream) {
+        suppress_long_cjk_upstream_(suppress_long_cjk_upstream),
+        protect_long_corrections_(protect_long_corrections) {
     for (const auto& candidate : front_) {
       injected_text_.insert(candidate->text());
     }
@@ -203,7 +205,8 @@ class YunPinMergedTranslation : public Translation {
     return Source::kNone;
   }
 
-  bool Suppressed(const an<Candidate>& candidate) const {
+  bool Suppressed(const an<Candidate>& candidate,
+                  bool discard_long_correction) const {
     if (!candidate) {
       return false;
     }
@@ -212,13 +215,16 @@ class YunPinMergedTranslation : public Translation {
     const bool overlong_short_input_prediction =
         suppress_long_cjk_upstream_ &&
         IsPureCjkAtLeast(candidate->text(), 3);
-    return duplicate || overlong_short_input_prediction;
+    const bool late_correction = discard_long_correction &&
+                                 protect_long_corrections_ &&
+                                 candidate->is_correction();
+    return duplicate || overlong_short_input_prediction || late_correction;
   }
 
   void SkipSuppressedUpstream() {
     while (upstream_ && !upstream_->exhausted()) {
       const auto candidate = upstream_->Peek();
-      if (!candidate || !Suppressed(candidate)) {
+      if (!candidate || !Suppressed(candidate, true)) {
         break;
       }
       upstream_->Next();
@@ -227,14 +233,22 @@ class YunPinMergedTranslation : public Translation {
 
   void PrepareUpstreamWindow(
       const std::function<std::int32_t(std::string_view)>& correction_score) {
-    constexpr std::size_t kMaxRankingWindow = 8;
+    constexpr std::size_t kCandidatePageSize = 8;
+    const std::size_t window_limit =
+        front_.size() < kCandidatePageSize
+            ? kCandidatePageSize - front_.size()
+            : 0;
     while (upstream_ && !upstream_->exhausted() &&
-           upstream_window_.size() < kMaxRankingWindow) {
+           upstream_window_.size() < window_limit) {
       const auto candidate = upstream_->Peek();
       if (!candidate) {
         break;
       }
-      if (!Suppressed(candidate)) {
+      // Corrections inside the bounded first page are retained temporarily so
+      // ProtectLongCorrections can choose at most one. Once this window has
+      // been consumed, every later correction is dropped instead of leaking
+      // onto another page.
+      if (!Suppressed(candidate, false)) {
         upstream_window_.push_back(candidate);
       }
       upstream_->Next();
@@ -244,7 +258,55 @@ class YunPinMergedTranslation : public Translation {
         [&](const of<Candidate>& left, const of<Candidate>& right) {
           return correction_score(left->text()) > correction_score(right->text());
         });
+    ProtectLongCorrections();
     SkipSuppressedUpstream();
+  }
+
+  void ProtectLongCorrections() {
+    if (!protect_long_corrections_ || upstream_window_.empty()) {
+      return;
+    }
+
+    const auto first_ordinary = std::find_if(
+        upstream_window_.begin(), upstream_window_.end(),
+        [](const of<Candidate>& candidate) {
+          return candidate && !candidate->is_correction();
+        });
+    if (first_ordinary == upstream_window_.end()) {
+      // With no ordinary evidence in the bounded page, fail closed. A later
+      // ordinary upstream candidate can still stream through, but an
+      // automatic correction never becomes the only visible choice.
+      upstream_window_.erase(
+          std::remove_if(upstream_window_.begin(), upstream_window_.end(),
+                         [](const of<Candidate>& candidate) {
+                           return candidate && candidate->is_correction();
+                         }),
+          upstream_window_.end());
+      return;
+    }
+
+    std::vector<of<Candidate>> ordered;
+    ordered.reserve(upstream_window_.size());
+    of<Candidate> selected_correction;
+    for (const auto& candidate : upstream_window_) {
+      if (candidate && candidate->is_correction()) {
+        if (!selected_correction) {
+          selected_correction = candidate;
+        }
+      } else if (candidate) {
+        ordered.push_back(candidate);
+      }
+    }
+
+    // One ordinary candidate must always precede recovery. With no private
+    // head the correction can be total rank #2; with one private head it can
+    // be total rank #3. Two private candidates leave no safe #2/#3 slot, so
+    // correction stays hidden. Every other correction is discarded rather
+    // than moved to a later page.
+    if (selected_correction && front_.size() < 2 && !ordered.empty()) {
+      ordered.insert(ordered.begin() + 1, selected_correction);
+    }
+    upstream_window_ = std::move(ordered);
   }
 
   void RefreshExhausted() { set_exhausted(SelectSource() == Source::kNone); }
@@ -256,6 +318,7 @@ class YunPinMergedTranslation : public Translation {
   std::size_t front_cursor_{0};
   std::size_t window_cursor_{0};
   bool suppress_long_cjk_upstream_{false};
+  bool protect_long_corrections_{false};
 };
 
 bool IsSafeRelativePath(const std::string& path) {
@@ -289,12 +352,21 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
     config->GetString(name_space_ + "/snapshot", &snapshot_path_);
     config->GetBool(name_space_ + "/enabled", &enabled_);
     config->GetBool(name_space_ + "/short_input_guard", &short_input_guard_);
+    config->GetBool(name_space_ + "/long_correction_guard",
+                    &long_correction_guard_);
     config->GetBool(name_space_ + "/session_learning",
                     &session_learning_enabled_);
     int configured_limit = static_cast<int>(max_candidates_);
     if (config->GetInt(name_space_ + "/max_candidates", &configured_limit)) {
       max_candidates_ = static_cast<std::size_t>(
           std::clamp(configured_limit, 0, 2));
+    }
+    int configured_min_chars =
+        static_cast<int>(long_correction_min_chars_);
+    if (config->GetInt(name_space_ + "/long_correction_min_chars",
+                       &configured_min_chars)) {
+      long_correction_min_chars_ = static_cast<std::size_t>(
+          std::clamp(configured_min_chars, 6, 64));
     }
   }
   if (enabled_ && max_candidates_ > 0) {
@@ -335,7 +407,8 @@ YunPinFilter::~YunPinFilter() {
 }
 
 bool YunPinFilter::Active() const {
-  return enabled_ || short_input_guard_ || session_learning_enabled_;
+  return enabled_ || short_input_guard_ || long_correction_guard_ ||
+         session_learning_enabled_;
 }
 
 bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
@@ -457,6 +530,10 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   // Private phrases keep the head slots; max_candidates_ already bounds them.
   const bool suppress_long_cjk_upstream =
       short_input_guard_ && IsShortNormalizedPinyin(active_input_);
+  const std::string normalized = yunpin::NormalizePinyin(active_input_);
+  const bool protect_long_corrections =
+      long_correction_guard_ &&
+      normalized.size() >= long_correction_min_chars_;
   std::vector<of<Candidate>> front;
   if (enabled_ && private_ready_) {
     const auto matches = store_.Query(active_input_, max_candidates_);
@@ -471,14 +548,13 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
     }
   }
 
-  if (front.empty() && !suppress_long_cjk_upstream) {
+  if (front.empty() && !suppress_long_cjk_upstream &&
+      !protect_long_corrections) {
     // A learned correction can still reorder the bounded upstream window.
-    const std::string normalized = yunpin::NormalizePinyin(active_input_);
     if (!session_learning_ || normalized.empty()) {
       return translation;
     }
   }
-  const std::string normalized = yunpin::NormalizePinyin(active_input_);
   const auto correction_score =
       [session = session_learning_.get(), normalized](std::string_view text) {
         return session && !normalized.empty()
@@ -487,6 +563,7 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
       };
   return New<YunPinMergedTranslation>(std::move(translation), std::move(front),
                                       suppress_long_cjk_upstream,
+                                      protect_long_corrections,
                                       correction_score);
 }
 

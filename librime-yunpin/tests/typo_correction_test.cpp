@@ -63,11 +63,19 @@ void TestTouchTypingGoldens() {
                  TypoEditKind::kAdjacentTransposition),
         "an adjacent transposition inside one syllable must be recoverable");
 
-  const auto contextual = yunpin::GenerateTypoVariants(
+  const auto conservative = yunpin::GenerateTypoVariants(
       "youjubeiyidingdejiucuolianxiangnengli");
-  Check(Contains(contextual, "yao", 3,
+  Check(!Contains(conservative, "yao", 3,
+                  TypoEditKind::kReviewedConfusion),
+        "valid-syllable confusion you -> yao must be off by default");
+
+  yunpin::TypoCorrectionOptions reviewed_options;
+  reviewed_options.reviewed_confusions = true;
+  const auto reviewed = yunpin::GenerateTypoVariants(
+      "youjubeiyidingdejiucuolianxiangnengli", reviewed_options);
+  Check(Contains(reviewed, "yao", 3,
                  TypoEditKind::kReviewedConfusion),
-        "reviewed valid-syllable confusion you -> yao must be available");
+        "an explicitly enabled reviewed confusion must remain available");
 }
 
 void TestBoundsAndExactInputNonPollution() {

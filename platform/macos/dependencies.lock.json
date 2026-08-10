@@ -10,7 +10,7 @@
   "librime_patches": [
     {
       "path": "platform/patches/librime-1.16/0001-configurable-corrector-component.patch",
-      "sha256": "eeefa0a8fbad0145f61abcafb7c40449238a2466b5d62584b33d5880a3b2145d"
+      "sha256": "79b0e7629b5eee454855187ddfcfc4f3014f4b24425bd0aa45f104593994d51b"
     }
   ],
   "squirrel_patches": [

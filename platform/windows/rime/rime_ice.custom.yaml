@@ -6,7 +6,8 @@ patch:
   "menu/page_size": 8
   "menu/alternative_select_keys": "12345678"
   "engine/filters/@before 0": yunpin_filter@yunpin
-  "translator/enable_correction": true
+  # Experimental opt-in only. Keep the exact Rime path unchanged by default.
+  "translator/enable_correction": false
   "translator/corrector_component": yunpin_corrector
   "translator/enable_word_completion": true
   "translator/max_sentences": 2
@@ -18,10 +19,14 @@ patch:
   "yunpin/enabled": false
   # This guard is public-data-only and never reads a private snapshot.
   "yunpin/short_input_guard": true
+  # Keep literal long-input candidates ahead of automatic typo recovery.
+  "yunpin/long_correction_guard": true
+  "yunpin/long_correction_min_chars": 12
   # Keep learning off until TSF secure-input and authenticated IPC pass.
   "yunpin/session_learning": false
-  # Stateless and public-data-only: safe to enable before the TSF learning
-  # bridge, because the Corrector keeps no words and performs no I/O.
-  "yunpin/typo_correction": true
+  # The selected component is a strict no-op while this remains false; it does
+  # not fall back to librime's broader NearSearchCorrector.
+  "yunpin/typo_correction": false
+  "yunpin/typo_reviewed_confusions": false
   # Reserved and inert until a typed/armed native action channel exists.
   "yunpin/expression_search": false

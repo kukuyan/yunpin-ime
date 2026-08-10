@@ -10,13 +10,19 @@
 - Read-only librime private overlay, independent short-input upstream guard and
   bounded word-scoped session correction connected to librime notifiers, with
   protected-context filtering and first-eight stable reranking.
-- Schema-local `yunpin_corrector` for deterministic QWERTY-neighbour,
-  missing-key, extra-key, adjacent-transposition and reviewed `you` → `yao`
-  recovery. The exact librime 1.16/1.17 compatibility patches are version and
-  hash locked, and real merged-Rime synthetic E2E protects short exact input
-  plus a 50× exact-prefix collision while enforcing a 20 ms
-  corrected-final-key P95 gate. The adapter exposes at most 16 deterministic
-  correction edges per input offset.
+- A 100,000-entry private snapshot/import ceiling. The high-collision synthetic
+  benchmark measured 1.672 ms query P95 and 80.172 MiB incremental peak RSS;
+  the 94,382-row R0W conversion remains incoming until a 100k-capable binary is
+  deliberately deployed (the installed legacy binary still caps at 50,000).
+- Schema-local automatic spelling-correction experiment, default OFF on both
+  platforms with no `NearSearchCorrector` fallback. The locked librime 1.16/1.17
+  patches disable correction for any whole normal-exact path and otherwise
+  allow one forward/reverse exact bridge at one input offset, with 32 searches
+  total and at most 16 correction edges per searched offset. Long correction
+  display is capped to one item at total rank #2 or #3.
+- Local Replay Lab `EventV1`, append-only store, lifecycle CLI/export/report and
+  disabled fixed C++ ring foundation. Native Squirrel/Weasel producers and the
+  background sink are not connected; `start` does not activate monitoring.
 - Desktop-agent skeleton for non-synchronizing macOS Keychain, current-user
   Windows DPAPI, local status, one-shot sync and single-instance retry loop;
   production account creation remains fail-closed.
@@ -27,20 +33,19 @@
 
 ### Typing quality
 
-- Run the same correction/collision suite against the locked production Rime
-  Ice/public packs and a 50,000-entry synthetic personal index. Report exact
-  candidates displaced, page pollution, candidate count, memory and final-key
-  P50/P95/P99; the current small synthetic E2E is not this acceptance result.
-- Keep short exact Pinyin ahead of correction results. Stock librime gives all
-  correction edges the same fixed `log(0.01)` credibility, so use production
-  measurements to decide whether a separately reviewed custom translator or a
-  further version-locked scoring patch is needed. Do not treat generator edit
-  cost as a production ranking score. Retain the `(spelling ID, consumed
-  length)` exact-prefix regression and the 16-edge-per-offset graph budget.
-- Expand reviewed valid-syllable confusions only through corpus evidence,
-  explicit negative tests and one-way review. Keep each per-syllable variant
-  one edit and the overall search bounded; measure multi-error long phrases
-  separately.
+- Keep both shipped correction switches OFF. Build a revised explicit opt-in
+  merged-Rime suite against locked Rime Ice/public packs and a 100,000-entry
+  synthetic personal index; report pollution, memory and final-key P50/P95/P99.
+- Verify any whole normal-exact path globally suppresses correction. For invalid
+  input, require one forward exact prefix / reverse exact suffix bridge, no more
+  than one successful correction offset, at most 32 searches and 16 edges per
+  searched offset. Historical two-offset/double-error first-place results are
+  not acceptance evidence for this policy.
+- Enforce at most one long correction at total rank #2/#3, including negative
+  cases for two private leaders, correction-only upstream and late-page
+  corrections. Disabling YunPin correction must not fall back to NearSearch.
+- Expand reviewed valid-syllable confusions only through corpus evidence and a
+  separate opt-in. `you` → `yao` remains OFF by default.
 - Prototype Chinese-English mixed-input segmentation, English passthrough and
   boundary ranking. This is a direction only; no current preview capability or
   acceptance claim follows from this roadmap item.
@@ -49,13 +54,11 @@
   minimal bounded IPC payload, a strict deadline and fail-closed fallback that
   preserves exact/deterministic results when the process times out or crashes.
 
-Typing-quality acceptance requires the locked production-dictionary suite on
-both desktop runtimes, no short-exact regression, no network or disk wait in a
-key event, and documented collision/latency budgets. The current synthetic run
-measured corrected-final-key P95 ranges of 534–841 µs for the two-error
-`shouxubijiakuaideshihou` case and 907–1611 µs for the 37-byte reviewed
-`you` → `yao` case across two independent runs, but those figures are evidence for that fixture and machine,
-not production guarantees.
+Typing-quality acceptance requires the revised single-bridge suite on both
+desktop runtimes, no correction when a complete exact path exists, no network
+or disk wait in a key event, and documented pollution/latency budgets. No
+historical double-error or default reviewed-confusion timing should be reused
+as evidence for the current policy.
 
 ### Encrypted clipboard sync
 
@@ -102,6 +105,10 @@ keyboard extension network access.
   protected-context and host-deletion evidence, then connect its word-level
   aggregates and scores to encrypted local persistence and an explicit local
   habit-monitor UI/CLI.
+- Connect Replay Lab's reviewed native producers and background sink on both
+  frontends. Prove that `start` plus an active sink produces bounded events,
+  pause/protected contexts stop capture, queue overflow reports `drop_count`,
+  and no file operation occurs on the key path.
 - Rebuild immutable candidate snapshots after learning or sync, atomically swap
   generations and trigger Rime reload; transport-only tests do not satisfy this
   desktop gate.

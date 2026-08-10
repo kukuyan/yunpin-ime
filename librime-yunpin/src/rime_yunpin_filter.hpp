@@ -44,12 +44,18 @@ class YunPinFilter : public Filter {
   std::size_t active_start_{0};
   std::size_t active_end_{0};
   std::size_t max_candidates_{2};
+  std::size_t long_correction_min_chars_{12};
   // `enabled` gates private snapshot loading/injection. The short-input guard
   // is independent so the Windows preview can reject implausible upstream
   // predictions without enabling private data or session learning in a TSF
   // host.
   bool enabled_{true};
   bool short_input_guard_{true};
+  // When enabled by the schema, a spelling-correction candidate for a long
+  // composition cannot displace personal or ordinary candidates. At most one
+  // automatic correction may occupy total rank two or three; all remaining
+  // correction candidates fail closed instead of spilling onto later pages.
+  bool long_correction_guard_{false};
   bool session_learning_enabled_{false};
   bool private_ready_{false};
   std::unique_ptr<yunpin::SessionLearning> session_learning_;

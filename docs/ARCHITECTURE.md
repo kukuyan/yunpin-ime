@@ -21,16 +21,17 @@ development preview follows Squirrel's InputMethodKit architecture and targets
 a Universal arm64/x86_64 package for macOS 13+. Pinned upstream sources, patch
 sets, native build/package scripts and unsigned preview installers now exist.
 They are not signed releases. A merged librime C API test covers ranking,
-short-input filtering, deterministic typo correction, corrected-final-key
-latency and session correction, while native host UI, production-dictionary
-performance, persistent learning and synchronization still require end-to-end
-acceptance. The platforms share behavior and semantic theme tokens, not UI
-source code.
+short-input filtering and session correction. Automatic spelling correction is
+now default-off on both platforms; its revised single-bridge graph policy still
+needs a current opt-in merged-librime fixture and native-host acceptance.
+Production-dictionary performance, persistent learning and synchronization also
+remain end-to-end gates. The platforms share behavior and semantic theme
+tokens, not UI source code.
 
 The shared engine provides Pinyin segmentation, full-Pinyin prefix and initials
 indexes, deterministic ranking, revision-aware correction feedback and a
 word-scoped in-memory correction monitor. `librime-yunpin` supplies a read-only
-private-snapshot filter, a public short-input guard, a bounded deterministic
+private-snapshot filter, a public short-input guard, a default-off bounded
 Pinyin `yunpin_corrector`, and a bounded session learner connected to librime
 commit/update/unhandled-key/option/delete notifiers. It recognizes only
 same-pinyin replacement after an exact Unicode scalar count of unmodified
@@ -51,6 +52,15 @@ The first page contains eight entries. At most two are personal. Within the merg
 
 Pinned long phrases activate after two complete syllables or four initials. Automatically learned phrases become sync-eligible after two explicit selections. Tombstones are remove-wins and normal counters cannot resurrect them.
 
+One immutable private snapshot accepts at most 100,000 reviewed entries. The
+importer applies the same hard cap after duplicate merge and descending-frequency
+sort. A 100,000-row high-collision synthetic snapshot measured query P95 at
+1.672 ms and incremental peak RSS at 80.172 MiB on the verified development
+machine; the enforced budgets are 20 ms and 256 MiB. These measurements do not
+describe a native host or arbitrary real vocabulary. The R0W conversion has
+94,382 merged rows, but its complete TSV remains incoming and undeployed; an
+already installed legacy binary still has the former 50,000-entry ceiling.
+
 For one- or two-letter normalized Pinyin, the librime adapter independently
 filters only upstream predictions made entirely of at least three CJK
 ideographs. It retains one- and two-character words plus English, mixed and
@@ -64,60 +74,50 @@ commit text is untrusted dictionary data, so neither frontend interprets magic
 text prefixes as browser or filesystem commands. The reserved configuration is
 inert until an unforgeable, explicitly armed native action channel exists.
 
-## Local deterministic typo correction
+## Experimental automatic spelling correction
 
-The typo path is deliberately smaller than a language model and narrower than
-global spelling algebra. ScriptTranslator asks the schema-selected
-`yunpin_corrector` for corrections at a syllable-graph position. The component
-generates at most one bounded edit per variant—physical QWERTY neighbour,
-missing key, extra key or adjacent transposition—and admits only spellings
-found in the already-loaded Prism. A complete phrase path may select corrected
-variants at more than one syllable position. The only valid-syllable exception
-currently reviewed is the one-way `you` → `yao` confusion. It performs no file,
-disk, network or model I/O. After Prism validation and per-spelling-ID
-deduplication, variants are deterministically ranked and capped at 16 correction
-edges per input offset before Dictionary/Table traversal.
+The shipped Windows and macOS schemas set both
+`translator/enable_correction` and `yunpin/typo_correction` to false. Selecting
+the component name alone is inert: the component factory returns no corrector
+when disabled and deliberately does not fall back to librime's broader
+`NearSearchCorrector`.
 
-Exact short spellings remain on the normal Prism path. One-letter segments do
-not produce corrections, unchanged spelling is never emitted as a variant, and
-the merged-Rime regression fixture requires exact `xu` and `you` to stay first.
-Long-context goldens cover neighbour `shouxu...`, missing `shosu...`, extra
-`shouusu...`, transposed `shuosu...`, reviewed `youjubei...`, and the
-six-letter-syllable missing-key case `zhuantai` → `zhuangtai`. The original
-`shouxubijiakuaideshihou` fixture proves two corrected syllable positions can
-coexist in one path. The exact-prefix collision `shangban` keeps “上班” before
-corrected “山班” while retaining both candidates, even when the synthetic
-dictionary gives “山班” 50 times the weight.
+When an experiment explicitly enables both switches, the locked librime
+1.16/1.17 compatibility patch computes normal-exact reachability before graph
+expansion. Any complete normal exact path from the start to the end disables
+correction for the whole composition. Otherwise, a correction search is allowed
+only at a forward exact-reachable offset, and an admitted correction must end at
+a reverse exact-suffix-reachable offset. The resulting path therefore contains
+an exact prefix, one correction bridge and an exact suffix. At most one input
+offset may add correction edges in the entire composition, and at most 32
+searches may be attempted.
 
-The component is selected by a minimal compatibility patch that adds
-`translator/corrector_component` and changes exact-match identity from spelling
-ID alone to `(spelling ID, consumed input length)`. Without the second field, a
-corrected `shan` consuming all five bytes of `shang` could inherit the exact
-four-byte-prefix classification and escape the correction penalty. Separate
-patch files are locked to the exact macOS librime 1.16 and Windows librime 1.17
-commits and SHA-256 values. YunPin registers `yunpin_corrector` without
-replacing the global upstream `corrector`, so other schemas in the same process
-are unaffected.
+The portable generator changes one physical action per variant—QWERTY neighbour,
+missing key, extra key or adjacent transposition—and reads only the already
+loaded Prism. It fails closed at 128 input bytes, produces at most 768 raw
+variants, and exposes no more than 16 Prism-validated edges per searched offset.
+Reviewed valid-Pinyin substitutions, including `you` to `yao`, are a second
+explicit experiment and are off by default.
 
-Stock librime assigns every correction edge a fixed `log(0.01)` credibility;
-the generator's edit costs select and bound variants but are not a learned or
-fine-grained ranking score. The 50× `shangban` collision proves the penalty is
-applied to that exact-prefix case, not that arbitrary production weights can
-never overcome it. The current real ScriptTranslator/Dictionary/Rime C
-API E2E uses synthetic phrases, warms 10 times, measures 100 final-key samples
-per corrected long input and enforces P95 ≤ 20 ms. The completed fixture run
-measured 534–841 µs for the two-error `shouxubijiakuaideshihou` input and
-907–1611 µs for the 37-byte reviewed `you` → `yao` input across two independent
-runs. It does not prove ranking,
-pollution or latency against full Rime Ice plus a 50,000-entry personal index.
+For normalized long input of at least 12 characters, the merged candidate
+filter keeps at most one automatic correction. It may occupy total rank two
+when no private candidate leads, or total rank three when one private candidate
+leads. With two private leaders, no ordinary candidate, or a correction outside
+the bounded first-page window, it is omitted; corrections never spill to later
+pages. This is a safety cap, not evidence that automatic correction is ready to
+ship.
 
-A future local model, if justified by production-corpus measurements, is an
-optional default-off sidecar rather than part of the IME process. It must be
-offline, receive bounded data over local IPC, obey a strict deadline, and fail
-closed to exact/deterministic candidates when unavailable or invalid. It may
-never turn model or server availability into a typing dependency. Chinese-
-English mixed-input segmentation/ranking is also a future design direction;
-the current preview has no claimed mixed-input model.
+Portable generator tests, platform patch/config tests and stub candidate-order
+tests cover these bounds. Historical merged-Rime results that depended on two
+corrected offsets or default `you` to `yao` no longer describe the current
+policy. A revised opt-in real ScriptTranslator/Dictionary/Rime C API suite must
+verify the whole-exact disable rule, the single forward/reverse bridge and the
+32-search budget before performance or ranking claims are restored.
+
+A future local model, if justified by production-corpus measurements, remains
+an optional default-off sidecar. It must be offline, receive bounded data over
+local IPC, obey a strict deadline and fail closed to the ordinary exact path.
+There is no NearSearch or model fallback in the current disabled profile.
 
 ## Local state
 
@@ -135,6 +135,22 @@ a fully trusted secure-context signal or proof of the host editor buffer after
 Backspace. Production adapters must persist aggregates in the encrypted store,
 expose reports only on explicit local request, and update candidate snapshots
 through an atomic generation swap.
+
+## Local Replay Lab
+
+Replay Lab is a separate, opt-in local evidence path. The Go core implements a
+strict bounded `EventV1`, episode/sequence validation, an fsync-before-metadata
+append-only store, lifecycle CLI, export and deterministic report. The C++ side
+implements a disabled-by-default fixed 64-slot single-producer/single-consumer
+ring, bounded native frames, an 8 KiB JSON limit and drop counting. Native-frame
+parsing and synthetic conversion into `EventV1` are tested.
+
+Neither Squirrel nor Weasel currently produces these native events, and no
+background sink continuously drains the ring into the store. `start` creates a
+local session/resume record only; it is not evidence that monitoring is active.
+The future producer must do bounded memory writes only on the key path, while a
+separate local process performs disk I/O. Replay traces are private data and
+remain outside Git and synchronization.
 
 ## Sync service
 

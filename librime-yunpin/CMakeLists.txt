@@ -24,6 +24,7 @@ endif()
 set(yunpin_core_src
   "${YUNPIN_ENGINE_ROOT}/src/phrase_engine.cpp"
   "${YUNPIN_ENGINE_ROOT}/src/correction_learning.cpp"
+  src/replay_native.cpp
   src/snapshot_store.cpp
   src/session_learning.cpp
   src/typo_correction.cpp
@@ -80,6 +81,18 @@ else()
   )
   add_test(NAME yunpin_snapshot_tests COMMAND yunpin_snapshot_tests)
 
+  add_executable(yunpin_snapshot_benchmark
+    tests/benchmark_snapshot_store.cpp
+  )
+  target_link_libraries(yunpin_snapshot_benchmark PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  if(WIN32)
+    target_link_libraries(yunpin_snapshot_benchmark PRIVATE Psapi)
+  endif()
+  add_test(NAME yunpin_snapshot_benchmark COMMAND yunpin_snapshot_benchmark)
+
   add_executable(yunpin_session_learning_tests
     tests/session_learning_test.cpp
   )
@@ -89,6 +102,16 @@ else()
   )
   add_test(NAME yunpin_session_learning_tests
     COMMAND yunpin_session_learning_tests)
+
+  add_executable(yunpin_replay_native_tests
+    tests/replay_native_test.cpp
+  )
+  target_link_libraries(yunpin_replay_native_tests PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  add_test(NAME yunpin_replay_native_tests
+    COMMAND yunpin_replay_native_tests)
 
   add_executable(yunpin_typo_correction_tests
     tests/typo_correction_test.cpp

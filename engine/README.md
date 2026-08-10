@@ -84,6 +84,6 @@ make -C engine benchmark
 
 Windows CI uses the equivalent portable CMake build and MSVC tests.
 
-The benchmark constructs exactly 50,000 synthetic entries, warms the index, and
+The benchmark constructs exactly 100,000 synthetic entries, warms the index, and
 fails if measured lookup P95 exceeds 20 ms. Timing depends on the host, so CI
 records the measured value alongside pass/fail status.

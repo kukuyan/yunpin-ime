@@ -19,6 +19,7 @@ from .sogou import SogouConversionError, convert_with_pinned_tool, dispose_artif
 
 
 CONFIRMATION = "IMPORT"
+MAX_PRIVATE_SNAPSHOT_ENTRIES = 100_000
 
 
 def _assert_output_outside_repository(path: Path) -> None:
@@ -120,6 +121,20 @@ def _sogou_command(args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout,
         )
         result = parse_dictionary([artifact.converted_path], f"sogou_{artifact.source_format}")
+        # The native private snapshot has a hard 100,000-entry budget.  The
+        # dictionary parser has already merged duplicates and sorted entries by
+        # descending use_count, so truncating here retains the most valuable
+        # personal vocabulary instead of letting the runtime silently keep an
+        # arbitrary file prefix.
+        maximum = max(
+            1,
+            min(MAX_PRIVATE_SNAPSHOT_ENTRIES, int(args.max_sogou_phrases)),
+        )
+        if len(result.entries) > maximum:
+            result.rejected["over_private_snapshot_capacity"] += (
+                len(result.entries) - maximum
+            )
+            result.entries = result.entries[:maximum]
         print(
             json.dumps(
                 {
@@ -175,6 +190,15 @@ def build_parser() -> argparse.ArgumentParser:
     sogou_parser.add_argument("--converter-sha256", required=True, help="SHA-256 of that exact converter file")
     sogou_parser.add_argument("--dotnet", default="dotnet")
     sogou_parser.add_argument("--timeout", type=int, default=180)
+    sogou_parser.add_argument(
+        "--max-sogou-phrases",
+        type=int,
+        default=MAX_PRIVATE_SNAPSHOT_ENTRIES,
+        help=(
+            "retain at most this many highest-frequency merged entries "
+            f"(hard cap: {MAX_PRIVATE_SNAPSHOT_ENTRIES})"
+        ),
+    )
     _add_common_preview_options(sogou_parser)
     sogou_parser.set_defaults(handler=_sogou_command)
     return parser

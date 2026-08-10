@@ -24,11 +24,17 @@ class Candidate {
   size_t start() const { return start_; }
   size_t end() const { return end_; }
   double quality() const { return quality_; }
+  bool is_correction() const { return is_correction_; }
+  void set_correction(bool correction) { is_correction_ = correction; }
   virtual const string& text() const = 0;
   virtual string comment() const { return string(); }
   virtual string preedit() const { return string(); }
  private:
-  string type_; size_t start_ = 0; size_t end_ = 0; double quality_ = 0.;
+  string type_;
+  size_t start_ = 0;
+  size_t end_ = 0;
+  bool is_correction_ = false;
+  double quality_ = 0.;
 };
 using CandidateList = vector<of<Candidate>>;
 class SimpleCandidate : public Candidate {

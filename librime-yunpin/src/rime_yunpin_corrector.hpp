@@ -18,12 +18,16 @@ class YunPinCorrector : public Corrector {
                        size_t tolerance) override;
 
  private:
+  bool enabled_{false};
   yunpin::TypoCorrectionOptions options_;
 };
 
 // Registered under the unique `yunpin_corrector` name. A version-locked,
 // three-line librime compatibility patch lets ScriptTranslator select it from
-// schema configuration without changing the upstream default component.
+// schema configuration without changing the upstream default component. The
+// component returns no Corrector when YunPin correction is disabled, so the
+// upstream graph path performs no correction DP or extra Prism scan. It never
+// silently falls back to a different, broader corrector.
 class YunPinCorrectorComponent : public Corrector::Component {
  public:
   Corrector* Create(const Ticket& ticket) noexcept override;

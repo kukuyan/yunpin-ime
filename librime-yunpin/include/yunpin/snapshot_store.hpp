@@ -11,7 +11,11 @@
 
 namespace yunpin {
 
-inline constexpr std::size_t kMaxPrivateSnapshotEntries = 50000;
+// One immutable snapshot holds the complete reviewed personal vocabulary.  The
+// 100,000-row bound covers the current long-lived Sogou migration without a
+// lossy hot/cold split while still placing a deterministic ceiling on memory
+// use and rebuild work for malformed or unexpectedly large files.
+inline constexpr std::size_t kMaxPrivateSnapshotEntries = 100000;
 
 struct SnapshotLoadResult {
   std::vector<PhraseEntry> entries;

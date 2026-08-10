@@ -96,6 +96,7 @@ bool BetterRankedVariant(const RankedVariant& candidate,
 }  // namespace
 
 YunPinCorrector::YunPinCorrector(const Ticket& ticket) {
+  enabled_ = ConfigBool(ticket, "yunpin/typo_correction", false);
   options_.neighbour_substitution =
       ConfigBool(ticket, "yunpin/typo_neighbour_keys", true);
   options_.adjacent_transposition =
@@ -103,13 +104,13 @@ YunPinCorrector::YunPinCorrector(const Ticket& ticket) {
   options_.extra_key = ConfigBool(ticket, "yunpin/typo_extra_key", true);
   options_.missing_key = ConfigBool(ticket, "yunpin/typo_missing_key", true);
   options_.reviewed_confusions =
-      ConfigBool(ticket, "yunpin/typo_reviewed_confusions", true);
+      ConfigBool(ticket, "yunpin/typo_reviewed_confusions", false);
 }
 
 void YunPinCorrector::ToleranceSearch(
     const Prism& prism, const string& key,
     corrector::Corrections* results, size_t tolerance) {
-  if (!results || key.empty() || tolerance == 0) {
+  if (!enabled_ || !results || key.empty() || tolerance == 0) {
     return;
   }
   const auto variants = yunpin::GenerateTypoVariants(key, options_);
@@ -151,7 +152,7 @@ void YunPinCorrector::ToleranceSearch(
 
 Corrector* YunPinCorrectorComponent::Create(const Ticket& ticket) noexcept {
   if (!ConfigBool(ticket, "yunpin/typo_correction", false)) {
-    return new NearSearchCorrector();
+    return nullptr;
   }
   return new YunPinCorrector(ticket);
 }

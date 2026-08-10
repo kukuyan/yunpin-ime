@@ -21,9 +21,11 @@ phrase<TAB>pinyin<TAB>source<TAB>use_count[<TAB>pinned]
 ```
 
 `pinned` is optional and accepts `1`, `true`, `yes`, or `pinned`. A snapshot is
-limited to 50,000 entries. Invalid private rows are counted without logging the
-phrase or pinyin. If the file is absent or malformed, private injection stays
-disabled; the filter remains available for the short-input upstream guard.
+limited to 100,000 entries so the reviewed R0W Sogou vocabulary fits in one
+fully searchable index instead of a lossy hot/cold split. Invalid private rows
+are counted without logging the phrase or pinyin. If the file is absent or
+malformed, private injection stays disabled; the filter remains available for
+the short-input upstream guard.
 
 For a normalized one- or two-letter pinyin input, the merged translation skips
 only upstream candidates that are valid UTF-8, consist entirely of CJK
@@ -59,31 +61,35 @@ yunpin:
   max_candidates: 2
   enabled: true
   short_input_guard: true
+  long_correction_guard: true
   session_learning: true
-  typo_correction: true
+  # Experimental only; shipped desktop overlays keep both switches false.
+  typo_correction: false
+  typo_reviewed_confusions: false
   # Reserved for a future typed/armed native action channel. The development
   # preview keeps this false and ignores true values; it injects no action
   # candidates and performs no browser or favorite-file side effect.
   expression_search: false
 
 translator:
-  enable_correction: true
+  enable_correction: false
   corrector_component: yunpin_corrector
 ```
 
 `enabled` gates private snapshot loading and injection. `short_input_guard` and
-`session_learning` are independent: Windows can keep private data and learning
-disabled while still filtering an implausible three-character upstream
-prediction for a one/two-letter input. Set all three false to make the filter
-completely inert. `max_candidates` bounds the private phrases that may take
-head slots.
+`long_correction_guard` and `session_learning` are independent: Windows can
+keep private data and learning disabled while still filtering an implausible
+three-character upstream prediction for a one/two-letter input. Set all four
+filter switches false to make the filter completely inert. `max_candidates`
+bounds the private phrases that may take head slots.
 `expression_search` is deliberately inert. The existing Rime commit boundary
 provides plain text but no unforgeable proof that a commit came from an action
 candidate. Until both native frontends provide a typed, explicitly armed
 channel, ordinary, imported and synchronized text must always remain text.
-`typo_correction: false` makes the selected component fall back to librime's
-upstream `NearSearchCorrector`; set `translator/enable_correction: false` to
-disable ScriptTranslator correction entirely.
+`typo_correction: false` makes `yunpin_corrector` a strict no-op; it never
+falls back to librime's broader `NearSearchCorrector`. Both desktop overlays
+also ship with `translator/enable_correction: false`. Enabling typo recovery
+therefore requires an explicit experimental change to both switches.
 
 ## Deterministic Pinyin typo correction
 
@@ -94,54 +100,84 @@ one-edit variants for:
 - physical QWERTY neighbours, including diagonal `x` ↔ `s` for
   `shouxu...` → `shousu...`;
 - one missing key, one extra key, or one adjacent transposition;
-- the deliberately reviewed, one-way valid-syllable confusion `you` → `yao`.
+- an optional reviewed, one-way valid-syllable confusion such as `you` →
+  `yao`, disabled by default behind `typo_reviewed_confusions`.
 
 Every generated spelling must exist in the deployed Prism before it is exposed
 to ScriptTranslator. The portable generator never guesses Chinese text, opens
 a dictionary, reads a file, calls a network service or invokes a model. It
 rejects non-lowercase and adversarially long input, limits a syllable to six
 bytes, emits at most 768 variants, and changes no more than one physical typing
-action in a returned variant. A complete ScriptTranslator path may still use
-one such correction at more than one syllable position, as the two-error
-`shouxubijiakuaideshihou` golden demonstrates. The reviewed-confusion list is
-intentionally small; adding a valid-syllable pair is a code-review decision,
-not automatic learning. After Prism validation, the adapter keeps the best
-variant per spelling ID, deterministically orders the survivors and exposes at
-most 16 correction edges at any input offset. This is a syllable-graph budget,
-not merely a candidate-window display limit.
+action in a returned variant.
 
-Short exact input has an explicit regression boundary. The generator does not
-run for a one-letter segment and never returns the unchanged leading spelling;
-normal exact Prism matches remain non-correction paths. The real merged-Rime
-fixture requires `xu` → `需` and `you` → `有` to remain first even while longer
-context can recover `youjubei...` → `要具备...`. A prefix-collision fixture
-types `shangban`: exact “上班” must remain before corrected “山班” while both
-are present, even though “山班” has 50 times the dictionary weight. This
-protects the tested exact cases, but is not a proof that every exact entry in a
-production dictionary will outrank every corrected high-frequency phrase.
+The version-locked librime patch first builds forward and reverse reachability
+using only normal, non-correction Prism spellings. Completion, fuzzy and
+abbreviation spellings do not count as exact. If those transitions already
+segment the complete composition, the corrector is not called anywhere in the
+graph. Otherwise, a correction may survive only when its start is reachable by
+an exact prefix and its end reaches the input boundary through an exact suffix.
+Only one graph offset may add such bridge edges, so every surviving path has at
+most one physical edit. Inputs containing two invalid regions therefore fail
+closed instead of combining speculative edits. Leading/trailing delimiters use
+the semantics of the locked librime version.
+
+Experimental analysis is limited to inputs shorter than 128 bytes and to 32
+read-only `ToleranceSearch` attempts per complete graph build. Exhausting either
+budget yields no correction. The generator does not run for a one-letter
+segment and never returns the unchanged leading spelling. The reviewed-
+confusion list is intentionally small and default-off; enabling or adding a
+valid-syllable pair is a separately reviewed experiment, not automatic
+learning. After Prism validation, the adapter keeps the best variant per
+spelling ID, deterministically orders survivors and exposes at most 16 bridge
+edges at the selected offset. This is a syllable-graph budget, not merely a
+candidate-window display limit.
+
+The experimental bridge search can still inspect several exact-prefix offsets
+before finding a late error. A measured tail-extra-key case required 13 bounded
+variant attempts; selecting the bridge offset more directly remains a P1
+optimization. The shipped defaults avoid that work entirely: with
+`translator/enable_correction: false` no corrector is constructed, so the
+forward/reverse analysis and all `ToleranceSearch` calls are skipped.
+
+For a long composition, `long_correction_guard` adds a second fail-closed
+boundary at candidate display time. Personal candidates remain at the head and
+an ordinary upstream candidate must precede recovery. At most one correction
+may appear, only at total rank #2 or #3. If no ordinary candidate is available,
+or two personal candidates already occupy the safe slots, correction is hidden.
+All additional corrections—including any correction beyond the first eight
+total candidates—are discarded rather than moved to a later page.
 
 Upstream ScriptTranslator only knows whether a path is a correction. The
 locked librime 1.16/1.17 implementation assigns every correction edge the same
 credibility `log(0.01)`; YunPin's edit costs bound and choose variants but do
 not become a fine-grained candidate-ranking penalty. Dictionary weights,
-segmentation and context can therefore still affect final ordering. The real
-Rime C API E2E uses a small synthetic dictionary and checks neighbour, missing,
-extra, transposed, reviewed-confusion and two-error long inputs plus exact
-controls. After 10 warmups it measures 100 final-key samples per corrected long
-input and requires P95 no more than 20 ms. Two independent completed runs
-measured 534–841 µs for the two-error `shouxubijiakuaideshihou` input and
-907–1611 µs for the 37-byte reviewed `you` → `yao` input. This is a useful pipeline regression, not a
-production Rime Ice or 50,000-personal-entry benchmark.
+segmentation and context can therefore still affect final ordering after the
+feature is explicitly enabled. Earlier native fixtures that expected two
+corrections in one sentence or default `you` → `yao` recovery describe the
+retired aggressive policy and are not acceptance evidence for this conservative
+revision; a future experimental native build must be re-baselined separately.
 
 Selecting the component needs a minimal version-locked librime compatibility
-patch. It adds `translator/corrector_component` and keys exact-match identity by
-both spelling ID and consumed input length. The latter ensures a corrected
-`shan` that consumes the extra `g` in `shang` is still marked as a correction
-instead of inheriting an exact shorter-prefix match. macOS pins the patch to
-librime 1.16 and Windows to librime 1.17; each dependency manifest locks the
-patch path and SHA-256, and the build verifies it applies to the recorded
-upstream commit. YunPin registers only `yunpin_corrector` and never replaces
-the process-global `corrector`, so unrelated schemas retain upstream behavior.
+patch. It adds `translator/corrector_component`, tracks exact identity by both
+spelling ID and consumed input length, and applies the exact-prefix/suffix
+one-edge bridge rule above. macOS pins the patch to librime 1.16 and Windows to
+librime 1.17; each dependency manifest locks the patch path and SHA-256, and the
+build verifies it applies to the recorded upstream commit. YunPin registers
+only `yunpin_corrector` and never replaces the process-global `corrector`, so
+unrelated schemas retain upstream behavior.
+
+The patch adds a correction flag to librime's `Candidate` object and therefore
+defines a YunPin-specific native ABI. All native librime, frontend and plugin
+components must be rebuilt from the same patched source. Do not mix this build
+with stock or third-party precompiled librime modules; avoiding the base-class
+layout change is a longer-term compatibility improvement.
+
+`youceshizhanghaoma` illustrates a different problem: “右侧是账号吗” and
+“右侧市长好吗” can both arise from valid exact Pinyin segmentation. This is a
+language-model, phrase-frequency and personal-learning ranking problem, not a
+spelling-edit problem. The conservative corrector must not claim to solve it;
+personal phrase learning or a separately bounded exact-path reranker is the
+appropriate future layer.
 
 A learned local model is not part of this preview. A future experiment may use
 an optional, default-off process sidecar, but it must have no network access,
@@ -178,14 +214,25 @@ before installed desktop clients can display history across restarts.
 
 ## Build modes
 
-At repository root the directory builds four test targets and no plugin: the
-snapshot/parser tests, the session-learning state-machine tests, the portable
-typo-variant tests, and a candidate-ordering test that compiles the real
+At repository root the directory builds five test targets and no plugin: the
+snapshot/parser tests, a synthetic 100,000-row snapshot benchmark, the
+session-learning state-machine tests, the portable typo-variant tests, and a
+candidate-ordering test that compiles the real
 `src/rime_yunpin_filter.cpp` against `tests/rime_stubs/`. Those stubs declare
 only the slice of the librime API the filter touches, so ordering regressions
 are caught on a machine without librime, Boost or glog. They are pinned to the
 librime commit in `platform/upstream-lock.json`; re-check them against the real
 headers whenever that moves.
+
+The benchmark uses generated public fixture values only. It requires all
+100,000 rows to survive parsing and index replacement, parse plus build to
+finish within 15 seconds, hot-query P95 to remain at or below 20 ms, and the
+incremental peak working set to remain at or below 256 MiB. It prints the
+measured parse, build, P95, maximum latency and resident-memory values on every
+run. Ten thousand rows deliberately share one two-syllable prefix and that
+high-collision lookup occupies more than five per cent of samples, so P95
+cannot hide it. The broad load/memory ceilings are regression guards, not
+typical targets.
 
 ```bash
 cmake -S librime-yunpin -B build/librime-yunpin

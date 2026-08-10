@@ -107,6 +107,17 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertIn(lock["nested_submodules"]["librime"], patch_text)
             self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
             self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
+            self.assertIn("bool correction_offset_used = false", patch_text)
+            self.assertIn("kMaxCorrectionInputBytes = 128", patch_text)
+            self.assertIn("kMaxCorrectionSearchesPerInput = 32", patch_text)
+            self.assertIn("if (correction_analysis_enabled)", patch_text)
+            self.assertIn("vector<vector<size_t>> normal_exact_ends", patch_text)
+            self.assertIn("exact_path_reachable[current_pos]", patch_text)
+            self.assertIn("exact_suffix_reachable[correction_end]", patch_text)
+            self.assertIn("has_full_normal_exact_path", patch_text)
+            self.assertIn("++correction_searches", patch_text)
+            self.assertNotIn("!has_exact_match", patch_text)
+            self.assertIn("if (correction_added)", patch_text)
             subprocess.run(
                 ["git", "-C", str(SQUIRREL / "librime"), "apply", "--check", str(patch)],
                 check=True,
@@ -123,6 +134,9 @@ class MacOSIntegrationTests(unittest.TestCase):
             ROOT / "librime-yunpin" / "src" / "rime_yunpin_corrector.cpp"
         ).read_text(encoding="utf-8")
         self.assertIn("kMaxCorrectionsPerOffset = 16", adapter)
+        self.assertIn("if (!enabled_ || !results", adapter)
+        self.assertIn("return nullptr;", adapter)
+        self.assertNotIn("new NearSearchCorrector", adapter)
 
     def test_preview_has_unique_input_method_identity_and_offline_updates(self) -> None:
         with (self.prepared / "resources" / "Info.plist").open("rb") as stream:
@@ -214,10 +228,12 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertTrue(manifest["yunpin_ranking_headless_e2e"])
         self.assertFalse(manifest["yunpin_ranking_native_host_e2e"])
         self.assertTrue(manifest["yunpin_typo_correction_librime_e2e"])
-        self.assertTrue(
-            manifest["yunpin_typo_correction_exact_prefix_collision_e2e"]
-        )
+        self.assertTrue(manifest["yunpin_typo_correction_full_exact_zero_expansion_e2e"])
+        self.assertTrue(manifest["yunpin_typo_correction_single_bridge_e2e"])
+        self.assertTrue(manifest["yunpin_typo_correction_double_error_fail_closed_e2e"])
+        self.assertTrue(manifest["yunpin_typo_correction_rank_guard_e2e"])
         self.assertEqual(16, manifest["yunpin_typo_correction_max_edges_per_offset"])
+        self.assertEqual(32, manifest["yunpin_typo_correction_max_searches_per_input"])
         self.assertFalse(manifest["yunpin_typo_correction_native_host_e2e"])
         self.assertFalse(manifest["yunpin_typo_correction_production_dictionary_e2e"])
         self.assertTrue(manifest["yunpin_session_correction_librime_e2e"])
@@ -226,6 +242,20 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertFalse(manifest["mixed_chinese_english_input"])
         self.assertFalse(manifest["encrypted_cloud_sync"])
         self.assertFalse(manifest["production_signed"])
+
+        fixture_schema = (
+            MACOS_DIR / "tests" / "fixtures" / "yunpin_e2e.schema.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("- echo_translator", fixture_schema)
+        self.assertIn("long_correction_guard: true", fixture_schema)
+        self.assertIn("typo_reviewed_confusions: false", fixture_schema)
+        fixture_source = (MACOS_DIR / "tests" / "yunpin_rime_e2e.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"shujukushiyongdeshinagebanben"', fixture_source)
+        self.assertIn('"shousubijiaokuaideshihouu"', fixture_source)
+        self.assertIn('"shouusubijiaokuaideshihouu"', fixture_source)
+        self.assertIn('"youceshizhanghaoma"', fixture_source)
 
     def test_rime_overlay_enables_the_bounded_private_filter(self) -> None:
         overlay = (ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml").read_text(
@@ -236,11 +266,12 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("yunpin/max_candidates\": 2", overlay)
         self.assertIn("yunpin/short_input_guard\": true", overlay)
         self.assertIn("yunpin/session_learning\": true", overlay)
-        self.assertIn("translator/enable_correction\": true", overlay)
+        self.assertIn("translator/enable_correction\": false", overlay)
         self.assertIn(
             "translator/corrector_component\": yunpin_corrector", overlay
         )
-        self.assertIn("yunpin/typo_correction\": true", overlay)
+        self.assertIn("yunpin/typo_correction\": false", overlay)
+        self.assertIn("yunpin/typo_reviewed_confusions\": false", overlay)
 
     def test_dependency_fetch_initializes_librime_before_runtime_copy(self) -> None:
         fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(encoding="utf-8")

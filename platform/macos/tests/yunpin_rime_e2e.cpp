@@ -145,25 +145,64 @@ bool ExpectCandidateFirst(RimeApi* api,
   return true;
 }
 
-bool ExpectExactBeforeCorrection(RimeApi* api,
-                                 RimeSessionId session,
-                                 const char* input,
-                                 const char* exact,
-                                 const char* corrected) {
+bool ExpectCandidateAtRank(RimeApi* api,
+                           RimeSessionId session,
+                           const char* input,
+                           const char* expected,
+                           std::size_t expected_rank,
+                           const char* correction_hint = nullptr) {
+  std::vector<std::string> candidates;
+  if (!Compose(api, session, input, &candidates) || expected_rank == 0 ||
+      candidates.size() < expected_rank ||
+      candidates[expected_rank - 1] != expected) {
+    std::cerr << "unexpected rank for " << expected << " after " << input
+              << "; wanted #" << expected_rank << ':';
+    PrintCandidates(candidates);
+    return false;
+  }
+  if (correction_hint) {
+    const std::string comment = CandidateComment(api, session, expected);
+    if (comment.find(correction_hint) == std::string::npos) {
+      std::cerr << "corrected candidate for " << input
+                << " did not expose its canonical spelling; comment=["
+                << comment << "]\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ExpectCandidateAbsent(RimeApi* api,
+                           RimeSessionId session,
+                           const char* input,
+                           const char* unexpected) {
   std::vector<std::string> candidates;
   if (!Compose(api, session, input, &candidates)) {
     return false;
   }
-  const auto exact_position = std::find(candidates.begin(), candidates.end(), exact);
-  const auto corrected_position =
-      std::find(candidates.begin(), candidates.end(), corrected);
-  if (exact_position == candidates.end() ||
-      corrected_position == candidates.end() ||
-      exact_position >= corrected_position) {
-    std::cerr << "exact candidate did not retain its correction penalty for "
-              << input << ':';
+  if (Contains(candidates, unexpected)) {
+    std::cerr << "unexpected speculative candidate for " << input << ':';
     PrintCandidates(candidates);
     return false;
+  }
+  return true;
+}
+
+bool ExpectCandidatesPresent(RimeApi* api,
+                             RimeSessionId session,
+                             const char* input,
+                             const std::vector<std::string>& expected) {
+  std::vector<std::string> candidates;
+  if (!Compose(api, session, input, &candidates)) {
+    return false;
+  }
+  for (const auto& text : expected) {
+    if (!Contains(candidates, text)) {
+      std::cerr << "missing exact homophone candidate " << text << " for "
+                << input << ':';
+      PrintCandidates(candidates);
+      return false;
+    }
   }
   return true;
 }
@@ -190,7 +229,8 @@ bool SelectAndDrain(RimeApi* api,
 bool BenchmarkFinalKey(RimeApi* api,
                        RimeSessionId session,
                        const std::string& input,
-                       const std::string& expected) {
+                       const std::string& expected,
+                       std::size_t expected_rank) {
   if (input.size() < 2) {
     return false;
   }
@@ -213,7 +253,8 @@ bool BenchmarkFinalKey(RimeApi* api,
     const std::vector<std::string> candidates = Candidates(api, session);
     const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - start);
-    if (candidates.empty() || candidates.front() != expected) {
+    if (expected_rank == 0 || candidates.size() < expected_rank ||
+        candidates[expected_rank - 1] != expected) {
       return false;
     }
     if (iteration >= kWarmups) {
@@ -222,7 +263,7 @@ bool BenchmarkFinalKey(RimeApi* api,
   }
   std::sort(microseconds.begin(), microseconds.end());
   const std::int64_t p95 = microseconds[94];
-  std::cout << "YunPin corrected-final-key P95 " << p95 << "us for "
+  std::cout << "YunPin final-key P95 " << p95 << "us for "
             << input.size() << " ASCII bytes\n";
   return p95 <= 20000;
 }
@@ -283,6 +324,7 @@ int main(int argc, char** argv) {
   if (!Compose(api, session, "zgsh", &initials_candidates) ||
       CountPrivatePhrases(initials_candidates) != 1) {
     std::cerr << "short initials recalled a non-pinned long private phrase\n";
+    PrintCandidates(initials_candidates);
     ok = false;
   }
 
@@ -309,61 +351,71 @@ int main(int argc, char** argv) {
            "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi") &&
        ok;
 
-  // Real ScriptTranslator/Dictionary correction goldens. The malformed long
-  // inputs cover one local error and the user's two-error touch-typing sample;
-  // the rest of the composition stays intact. Exact short inputs protect
-  // normal Pinyin from correction noise.
+  // Correct whole-input Pinyin is an absolute no-expansion boundary. These
+  // high-weight distractors would win under the retired aggressive policy,
+  // but a complete normal/non-correction Prism path must suppress all typo
+  // searches before candidate ranking.
   ok = ExpectCandidateFirst(
            api, session, "shousubijiaokuaideshihou",
            "手速比较快的时候") &&
        ok;
   ok = ExpectCandidateFirst(
            api, session, "shouxubijiaokuaideshihou",
-           "手速比较快的时候", "shou su") &&
+           "手续比较快的时候") &&
+       ok;
+  ok = ExpectCandidateAbsent(
+           api, session, "shouxubijiaokuaideshihou",
+           "手速比较快的时候") &&
        ok;
   ok = ExpectCandidateFirst(
-           api, session, "shosubijiaokuaideshihou",
-           "手速比较快的时候", "shou su") &&
+           api, session, "shujukushiyongdeshinagebanben",
+           "数据库使用的是哪个版本") &&
        ok;
-  ok = ExpectCandidateFirst(
-           api, session, "shousubijiakuaideshihou",
-           "手速比较快的时候", "bi jiao") &&
-       ok;
-  ok = ExpectCandidateFirst(
-           api, session, "shouxubijiakuaideshihou",
-           "手速比较快的时候", "bi jiao") &&
-       ok;
-  ok = ExpectCandidateFirst(
-           api, session, "shouusubijiaokuaideshihou",
-           "手速比较快的时候", "shou su") &&
-       ok;
-  ok = ExpectCandidateFirst(
-           api, session, "shuosubijiaokuaideshihou",
-           "手速比较快的时候", "shou su") &&
+  ok = ExpectCandidateAbsent(
+           api, session, "shujukushiyongdeshinagebanben",
+           "数目录使用的是哪个版本") &&
        ok;
   ok = ExpectCandidateFirst(
            api, session, "youjubeiyidingdejiucuolianxiangnengli",
-           "要具备一定的纠错联想能力", "yao ju bei") &&
+           "有具备一定的纠错联想能力") &&
        ok;
-  ok = ExpectCandidateFirst(api, session, "zhuantai", "状态",
-                            "zhuang tai") &&
+  ok = ExpectCandidateAbsent(
+           api, session, "youjubeiyidingdejiucuolianxiangnengli",
+           "要具备一定的纠错联想能力") &&
+       ok;
+  ok = ExpectCandidateFirst(api, session, "shangban", "上班") && ok;
+  ok = ExpectCandidateAbsent(api, session, "shangban", "山班") && ok;
+
+  // `youceshizhanghaoma` has two exact homophone parses. This fixture only
+  // proves both stay ordinary dictionary candidates; choosing between them is
+  // a language-model/personal-learning task, never typo-correction evidence.
+  ok = ExpectCandidatesPresent(
+           api, session, "youceshizhanghaoma",
+           {"右侧是账号吗", "右侧市长好吗"}) &&
+       ok;
+
+  // The echo translator supplies one ordinary fail-safe candidate for this
+  // synthetic fixture. A single invalid trailing key may therefore expose one
+  // bridge correction at total rank #2; the filter must never promote it to
+  // #1. Two invalid regions cannot be joined by one correction edge and must
+  // fail closed.
+  ok = ExpectCandidateAtRank(
+           api, session, "shousubijiaokuaideshihouu",
+           "手速比较快的时候", 2, "shou su") &&
+       ok;
+  ok = ExpectCandidateAbsent(
+           api, session, "shouusubijiaokuaideshihouu",
+           "手速比较快的时候") &&
        ok;
   ok = ExpectCandidateFirst(api, session, "xu", "需") && ok;
   ok = ExpectCandidateFirst(api, session, "you", "有") && ok;
-  // `shan` is an exact prefix of `shang`. The correction consumes the extra
-  // `g`, so librime must compare both spelling id and consumed length before
-  // deciding whether the edge is exact. The corrected fixture is deliberately
-  // 50x heavier; its normal correction penalty must still keep 上班 first.
-  ok = ExpectExactBeforeCorrection(api, session, "shangban", "上班",
-                                   "山班") &&
-       ok;
   ok = BenchmarkFinalKey(api, session,
-                         "shouxubijiakuaideshihou",
-                         "手速比较快的时候") &&
+                         "shousubijiaokuaideshihouu",
+                         "手速比较快的时候", 2) &&
        ok;
   ok = BenchmarkFinalKey(
-           api, session, "youjubeiyidingdejiucuolianxiangnengli",
-           "要具备一定的纠错联想能力") &&
+           api, session, "shujukushiyongdeshinagebanben",
+           "数据库使用的是哪个版本", 1) &&
        ok;
 
   std::vector<std::string> initial_correction_candidates;
@@ -415,8 +467,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::cout
-      << "verified merged YunPin typo correction, short guard, ranking, "
-         "quota, deduplication, commit, session correction, and private-mode "
-         "suppression\n";
+      << "verified conservative one-bridge correction, exact-input "
+         "stability, short guard, ranking, quota, deduplication, commit, "
+         "session correction, and private-mode suppression\n";
   return 0;
 }

@@ -152,6 +152,17 @@ class WindowsClientTests(unittest.TestCase):
             self.assertIn(self.lock["librime"]["commit"], patch_text)
             self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
             self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
+            self.assertIn("bool correction_offset_used = false", patch_text)
+            self.assertIn("kMaxCorrectionInputBytes = 128", patch_text)
+            self.assertIn("kMaxCorrectionSearchesPerInput = 32", patch_text)
+            self.assertIn("if (correction_analysis_enabled)", patch_text)
+            self.assertIn("vector<vector<size_t>> normal_exact_ends", patch_text)
+            self.assertIn("exact_path_reachable[current_pos]", patch_text)
+            self.assertIn("exact_suffix_reachable[correction_end]", patch_text)
+            self.assertIn("has_full_normal_exact_path", patch_text)
+            self.assertIn("++correction_searches", patch_text)
+            self.assertNotIn("!has_exact_match", patch_text)
+            self.assertIn("if (correction_added)", patch_text)
 
         librime_archive = subprocess.run(
             ["git", "-C", str(ROOT / "third_party" / "librime"), "archive", "HEAD"],
@@ -228,6 +239,8 @@ class WindowsClientTests(unittest.TestCase):
             ROOT / "librime-yunpin" / "src" / "rime_yunpin_corrector.cpp"
         ).read_text(encoding="utf-8")
         self.assertIn("kMaxCorrectionsPerOffset = 16", corrector)
+        self.assertIn("return nullptr;", corrector)
+        self.assertNotIn("new NearSearchCorrector", corrector)
         self.assertTrue((ROOT / "engine" / "src" / "phrase_engine.cpp").is_file())
 
     def test_original_windows_icon_replaces_upstream_brand_asset(self) -> None:
@@ -250,6 +263,9 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"yunpin/enabled": false', config)
         self.assertIn('"yunpin/short_input_guard": true', config)
         self.assertIn('"yunpin/session_learning": false', config)
+        self.assertIn('"translator/enable_correction": false', config)
+        self.assertIn('"yunpin/typo_correction": false', config)
+        self.assertIn('"yunpin/typo_reviewed_confusions": false', config)
         self.assertFalse((WINDOWS / "rime" / "private.tsv").exists())
         self.assertFalse((WINDOWS / "rime" / "yunpin" / "private.tsv").exists())
         example = (WINDOWS / "rime" / "yunpin-private.tsv.example").read_text(
