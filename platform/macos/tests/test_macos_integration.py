@@ -666,6 +666,32 @@ class MacOSIntegrationTests(unittest.TestCase):
             absent = run_dump(records((root / "Other.app", "ui-element")))
             self.assertEqual(0, absent.returncode, absent.stderr)
 
+            # Xcode registers the app recursively. A nested Sparkle helper may
+            # remain as its own LaunchServices record after the root input
+            # method is unregistered; its descendant path is not the target
+            # bundle and must not be mistaken for exact-path format drift.
+            nested_helper = (
+                app
+                / "Contents"
+                / "Frameworks"
+                / "Sparkle.framework"
+                / "Updater.app"
+            )
+            descendant = run_dump(records((nested_helper, "ui-element")))
+            self.assertEqual(0, descendant.returncode, descendant.stderr)
+
+            trailing_root = run_dump(
+                "Database is seeded.\n"
+                "Bundle:                     1024 ( 1 KB) 1 units\n"
+                "----------------------------------------\n"
+                "bundle id:                  YunPin (0x1)\n"
+                f"path:                       {app}/ (0x2)\n"
+                "bundle flags:               ui-element\n"
+                "----------------------------------------\n"
+            )
+            self.assertNotEqual(0, trailing_root.returncode)
+            self.assertIn("incomplete or unrecognized", trailing_root.stderr)
+
             truncated = run_dump(
                 "Database is seeded.\n"
                 "Bundle:                     1024 ( 1 KB) 1 units\n"

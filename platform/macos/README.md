@@ -97,7 +97,9 @@ freshly seeded database with a structurally valid `Bundle: ... 0 units` table
 is also accepted because that table cardinality proves no bundle path can be
 active; a missing table, count mismatch, malformed record or active exact path
 still fails closed. Parse failures emit only structural counts, never the other
-applications' paths. On current macOS versions an already-disabled removable-
+applications' paths. Recursively registered nested helpers such as Sparkle's
+Updater are distinct descendant bundles and do not count as the exact generated
+input-method path. On current macOS versions an already-disabled removable-
 volume tombstone can make the unregister request return a nonzero status; the
 build accepts that status only after the database check proves the exact path
 is inactive. It does not delete the build artifact or unregister the installed

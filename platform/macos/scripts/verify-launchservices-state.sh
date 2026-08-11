@@ -36,6 +36,18 @@ fi
 # safe to publish and can be reduced to a fixture on the next run.
 report_launchservices_shape() {
   /usr/bin/awk -v target="$app" '
+    function exact_target_literal(text, position, boundary, after_slash) {
+      position = index(text, target)
+      if (position == 0) return 0
+      boundary = substr(text, position + length(target), 1)
+      if (boundary == "/") {
+        after_slash = substr(text, position + length(target) + 1, 1)
+        return after_slash == "" || after_slash == " " || after_slash == "\t" ||
+          after_slash == "(" || after_slash == "\""
+      }
+      return boundary == "" || boundary == " " || boundary == "\t" ||
+        boundary == "(" || boundary == "\""
+    }
     /^Bundle:[[:space:]]/ {
       tables++
       line = $0
@@ -47,7 +59,7 @@ report_launchservices_shape() {
       }
     }
     /^bundle id:/ { records++ }
-    index($0, target) != 0 { target_literals++ }
+    exact_target_literal($0) { target_literals++ }
     /^path:/ {
       line = $0
       sub(/^path:[[:space:]]*/, "", line)
@@ -73,6 +85,18 @@ grep -F 'Database is seeded.' "$dump" >/dev/null ||
 # every record boundary so truncated or format-shifted output fails closed.
 set +e
 /usr/bin/awk -v target="$app" '
+  function exact_target_literal(text, position, boundary, after_slash) {
+    position = index(text, target)
+    if (position == 0) return 0
+    boundary = substr(text, position + length(target), 1)
+    if (boundary == "/") {
+      after_slash = substr(text, position + length(target) + 1, 1)
+      return after_slash == "" || after_slash == " " || after_slash == "\t" ||
+        after_slash == "(" || after_slash == "\""
+    }
+    return boundary == "" || boundary == " " || boundary == "\t" ||
+      boundary == "(" || boundary == "\""
+  }
   function malformed_record() {
     malformed = 1
   }
@@ -116,7 +140,7 @@ set +e
   }
   in_record && /^path:/ {
     line = $0
-    if (index(line, target) != 0) target_literal_seen = 1
+    if (exact_target_literal(line)) target_literal_seen = 1
     sub(/^path:[[:space:]]*/, "", line)
     if (line !~ /[[:space:]]+\(0x[[:xdigit:]]+\)$/) {
       malformed_record()
@@ -135,7 +159,7 @@ set +e
     if (index($0, "launch-disabled") != 0) disabled = 1
     next
   }
-  index($0, target) != 0 {
+  exact_target_literal($0) {
     target_literal_seen = 1
   }
   /^-+$/ {
