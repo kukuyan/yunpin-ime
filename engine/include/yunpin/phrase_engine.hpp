@@ -39,6 +39,14 @@ struct PhraseEntry {
   bool pinned{false};
   bool learned{false};
   bool tombstoned{false};
+  // Persisted aggregate from explicit correction events. Ordinary use_count
+  // remains a separate signal so an accidental choice cannot be disguised as
+  // repeated intentional use.
+  std::int32_t correction_score{0};
+  // Set only by the private snapshot compatibility loader. Such an entry is
+  // available solely when its complete normalized code equals the literal
+  // query; it never participates in full-prefix, initials or fuzzy matching.
+  bool private_exact_code_only{false};
 };
 
 struct Candidate {
@@ -51,6 +59,7 @@ struct Candidate {
   std::uint64_t use_count{0};
   std::int64_t static_weight{0};
   bool pinned{false};
+  std::int32_t correction_score{0};
 
   [[nodiscard]] bool is_personal() const noexcept;
 };
@@ -116,10 +125,10 @@ class PhraseIndex {
   explicit PhraseIndex(std::vector<PhraseEntry> entries);
   PhraseIndex(std::vector<PhraseEntry> entries, FuzzyConfig fuzzy_config);
 
-  // Returns at most limit candidates. The first five positions contain at most
+  // Returns at most limit candidates. The first eight positions contain at most
   // two personal/history/import candidates. If there are not enough public/base
   // candidates to fill that page, the result deliberately contains fewer than
-  // five entries rather than violating the privacy/pollution quota.
+  // eight entries rather than violating the privacy/pollution quota.
   [[nodiscard]] std::vector<Candidate> Query(std::string_view input,
                                              std::size_t limit = 9) const;
 
@@ -127,6 +136,18 @@ class PhraseIndex {
   // other threads query the index. A background index replacement can later
   // compact tombstoned records after all devices have observed them.
   [[nodiscard]] bool ApplyTombstone(std::string_view id);
+
+  // Applies an explicit correction delta without rebuilding the immutable
+  // lookup keys. Negative feedback demotes the just-undone candidate and
+  // positive feedback promotes its immediate replacement. A successful
+  // update advances revision(), allowing desktop adapters to reject any
+  // candidate menu cached before the correction.
+  [[nodiscard]] bool ApplyCorrectionFeedback(std::string_view id,
+                                             std::int32_t delta);
+
+  [[nodiscard]] std::uint32_t revision() const noexcept;
+  [[nodiscard]] bool CanReuseRevision(
+      std::uint32_t cached_revision) const noexcept;
 
   [[nodiscard]] std::size_t size() const noexcept;
 
@@ -145,7 +166,10 @@ class PhraseIndex {
   std::vector<IndexedEntry> entries_;
   std::vector<KeyRef> full_index_;
   std::vector<KeyRef> initials_index_;
+  std::vector<KeyRef> private_exact_code_index_;
   std::unique_ptr<std::atomic_bool[]> tombstones_;
+  std::unique_ptr<std::atomic<std::int32_t>[]> correction_scores_;
+  std::atomic<std::uint32_t> revision_{0};
   FuzzyConfig fuzzy_config_;
 };
 

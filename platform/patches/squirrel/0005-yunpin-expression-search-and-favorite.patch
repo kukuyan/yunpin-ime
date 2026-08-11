@@ -1,0 +1,19 @@
+SPDX-License-Identifier: GPL-3.0-only
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: [PATCH] yunpin: keep expression commit text side-effect free
+
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index 5d4c418..cded55f 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -540,6 +540,10 @@ private extension SquirrelInputController {
+ 
+   func commit(string: String) {
+     guard let client = client else { return }
++    // YunPin expression actions are not connected in this preview. Candidate
++    // commit text is untrusted dictionary data, so it must never be parsed as
++    // a browser or file-system command. A future integration must carry a
++    // typed, explicitly armed action outside the ordinary commit string.
+     // print("[DEBUG] commitString: \(string)")
+     client.insertText(string, replacementRange: .empty)
+     preedit = ""

@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-3.0-only
+schema:
+  schema_id: yunpin_e2e
+  name: YunPin merged-plugin fixture
+  version: "1.0"
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [中文, ASCII]
+  - name: yunpin_show_candidate_pinyin
+    states: [拼音关, 拼音开]
+
+engine:
+  processors:
+    - speller
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - abc_segmentor
+    - fallback_segmentor
+  translators:
+    - script_translator
+    # Gives the synthetic typo fixture one ordinary fail-safe candidate, so
+    # the real YunPin filter can prove a correction stays at total rank #2.
+    - echo_translator
+  filters:
+    - yunpin_filter@yunpin
+    - yunpin_comment_filter@yunpin_comment_visibility
+    - uniquifier
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  delimiter: " '"
+
+translator:
+  dictionary: yunpin_e2e
+  enable_user_dict: false
+  enable_sentence: false
+  enable_completion: false
+  enable_correction: true
+  corrector_component: yunpin_corrector
+  spelling_hints: 32
+  always_show_comments: true
+  keep_comments: true
+  comment_format:
+    - xform/^/［/
+    - xform/$/］/
+
+yunpin:
+  tag: abc
+  snapshot: yunpin/private.tsv
+  max_candidates: 2
+  enabled: true
+  short_input_guard: true
+  long_correction_guard: true
+  long_correction_min_chars: 12
+  session_learning: true
+  typo_correction: true
+  typo_reviewed_confusions: false

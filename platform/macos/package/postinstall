@@ -1,0 +1,190 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-only
+set -euo pipefail
+
+readonly yunpin_legacy_correction_overlay_sha256="19dbc7deda115dbd7e3ea5b28ba9abfe406105d14f3f818d53c0998cf154ca45"
+readonly yunpin_previous_conservative_overlay_sha256="2bb3bf0666495843201a70e226710de18820f4222daf7df15ed94e9e0adcad37"
+readonly yunpin_conservative_overlay_sha256="25e07ca2754e0bb67407f44b9f675dd8c54a09b1ee33de94de1016ed7088daa7"
+readonly yunpin_previous_default_overlay_sha256="23039527ee16342493e346cdc80ebf50f6729cc562b6c85436f7f60651e97bfa"
+readonly yunpin_candidate_pinyin_default_overlay_sha256="857057ff6b5e939c534f644ec24652ae487c85927591e44135e380f61a25fd1b"
+
+yunpin_sha256() {
+  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
+}
+
+yunpin_migrate_known_overlay() {
+  local packaged_overlay="$1"
+  local user_overlay="$2"
+  local owner="$3"
+  local expected_packaged_hash="$4"
+  local backup_label="$5"
+  shift 5
+  local current_hash
+  local source_hash
+  local allowed_source_hash
+  local source_is_known=false
+  local packaged_hash
+  local replacement_tmp
+  local replacement_hash
+  local timestamp
+  local backup
+  local backup_hash
+
+  # A missing file is handled by the normal fresh-install loop below. Never
+  # follow a user-controlled link or replace an unrecognised file type.
+  if [[ -L "$user_overlay" ]]; then
+    echo "YunPin: preserving linked user overlay: $user_overlay" >&2
+    return 0
+  fi
+  if [[ ! -e "$user_overlay" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$user_overlay" ]]; then
+    echo "YunPin: preserving non-regular user overlay: $user_overlay" >&2
+    return 0
+  fi
+
+  if ! current_hash="$(yunpin_sha256 "$user_overlay")"; then
+    echo "YunPin: could not hash user overlay; preserving it" >&2
+    return 1
+  fi
+  for allowed_source_hash in "$@"; do
+    if [[ "$current_hash" == "$allowed_source_hash" ]]; then
+      source_is_known=true
+      break
+    fi
+  done
+  if [[ "$source_is_known" != true ]]; then
+    return 0
+  fi
+  source_hash="$current_hash"
+
+  # Fail closed if a future package changes the replacement without also
+  # reviewing this versioned migration.
+  if [[ -L "$packaged_overlay" || ! -f "$packaged_overlay" ]]; then
+    echo "YunPin: packaged overlay is unavailable" >&2
+    return 1
+  fi
+  if ! packaged_hash="$(yunpin_sha256 "$packaged_overlay")"; then
+    echo "YunPin: could not hash packaged overlay" >&2
+    return 1
+  fi
+  if [[ "$packaged_hash" != "$expected_packaged_hash" ]]; then
+    echo "YunPin: packaged overlay hash mismatch" >&2
+    return 1
+  fi
+
+  # Stage the replacement in the same directory so the final rename is
+  # atomic. All failure paths before that rename leave the active file intact.
+  if ! replacement_tmp="$(/usr/bin/mktemp "${user_overlay}.migration.XXXXXX")"; then
+    echo "YunPin: could not stage overlay" >&2
+    return 1
+  fi
+  if ! /usr/bin/install -m 600 -o "$owner" "$packaged_overlay" "$replacement_tmp"; then
+    /bin/rm -f "$replacement_tmp"
+    return 1
+  fi
+  if ! replacement_hash="$(yunpin_sha256 "$replacement_tmp")" || \
+    [[ "$replacement_hash" != "$expected_packaged_hash" ]]; then
+    echo "YunPin: staged overlay failed verification" >&2
+    /bin/rm -f "$replacement_tmp"
+    return 1
+  fi
+
+  timestamp="$(/bin/date -u +%Y%m%dT%H%M%SZ)"
+  if ! backup="$(/usr/bin/mktemp "${user_overlay}.${backup_label}-${timestamp}.XXXXXX")"; then
+    echo "YunPin: could not create overlay backup" >&2
+    /bin/rm -f "$replacement_tmp"
+    return 1
+  fi
+  if ! /usr/bin/install -m 600 -o "$owner" "$user_overlay" "$backup"; then
+    /bin/rm -f "$replacement_tmp" "$backup"
+    return 1
+  fi
+  if ! backup_hash="$(yunpin_sha256 "$backup")" || \
+    [[ "$backup_hash" != "$source_hash" ]]; then
+    echo "YunPin: known overlay changed during backup; preserving it" >&2
+    /bin/rm -f "$replacement_tmp" "$backup"
+    return 1
+  fi
+
+  # Re-check immediately before replacement so a concurrent user edit wins.
+  if ! current_hash="$(yunpin_sha256 "$user_overlay")" || \
+    [[ "$current_hash" != "$source_hash" ]]; then
+    echo "YunPin: user overlay changed during migration; preserving it" >&2
+    /bin/rm -f "$replacement_tmp" "$backup"
+    return 1
+  fi
+  if ! /bin/mv -f "$replacement_tmp" "$user_overlay"; then
+    /bin/rm -f "$replacement_tmp"
+    return 1
+  fi
+
+  echo "YunPin: migrated known shipped overlay; backup: $backup" >&2
+}
+
+yunpin_migrate_known_correction_overlay() {
+  yunpin_migrate_known_overlay \
+    "$1" "$2" "$3" \
+    "$yunpin_conservative_overlay_sha256" \
+    "pre-conservative" \
+    "$yunpin_legacy_correction_overlay_sha256" \
+    "$yunpin_previous_conservative_overlay_sha256"
+}
+
+yunpin_migrate_known_default_overlay() {
+  yunpin_migrate_known_overlay \
+    "$1" "$2" "$3" \
+    "$yunpin_candidate_pinyin_default_overlay_sha256" \
+    "pre-candidate-pinyin" \
+    "$yunpin_previous_default_overlay_sha256"
+}
+
+# Tests source this file to exercise the migration in an isolated directory.
+# Installer execution is unaffected because BASH_SOURCE[0] and $0 are equal.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
+app="/Library/Input Methods/YunPin.app"
+executable="$app/Contents/MacOS/YunPin"
+shared="$app/Contents/SharedSupport"
+login_user="$(/usr/bin/stat -f%Su /dev/console)"
+
+if [[ ! -x "$executable" ]]; then
+  echo "YunPin: installed input-method executable is unavailable" >&2
+  exit 1
+fi
+if [[ "$login_user" == "root" ]]; then
+  echo "YunPin: no logged-in GUI user is available for input-source reconciliation" >&2
+  exit 1
+fi
+
+login_uid="$(/usr/bin/id -u "$login_user")"
+
+user_home="$(/usr/bin/dscl . -read "/Users/$login_user" NFSHomeDirectory | /usr/bin/awk '{print $2}')"
+user_rime="$user_home/Library/Application Support/YunPin/Rime"
+/usr/bin/install -d -m 700 -o "$login_user" "$user_rime"
+/usr/bin/install -d -m 700 -o "$login_user" "$user_rime/lua"
+/usr/bin/install -m 600 -o "$login_user" "$shared/lua/lunar.db" "$user_rime/lua/lunar.db"
+
+yunpin_migrate_known_correction_overlay \
+  "$shared/rime_ice.custom.yaml" \
+  "$user_rime/rime_ice.custom.yaml" \
+  "$login_user"
+yunpin_migrate_known_default_overlay \
+  "$shared/default.custom.yaml" \
+  "$user_rime/default.custom.yaml" \
+  "$login_user"
+
+for overlay in default.custom.yaml squirrel.custom.yaml rime_ice.custom.yaml; do
+  if [[ ! -e "$user_rime/$overlay" && ! -L "$user_rime/$overlay" ]]; then
+    /usr/bin/install -m 600 -o "$login_user" "$shared/$overlay" "$user_rime/$overlay"
+  fi
+done
+
+/usr/bin/killall YunPin >/dev/null 2>&1 || true
+"$executable" --register-input-source
+/bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" \
+  "$executable" --reconcile-input-source
+exit 0

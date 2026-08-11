@@ -1,0 +1,92 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Depends-On: 0001-yunpin-development-preview-identity.patch
+Subject: Package an original YunPin input-source icon
+
+diff --git a/Squirrel.xcodeproj/project.pbxproj b/Squirrel.xcodeproj/project.pbxproj
+index becf3ce..8b0074e 100644
+--- a/Squirrel.xcodeproj/project.pbxproj
++++ b/Squirrel.xcodeproj/project.pbxproj
+@@ -73,7 +73,7 @@
+ 		7B5488C01D2DACDF0056A1BE /* luna_pinyin.schema.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 7B5488321D2DAAD10056A1BE /* luna_pinyin.schema.yaml */; };
+ 		7B5488C11D2DACDF0056A1BE /* luna_quanpin.schema.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 7B5488331D2DAAD10056A1BE /* luna_quanpin.schema.yaml */; };
+ 		7B5488C91D2DACDF0056A1BE /* symbols.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 7B54883B1D2DAAD10056A1BE /* symbols.yaml */; };
+-		B3216E5C2BF438F800E292D2 /* rime.pdf in Resources */ = {isa = PBXBuildFile; fileRef = B3216E5B2BF438F800E292D2 /* rime.pdf */; };
++		B3216E5C2BF438F800E292D2 /* yunpin.pdf in Resources */ = {isa = PBXBuildFile; fileRef = B3216E5B2BF438F800E292D2 /* yunpin.pdf */; };
+ 		B35D2FE82BF00839009D156B /* BridgingFunctions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B35D2FE72BF00839009D156B /* BridgingFunctions.swift */; };
+ 		B38E9B912BE9AE1E0036ABEF /* SquirrelApplicationDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38E9B902BE9AE1E0036ABEF /* SquirrelApplicationDelegate.swift */; };
+ 		B38E9B952BEAFEFD0036ABEF /* SquirrelInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38E9B942BEAFEFD0036ABEF /* SquirrelInputController.swift */; };
+@@ -278,7 +278,7 @@
+ 		7B54883B1D2DAAD10056A1BE /* symbols.yaml */ = {isa = PBXFileReference; lastKnownFileType = text; name = symbols.yaml; path = data/plum/symbols.yaml; sourceTree = "<group>"; };
+ 		8D1107310486CEB800E47090 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = resources/Info.plist; sourceTree = "<group>"; };
+ 		A4B8E1B20F645B870094E08B /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = /System/Library/Frameworks/Carbon.framework; sourceTree = "<absolute>"; };
+-		B3216E5B2BF438F800E292D2 /* rime.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = rime.pdf; path = resources/rime.pdf; sourceTree = "<group>"; };
++		B3216E5B2BF438F800E292D2 /* yunpin.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = yunpin.pdf; path = resources/yunpin.pdf; sourceTree = "<group>"; };
+ 		B32B80772BE7FAA200FCF3BC /* Squirrel.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; name = Squirrel.entitlements; path = resources/Squirrel.entitlements; sourceTree = "<group>"; };
+ 		B35D2FE72BF00839009D156B /* BridgingFunctions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BridgingFunctions.swift; path = sources/BridgingFunctions.swift; sourceTree = "<group>"; };
+ 		B38E9B8F2BE9AE1E0036ABEF /* Squirrel-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "Squirrel-Bridging-Header.h"; path = "sources/Squirrel-Bridging-Header.h"; sourceTree = "<group>"; };
+@@ -382,7 +382,7 @@
+ 		29B97317FDCFA39411CA2CEA /* Resources */ = {
+ 			isa = PBXGroup;
+ 			children = (
+-				B3216E5B2BF438F800E292D2 /* rime.pdf */,
++				B3216E5B2BF438F800E292D2 /* yunpin.pdf */,
+ 				44986A93184B421700B3278D /* LICENSE.txt */,
+ 				44986A94184B421700B3278D /* README.md */,
+ 				B39771322BEEE4540093A49B /* Localizable.xcstrings */,
+@@ -568,7 +568,7 @@
+ 				44986A95184B421700B3278D /* LICENSE.txt in Resources */,
+ 				B39771332BEEE4540093A49B /* Localizable.xcstrings in Resources */,
+ 				44986A96184B421700B3278D /* README.md in Resources */,
+-				B3216E5C2BF438F800E292D2 /* rime.pdf in Resources */,
++				B3216E5C2BF438F800E292D2 /* yunpin.pdf in Resources */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
+diff --git a/resources/Info.plist b/resources/Info.plist
+index b725283..f7307a2 100644
+--- a/resources/Info.plist
++++ b/resources/Info.plist
+@@ -33,7 +33,7 @@
+ 				<key>TISIntendedLanguage</key>
+ 				<string>zh-Hans</string>
+ 				<key>tsInputModeAlternateMenuIconFileKey</key>
+-				<string>rime.pdf</string>
++				<string>yunpin.pdf</string>
+ 				<key>tsInputModeCharacterRepertoireKey</key>
+ 				<array>
+ 					<string>Hans</string>
+@@ -46,9 +46,9 @@
+ 				<key>tsInputModeKeyEquivalentModifiersKey</key>
+ 				<integer>4608</integer>
+ 				<key>tsInputModeMenuIconFileKey</key>
+-				<string>rime.pdf</string>
++				<string>yunpin.pdf</string>
+ 				<key>tsInputModePaletteIconFileKey</key>
+-				<string>rime.pdf</string>
++				<string>yunpin.pdf</string>
+ 				<key>tsInputModePrimaryInScriptKey</key>
+ 				<true/>
+ 				<key>tsInputModeScriptKey</key>
+@@ -61,7 +61,7 @@
+ 				<key>TISIntendedLanguage</key>
+ 				<string>zh-Hant</string>
+ 				<key>tsInputModeAlternateMenuIconFileKey</key>
+-				<string>rime.pdf</string>
++				<string>yunpin.pdf</string>
+ 				<key>tsInputModeCharacterRepertoireKey</key>
+ 				<array>
+ 					<string>Hant</string>
+@@ -74,9 +74,9 @@
+ 				<key>tsInputModeKeyEquivalentModifiersKey</key>
+ 				<integer>4608</integer>
+ 				<key>tsInputModeMenuIconFileKey</key>
+-				<string>rime.pdf</string>
++				<string>yunpin.pdf</string>
+ 				<key>tsInputModePaletteIconFileKey</key>
+-				<string>rime.pdf</string>
++				<string>yunpin.pdf</string>
+ 				<key>tsInputModePrimaryInScriptKey</key>
+ 				<true/>
+ 				<key>tsInputModeScriptKey</key>

@@ -80,6 +80,14 @@ python3 -m yunpin_importer sogou ~/Snapshots/sogou/user.bin \
   --converter-sha256 HASH_OF_EXACT_EXECUTABLE
 ```
 
+Sogou exports can contain more rows than the bounded native index accepts. The
+bridge therefore merges duplicates, sorts by descending mapped frequency and
+retains at most 100,000 entries by default. `--max-sogou-phrases` may lower
+that limit but can never raise it above the runtime's 100,000-entry hard cap.
+The reviewed R0W result (about 94,000 merged entries) therefore remains intact
+and fully searchable. The original snapshot remains the lossless recovery
+source outside Git.
+
 The first run previews only. Re-run with `--confirm IMPORT --output <outside
 repo>` after reviewing it. The wrapper hashes the original before and after,
 copies it to an isolated temporary directory, converts only the copy, and

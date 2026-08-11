@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Development-preview label and read-only local YunPin ranking filter.
+
+patch:
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
+  "schema/name": "云拼开发预览（Rime Ice）"
+  "engine/filters/@before 0": yunpin_filter@yunpin
+  # Keep this final visibility filter immediately before Rime's uniquifier.
+  # The schema-menu option is absent/false on first run, so spelling comments
+  # stay hidden until the user explicitly selects "拼音开".
+  "engine/filters/@before last": yunpin_comment_filter@yunpin_comment_visibility
+  "switches/@after last":
+    name: yunpin_show_candidate_pinyin
+    states: [拼音关, 拼音开]
+  "translator/keep_comments": true
+  "corrector": "［{comment}］"
+  # Automatic spelling correction is an experimental opt-in. The shipped
+  # profile keeps the exact Rime path unchanged after the long-input ranking
+  # regression; enabling only the component name does not activate it.
+  "translator/enable_correction": false
+  "translator/corrector_component": yunpin_corrector
+  "yunpin/tag": abc
+  "yunpin/snapshot": yunpin/private.tsv
+  "yunpin/max_candidates": 2
+  "yunpin/enabled": true
+  "yunpin/short_input_guard": true
+  # Long automatic corrections may occupy only candidate 2/3 when an ordinary
+  # literal candidate exists; they never displace that candidate from #1.
+  "yunpin/long_correction_guard": true
+  "yunpin/long_correction_min_chars": 12
+  "yunpin/session_learning": true
+  "yunpin/typo_correction": false
+  # Valid-Pinyin substitutions (for example you -> yao) require a separate,
+  # explicit experiment even when typo correction itself is enabled.
+  "yunpin/typo_reviewed_confusions": false
+  # Reserved and inert until a typed/armed native action channel exists.
+  "yunpin/expression_search": false

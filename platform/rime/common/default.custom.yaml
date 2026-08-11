@@ -1,6 +1,0 @@
-# SPDX-License-Identifier: GPL-3.0-only
-# Shared by Weasel and Squirrel. Copy into the user's Rime data directory.
-
-patch:
-  "menu/page_size": 5
-  "menu/alternative_select_keys": "12345"

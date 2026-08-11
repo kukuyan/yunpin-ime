@@ -1,0 +1,166 @@
+name: Publish Unsigned Preview
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Immutable vX.Y.Z-preview.N tag"
+        required: true
+        type: string
+      release_commit:
+        description: "Exact full-CI commit"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yunpin-preview-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: publish-preview-release
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      EXPECTED_SHA: ${{ inputs.release_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.release_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify full-CI release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$ ]]; then
+            echo "release tag must match vX.Y.Z-preview.N" >&2
+            exit 1
+          fi
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test "${GITHUB_REF}" = "refs/tags/${RELEASE_TAG}"
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "${EXPECTED_SHA}"
+          python3 scripts/check_release_workflow.py
+      - name: Download same-run Windows and macOS artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-download/windows build/release-download/macos
+          gh run download "${GITHUB_RUN_ID}" \
+            --name YunPin-Windows-development-preview \
+            --dir build/release-download/windows
+          gh run download "${GITHUB_RUN_ID}" \
+            --name YunPin-macOS-development-preview \
+            --dir build/release-download/macos
+      - name: Generate and verify immutable SPDX release SBOM
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-sbom
+          sbom="build/release-sbom/YunPin-IME-${RELEASE_TAG}.spdx.json"
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${EXPECTED_SHA}")"
+          python3 scripts/generate_release_sbom.py \
+            --tag "${RELEASE_TAG}" \
+            --commit "${EXPECTED_SHA}" \
+            --output "${sbom}"
+          python3 scripts/check_release_sbom.py \
+            --tag "${RELEASE_TAG}" --commit "${EXPECTED_SHA}" "${sbom}"
+      - name: Verify and assemble exact release assets
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_release_assets.py finalize \
+            --tag "${RELEASE_TAG}" \
+            --commit "${EXPECTED_SHA}" \
+            --windows-dir build/release-download/windows \
+            --macos-dir build/release-download/macos \
+            --sbom "build/release-sbom/YunPin-IME-${RELEASE_TAG}.spdx.json" \
+            --output-dir build/release-dist
+      - name: Recheck immutable remote tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          remote_sha="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          test "${remote_sha}" = "${EXPECTED_SHA}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "a GitHub Release already exists for ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+      - name: Publish complete unsigned prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          created=false
+          release_id=""
+          release_version="${RELEASE_TAG#v}"
+          release_title="YunPin IME ${release_version} (unsigned preview)"
+          cleanup_failed_draft() {
+            status=$?
+            if [[ ${status} -ne 0 && "${created}" == true ]]; then
+              if [[ -z "${release_id}" ]]; then
+                release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+                  --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\" and .name == \"${release_title}\" and .draft == true) | .id" \
+                  | head -n 1 || true)"
+              fi
+              if [[ -n "${release_id}" ]]; then
+                candidate_identity="$(gh api \
+                  "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+                  --jq '[.tag_name, .name, (.draft|tostring)] | @tsv' || true)"
+                expected_identity="${RELEASE_TAG}"$'\t'"${release_title}"$'\t'"true"
+                if [[ "${candidate_identity}" == "${expected_identity}" ]]; then
+                  gh api --method DELETE \
+                    "repos/${GITHUB_REPOSITORY}/releases/${release_id}" >/dev/null || true
+                fi
+              fi
+            fi
+            exit "${status}"
+          }
+          trap cleanup_failed_draft EXIT
+
+          gh release create "${RELEASE_TAG}" --draft --prerelease --verify-tag --title "${release_title}" --notes-file build/release-dist/RELEASE-NOTES.md
+          created=true
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .id)"
+
+          mapfile -t assets < <(find build/release-dist -maxdepth 1 -type f \
+            ! -name RELEASE-NOTES.md -print | sort)
+          test "${#assets[@]}" -eq 7
+          gh release upload "${RELEASE_TAG}" "${assets[@]}"
+
+          remote_assets="build/release-remote-assets.json"
+          gh api -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+            >"${remote_assets}"
+          python3 scripts/verify_release_assets.py verify-remote-assets \
+            --response "${remote_assets}" \
+            --local-directory build/release-dist
+
+          # Draft releases and their tags remain mutable. Re-fetch immediately
+          # before the visibility transition and refuse a moved tag.
+          git fetch --no-tags --force origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "${EXPECTED_SHA}"
+
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            -F draft=false -F prerelease=true >/dev/null
+          test "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" = false
+          test "$(gh release view "${RELEASE_TAG}" --json isPrerelease --jq .isPrerelease)" = true
+          test "$(gh release view "${RELEASE_TAG}" --json isImmutable --jq .isImmutable)" = true
+          git fetch --no-tags --force origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "${EXPECTED_SHA}"
+          gh release verify "${RELEASE_TAG}" --format json >/dev/null
+          trap - EXIT

@@ -8,6 +8,8 @@ patch:
   "style/inline_candidate": false
   "style/memorize_size": true
   "style/show_paging": false
+  # The schema's "拼音关 / 拼音开" option controls whether [comment] is empty.
+  # Keeping the placeholder lets the user reveal spelling hints on demand.
   "style/candidate_format": "[label]. [candidate] [comment]"
   "style/font_face": "PingFang SC"
   "style/font_point": 15
@@ -20,6 +22,8 @@ patch:
   "style/border_height": 5
   "style/border_width": 7
   "style/spacing": 7
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
   "style/color_scheme": yunpin_light
   "style/color_scheme_dark": yunpin_dark
   "preset_color_schemes/yunpin_light":

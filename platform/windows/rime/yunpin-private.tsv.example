@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# This placeholder intentionally contains no phrase data.
+# A future secure-input-qualified build may copy confirmed importer output to
+# yunpin/private.tsv in the YunPin user data directory. Never add that real
+# file to Git or a release artifact.
+phrase	pinyin	source	use_count

@@ -8,7 +8,7 @@ services:
       YUNPIN_LISTEN: 0.0.0.0:8787
       YUNPIN_DATABASE: /data/yunpin.db
     ports:
-      - "127.0.0.1:8787:8787"
+      - "${YUNPIN_HOST_BIND:-127.0.0.1}:8787:8787"
     volumes:
       - yunpin-sync-data:/data
     read_only: true

@@ -14,8 +14,13 @@ namespace yunpin {
 namespace {
 
 constexpr std::size_t kHardMaxFuzzyAliases = 64;
+constexpr std::int32_t kMaxCorrectionScore = 1000000;
 static_assert(std::atomic_bool::is_always_lock_free,
               "YunPin requires lock-free tombstone reads");
+static_assert(std::atomic<std::int32_t>::is_always_lock_free,
+              "YunPin requires lock-free correction score reads");
+static_assert(std::atomic<std::uint32_t>::is_always_lock_free,
+              "YunPin requires lock-free candidate revision reads");
 
 std::vector<std::string> BuiltInSyllables() {
   // Standard tone-free Hanyu Pinyin spellings, using v for keyboard ü. Keeping
@@ -506,9 +511,15 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries)
 PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
                          FuzzyConfig fuzzy_config)
     : fuzzy_config_(fuzzy_config) {
+  const std::size_t private_exact_count = static_cast<std::size_t>(
+      std::count_if(entries.begin(), entries.end(),
+                    [](const PhraseEntry& entry) {
+                      return entry.private_exact_code_only;
+                    }));
   entries_.reserve(entries.size());
-  full_index_.reserve(entries.size());
-  initials_index_.reserve(entries.size());
+  full_index_.reserve(entries.size() - private_exact_count);
+  initials_index_.reserve(entries.size() - private_exact_count);
+  private_exact_code_index_.reserve(private_exact_count);
 
   std::unordered_set<std::string> ids;
   ids.reserve(entries.size());
@@ -516,6 +527,10 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
   for (PhraseEntry& entry : entries) {
     if (entry.id.empty() || entry.text.empty() || entry.syllables.empty()) {
       throw std::invalid_argument("phrase entries require id, text and pinyin");
+    }
+    if (entry.private_exact_code_only && !IsPersonalOrigin(entry.origin)) {
+      throw std::invalid_argument(
+          "exact-code-only compatibility is restricted to personal entries");
     }
     if (!ids.insert(entry.id).second) {
       throw std::invalid_argument("duplicate phrase id: " + entry.id);
@@ -534,13 +549,22 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
       full += syllable;
       initials.push_back(syllable.front());
     }
+    if (entry.private_exact_code_only && full.size() < 2) {
+      throw std::invalid_argument(
+          "exact-code-only personal entries require at least two letters");
+    }
     entry.syllables = std::move(normalized_syllables);
 
     const std::size_t index = entries_.size();
     entries_.push_back(
         IndexedEntry{std::move(entry), std::move(full), std::move(initials)});
-    full_index_.push_back(KeyRef{entries_.back().full_pinyin, index});
-    initials_index_.push_back(KeyRef{entries_.back().initials, index});
+    if (entries_.back().entry.private_exact_code_only) {
+      private_exact_code_index_.push_back(
+          KeyRef{entries_.back().full_pinyin, index});
+    } else {
+      full_index_.push_back(KeyRef{entries_.back().full_pinyin, index});
+      initials_index_.push_back(KeyRef{entries_.back().initials, index});
+    }
   }
 
   const auto by_key_then_index = [](const KeyRef& left, const KeyRef& right) {
@@ -551,12 +575,20 @@ PhraseIndex::PhraseIndex(std::vector<PhraseEntry> entries,
   };
   std::sort(full_index_.begin(), full_index_.end(), by_key_then_index);
   std::sort(initials_index_.begin(), initials_index_.end(), by_key_then_index);
+  std::sort(private_exact_code_index_.begin(),
+            private_exact_code_index_.end(), by_key_then_index);
 
   if (!entries_.empty()) {
     tombstones_ = std::make_unique<std::atomic_bool[]>(entries_.size());
+    correction_scores_ =
+        std::make_unique<std::atomic<std::int32_t>[]>(entries_.size());
     for (std::size_t index = 0; index < entries_.size(); ++index) {
       tombstones_[index].store(entries_[index].entry.tombstoned,
                                std::memory_order_relaxed);
+      correction_scores_[index].store(
+          std::clamp(entries_[index].entry.correction_score,
+                     -kMaxCorrectionScore, kMaxCorrectionScore),
+          std::memory_order_relaxed);
     }
   }
 }
@@ -605,6 +637,23 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     }
   }
 
+  // Legacy personal codes are never consulted through a generated fuzzy
+  // alias or a prefix range. Only a literal, complete normalized code may
+  // enter the candidate set.
+  if (!private_exact_code_index_.empty()) {
+    const auto exact_begin = std::lower_bound(
+        private_exact_code_index_.begin(), private_exact_code_index_.end(),
+        std::string_view(query),
+        [](const KeyRef& key_ref, std::string_view value) {
+          return key_ref.key < value;
+        });
+    for (auto it = exact_begin;
+         it != private_exact_code_index_.end() && it->key == query; ++it) {
+      matches.emplace(it->entry_index,
+                      MatchRecord{MatchKind::kExactFull, query});
+    }
+  }
+
   // Two initials are useful for ordinary phrases. Pinned long phrases have the
   // stricter four-initial recall threshold enforced below.
   if (query.size() >= 2) {
@@ -629,9 +678,32 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     }
 
     const bool pinned_personal = entry.pinned && IsPersonalOrigin(entry.origin);
+    if (IsPersonalOrigin(entry.origin) && entry.syllables.size() >= 2 &&
+        query.size() < 2) {
+      // A single letter is not yet a reliable syllable or initials intent.
+      // Never let a private/history/import overlay turn `h` into a learned
+      // multi-syllable phrase; upstream single-character completion remains
+      // available to the native Rime translator.
+      continue;
+    }
     const bool pinned_long =
         pinned_personal &&
         entry.syllables.size() >= kLongPhraseMinSyllables;
+    // A one-syllable prefix such as `he` is useful for one- and two-syllable
+    // words, but is far too broad for injecting an arbitrary three-syllable
+    // (or longer) phrase such as `he bing wei`. Non-pinned long entries must
+    // therefore demonstrate two complete full-pinyin syllables. Initial-only
+    // recall is deliberately unavailable for them; manually pinned long
+    // phrases keep the separately documented four-initial escape hatch below.
+    const bool non_pinned_long =
+        !pinned_personal && entry.syllables.size() >= 3;
+    if (non_pinned_long && match.kind == MatchKind::kFullPrefix &&
+        CompleteSyllablePrefixCount(entry, match.alias) < 2) {
+      continue;
+    }
+    if (non_pinned_long && match.kind == MatchKind::kInitials) {
+      continue;
+    }
     if (pinned_long && match.kind == MatchKind::kFullPrefix &&
         CompleteSyllablePrefixCount(entry, match.alias) < 2) {
       continue;
@@ -649,7 +721,9 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
                                match.kind,
                                entry.use_count,
                                entry.static_weight,
-                               entry.pinned});
+                               entry.pinned,
+                               correction_scores_[index].load(
+                                   std::memory_order_relaxed)});
   }
 
   std::sort(ranked.begin(), ranked.end(), [](const Candidate& left,
@@ -668,6 +742,9 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     if (MatchTier(left.match) != MatchTier(right.match)) {
       return MatchTier(left.match) > MatchTier(right.match);
     }
+    if (left.correction_score != right.correction_score) {
+      return left.correction_score > right.correction_score;
+    }
     if (left.use_count != right.use_count) {
       return left.use_count > right.use_count;
     }
@@ -683,7 +760,10 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     return left.id < right.id;
   });
 
-  const std::size_t first_page_target = std::min<std::size_t>(5, limit);
+  // Keep the on-screen quota consistent with menu/page_size defaults.
+  constexpr std::size_t kFirstPageCandidateCount = 8;
+  const std::size_t first_page_target =
+      std::min<std::size_t>(kFirstPageCandidateCount, limit);
   std::vector<Candidate> result;
   result.reserve(std::min(limit, ranked.size()));
   std::vector<bool> selected(ranked.size(), false);
@@ -717,11 +797,59 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
 bool PhraseIndex::ApplyTombstone(std::string_view id) {
   for (std::size_t index = 0; index < entries_.size(); ++index) {
     if (entries_[index].entry.id == id) {
-      tombstones_[index].store(true, std::memory_order_relaxed);
+      if (!tombstones_[index].exchange(true, std::memory_order_acq_rel)) {
+        revision_.fetch_add(1, std::memory_order_release);
+      }
       return true;
     }
   }
   return false;
+}
+
+bool PhraseIndex::ApplyCorrectionFeedback(std::string_view id,
+                                          std::int32_t delta) {
+  for (std::size_t index = 0; index < entries_.size(); ++index) {
+    if (entries_[index].entry.id != id) {
+      continue;
+    }
+    if (delta == 0) {
+      return true;
+    }
+
+    auto& score = correction_scores_[index];
+    std::int32_t current = score.load(std::memory_order_relaxed);
+    while (true) {
+      const std::int32_t next =
+          delta > 0
+              ? (current > kMaxCorrectionScore -
+                               std::min(delta, kMaxCorrectionScore)
+                     ? kMaxCorrectionScore
+                     : current + std::min(delta, kMaxCorrectionScore))
+              : (current < -kMaxCorrectionScore -
+                               std::max(delta, -kMaxCorrectionScore)
+                     ? -kMaxCorrectionScore
+                     : current + std::max(delta, -kMaxCorrectionScore));
+      if (next == current) {
+        return true;
+      }
+      if (score.compare_exchange_weak(current, next,
+                                      std::memory_order_acq_rel,
+                                      std::memory_order_relaxed)) {
+        revision_.fetch_add(1, std::memory_order_release);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::uint32_t PhraseIndex::revision() const noexcept {
+  return revision_.load(std::memory_order_acquire);
+}
+
+bool PhraseIndex::CanReuseRevision(
+    std::uint32_t cached_revision) const noexcept {
+  return cached_revision == revision();
 }
 
 std::size_t PhraseIndex::size() const noexcept {

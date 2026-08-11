@@ -1,6 +1,6 @@
 module github.com/kukuyan/yunpin-ime/localstore
 
-go 1.25.0
+go 1.25.12
 
 require (
 	github.com/kukuyan/yunpin-ime/protocol v0.0.0
