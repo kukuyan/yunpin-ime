@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, "codex/**"]
+    tags: ["v*-preview.*"]
   pull_request:
 
 permissions:
@@ -17,6 +18,9 @@ jobs:
       - run: bash scripts/check_private_data.sh
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
+      - run: python3 scripts/check_release_workflow.py
+      - run: python3 scripts/check_release_sbom.py
+      - run: python3 -m unittest discover -s tests -p "test_release_*.py" -v
       - run: ruby scripts/check_yaml.rb
       - run: docker compose config --quiet
       - run: python3 scripts/check_submodule_locks.py
@@ -76,6 +80,20 @@ jobs:
       - name: Build and package merged Weasel preview
         shell: pwsh
         run: .\platform\windows\scripts\Build-Preview.ps1
+      - name: Bind Windows release metadata to tag commit
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $runtime = "build/windows/artifacts/YunPin-IME-Windows-development-preview.zip"
+          $source = "build/windows/artifacts/YunPin-IME-Windows-development-preview-source.zip"
+          python scripts/verify_release_assets.py verify-windows-commit `
+            --commit $env:GITHUB_SHA $runtime $source
+          if ($LASTEXITCODE -ne 0) { throw "Windows archive metadata verification failed" }
+          python scripts/verify_release_assets.py write-job-metadata `
+            --platform windows --tag $env:GITHUB_REF_NAME --commit $env:GITHUB_SHA `
+            --output build/windows/artifacts/windows-release-metadata.json `
+            $runtime $source
+          if ($LASTEXITCODE -ne 0) { throw "Windows release metadata generation failed" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: YunPin-Windows-development-preview
@@ -83,6 +101,7 @@ jobs:
             build/windows/artifacts/YunPin-IME-Windows-development-preview.zip
             build/windows/artifacts/YunPin-IME-Windows-development-preview-source.zip
             build/windows/artifacts/SHA256SUMS
+            build/windows/artifacts/windows-release-metadata.json
           if-no-files-found: error
           retention-days: 7
 
@@ -243,13 +262,23 @@ jobs:
       - run: xcodebuild -version
       - run: cmake --version
       - run: make -C platform/macos test
-      - run: make -C platform/macos package
+      - run: make -C platform/macos dmg BUILD_ROOT=build/macos
+      - name: Bind macOS release metadata to tag commit
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          hdiutil verify build/macos/package/YunPin-IME-macOS-development-preview.dmg
+          python3 scripts/verify_release_assets.py write-job-metadata \
+            --platform macos --tag "${GITHUB_REF_NAME}" --commit "${GITHUB_SHA}" \
+            --output build/macos/package/macos-release-metadata.json \
+            build/macos/package/YunPin-IME-macOS-development-preview.dmg \
+            build/macos/package/YunPin-IME-development-preview-source.tar.gz
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: YunPin-macOS-development-preview
           path: |
-            build/macos/package/YunPin-IME-development-preview.pkg
+            build/macos/package/YunPin-IME-macOS-development-preview.dmg
             build/macos/package/YunPin-IME-development-preview-source.tar.gz
+            build/macos/package/macos-release-metadata.json
           if-no-files-found: error
           retention-days: 7
 
@@ -263,3 +292,16 @@ jobs:
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: test "$RESULTS" = "success success success success success success success success success success success success"
+
+  release-preview:
+    name: release-preview
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [required, windows-client, macos-client]
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+      release_commit: ${{ github.sha }}

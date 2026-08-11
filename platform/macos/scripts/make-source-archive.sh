@@ -4,6 +4,7 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 require_clean_repository
+export COPYFILE_DISABLE=1
 
 build_root="${YUNPIN_MACOS_BUILD_ROOT:-${REPO_ROOT}/build/macos}"
 source_dir="$build_root/squirrel"
@@ -17,6 +18,8 @@ trap 'rm -rf "$staging"' EXIT
 mkdir -p "$staging/YunPin-IME/Squirrel" "$staging/YunPin-IME/YunPin"
 
 tar -C "$source_dir" \
+  --exclude='._*' \
+  --exclude='.DS_Store' \
   --exclude='.git' \
   --exclude='build' \
   --exclude='download' \
@@ -45,7 +48,12 @@ git -C "${REPO_ROOT}/third_party/rime-ice" archive HEAD | \
 git -C "${REPO_ROOT}/third_party/rime-ice" rev-parse HEAD > \
   "$staging/YunPin-IME/YunPin/third_party/rime-ice.commit"
 
+if find "$staging" \( -name '._*' -o -name '.DS_Store' \) -print -quit | grep -q .; then
+  die "corresponding-source staging contains forbidden macOS metadata files"
+fi
+
 mkdir -p "$output_dir"
-tar -C "$staging" -czf "$archive" YunPin-IME
+tar -C "$staging" --exclude='._*' --exclude='.DS_Store' \
+  -czf "$archive" YunPin-IME
 shasum -a 256 "$archive"
 printf 'created corresponding-source archive: %s\n' "$archive"

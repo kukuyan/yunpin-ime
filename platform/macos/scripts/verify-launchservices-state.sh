@@ -30,8 +30,42 @@ trap 'rm -f "$dump"' EXIT
 if ! "$lsregister" -dump >"$dump"; then
   die "unable to inspect LaunchServices after building the YunPin bundle"
 fi
+
+# Keep diagnostics useful without echoing the database's application paths.
+# A format change should report only structural counts so CI evidence remains
+# safe to publish and can be reduced to a fixture on the next run.
+report_launchservices_shape() {
+  /usr/bin/awk -v target="$app" '
+    /^Bundle:[[:space:]]/ {
+      tables++
+      line = $0
+      if (match(line, /[0-9]+[[:space:]]+units/) != 0) {
+        count = substr(line, RSTART, RLENGTH)
+        sub(/[[:space:]]+units$/, "", count)
+        expected = count + 0
+        expected_known++
+      }
+    }
+    /^bundle id:/ { records++ }
+    index($0, target) != 0 { target_literals++ }
+    /^path:/ {
+      line = $0
+      sub(/^path:[[:space:]]*/, "", line)
+      sub(/[[:space:]]+\(0x[[:xdigit:]]+\)$/, "", line)
+      if (line == target) target_paths++
+    }
+    END {
+      expected_text = expected_known == 1 ? expected : "unknown"
+      printf "LaunchServices structure: bundle_tables=%d expected_bundle_records=%s observed_bundle_records=%d target_literals=%d parsed_target_paths=%d\n", tables + 0, expected_text, records + 0, target_literals + 0, target_paths + 0
+    }
+  ' "$dump" >&2
+}
+
 grep -F 'Database is seeded.' "$dump" >/dev/null ||
-  die "LaunchServices returned an unrecognized database dump"
+  {
+    report_launchservices_shape
+    die "LaunchServices returned an unrecognized database dump"
+  }
 
 # `lsregister -dump` retains disabled tombstones for apps built on removable
 # volumes, even after an exact unregister operation succeeds. Reject only an
@@ -57,7 +91,8 @@ set +e
     disabled = 0
   }
   /^Bundle:[[:space:]]/ {
-    if (expected_records != 0) malformed_record()
+    if (bundle_table_seen) malformed_record()
+    bundle_table_seen = 1
     line = $0
     if (match(line, /[0-9]+[[:space:]]+units/) == 0) {
       malformed_record()
@@ -66,7 +101,7 @@ set +e
     count = substr(line, RSTART, RLENGTH)
     sub(/[[:space:]]+units$/, "", count)
     expected_records = count + 0
-    if (expected_records <= 0) malformed_record()
+    if (expected_records < 0) malformed_record()
     next
   }
   /^bundle id:/ {
@@ -108,7 +143,7 @@ set +e
   }
   END {
     if (in_record) malformed_record()
-    if (expected_records <= 0 || seen_records != expected_records ||
+    if (!bundle_table_seen || seen_records != expected_records ||
         complete_records != seen_records) malformed_record()
     if (target_literal_seen && !target_path_parsed) malformed_record()
     if (malformed) exit 2
@@ -127,7 +162,10 @@ case "$parse_status" in
     fi
     die "the exact YunPin build bundle remains actively registered with LaunchServices"
     ;;
-  2) die "LaunchServices returned an incomplete or unrecognized database dump" ;;
+  2)
+    report_launchservices_shape
+    die "LaunchServices returned an incomplete or unrecognized database dump"
+    ;;
   *) die "unable to parse the LaunchServices database dump" ;;
 esac
 

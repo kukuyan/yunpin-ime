@@ -74,3 +74,26 @@ sh sync/scripts/smoke-container.sh yunpin-sync:runtime
 These checks are an audit control, not a substitute for legal review, SBOM
 generation, vulnerability scanning, signature verification, or provenance
 attestations required by a stable release.
+
+## Release SBOM lock contract
+
+`scripts/generate_release_sbom.py` produces deterministic SPDX 2.3 JSON using
+only these allow-listed inputs:
+
+- `third_party/upstreams.lock.json`;
+- `third_party/go-modules.lock.json`;
+- `platform/upstream-lock.json`;
+- `platform/windows/dependencies.lock.json`;
+- `platform/macos/dependencies.lock.json`.
+
+The macOS lock keeps structured `nested_components` records so a nested
+component's repository, version, commit and reviewed SPDX license are all
+machine-readable. Its Boost and Sparkle source archive records likewise carry
+explicit versions and licenses alongside their immutable URL and SHA-256.
+Legacy `nested_submodules` values remain the build-time commit map; SBOM
+generation fails if the structured component records disagree with it.
+
+Run `python3 scripts/check_release_sbom.py` for the offline deterministic
+self-test. Passing `--tag`, `--commit` and an SPDX JSON path instead validates a
+release document against current locks. Neither command enumerates repository
+files, follows local imports, invokes Git, or reads user-data paths.

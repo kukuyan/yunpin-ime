@@ -73,7 +73,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(6, len(patches))
+        self.assertEqual(7, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -183,6 +183,43 @@ class MacOSIntegrationTests(unittest.TestCase):
         main = (self.prepared / "sources" / "Main.swift").read_text(encoding="utf-8")
         self.assertIn("guard installer.register() else", main)
         self.assertIn("exit(EXIT_FAILURE)", main)
+
+    def test_install_reconciles_persistent_input_source_state_in_login_session(self) -> None:
+        source = (self.prepared / "sources" / "InputSource.swift").read_text(
+            encoding="utf-8"
+        )
+        reconcile = source[
+            source.index("  func reconcile() -> Bool {") : source.index("  func select(")
+        ]
+        self.assertIn("TISCopyCurrentKeyboardInputSource", reconcile)
+        self.assertIn("guard let previousInputSource", reconcile)
+        self.assertIn("TISEnableInputSource", reconcile)
+        self.assertIn("TISSelectInputSource(inputSource)", reconcile)
+        self.assertIn("TISSelectInputSource(previousInputSource)", reconcile)
+        self.assertIn("var reconciliationSucceeded = true", reconcile)
+        self.assertIn("if !reconciliationSucceeded { return false }", reconcile)
+        self.assertLess(
+            reconcile.index("TISSelectInputSource(inputSource)"),
+            reconcile.index("TISSelectInputSource(previousInputSource)"),
+        )
+        self.assertNotIn("targetInputSourceIDs", reconcile)
+        self.assertIn("Cannot safely restore", reconcile)
+        self.assertIn("return false", reconcile)
+        main = (self.prepared / "sources" / "Main.swift").read_text(encoding="utf-8")
+        self.assertIn('case "--reconcile-input-source":', main)
+        self.assertIn("guard installer.reconcile() else", main)
+
+        postinstall = (MACOS_DIR / "package" / "postinstall").read_text(
+            encoding="utf-8"
+        )
+        register = postinstall.index('"$executable" --register-input-source')
+        reconcile_call = postinstall.index('"$executable" --reconcile-input-source')
+        self.assertLess(register, reconcile_call)
+        self.assertIn('/bin/launchctl asuser "$login_uid"', postinstall)
+        self.assertIn('/usr/bin/sudo -u "$login_user"', postinstall)
+        self.assertNotIn('"$executable" --enable-input-source', postinstall)
+        self.assertIn('if [[ ! -x "$executable" ]]', postinstall)
+        self.assertIn('if [[ "$login_user" == "root" ]]', postinstall)
 
     def test_expression_commit_text_cannot_trigger_platform_side_effects(self) -> None:
         controller = (self.prepared / "sources" / "SquirrelInputController.swift").read_text(
@@ -588,6 +625,20 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertNotEqual(0, active.returncode)
             self.assertIn("remains actively registered", active.stderr)
 
+            # A freshly provisioned macOS runner can have a seeded, valid
+            # LaunchServices database whose Bundle table is explicitly empty.
+            # Zero is a real table cardinality, not the parser's "not seen"
+            # sentinel, and therefore proves that the target path is absent.
+            empty = run_dump(records())
+            self.assertEqual(0, empty.returncode, empty.stderr)
+
+            missing_empty_table = run_dump(
+                "Database is seeded.\n"
+                "All units:                       0 (   Zero KB) 0 units\n"
+            )
+            self.assertNotEqual(0, missing_empty_table.returncode)
+            self.assertIn("incomplete or unrecognized", missing_empty_table.stderr)
+
             disabled = run_dump(records((app, "ui-element  launch-disabled")))
             self.assertEqual(0, disabled.returncode, disabled.stderr)
 
@@ -634,6 +685,9 @@ class MacOSIntegrationTests(unittest.TestCase):
             )
             self.assertNotEqual(0, missing_path.returncode)
             self.assertIn("incomplete or unrecognized", missing_path.stderr)
+            self.assertIn("bundle_tables=1", missing_path.stderr)
+            self.assertIn("expected_bundle_records=1", missing_path.stderr)
+            self.assertIn("observed_bundle_records=1", missing_path.stderr)
 
             missing_flags = run_dump(records((app, None)))
             self.assertNotEqual(0, missing_flags.returncode)
@@ -751,6 +805,71 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('mktemp -d "$build_root/.source-archive.XXXXXX"', archive)
         self.assertNotIn('${TMPDIR:-/tmp}/yunpin-source', archive)
 
+    def test_dmg_builder_is_reproducible_allowlisted_and_self_verifying(self) -> None:
+        script_path = MACOS_DIR / "scripts" / "make-dmg.sh"
+        script = script_path.read_text(encoding="utf-8")
+        makefile = (MACOS_DIR / "Makefile").read_text(encoding="utf-8")
+        instructions = (MACOS_DIR / "package" / "安装说明.txt").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("dmg: package", makefile)
+        self.assertIn('scripts/make-dmg.sh', makefile)
+        self.assertIn(
+            "override BUILD_ROOT := $(abspath $(ROOT)/$(BUILD_ROOT))", makefile
+        )
+        self.assertIn("SOURCE_DATE_EPOCH", script)
+        self.assertIn("normalize_hfs_image", script)
+        self.assertIn("normalize_udif_segment_id", script)
+        self.assertIn('"$hdiutil_bin" verify', script)
+        self.assertIn("attach -readonly", script)
+        self.assertIn("SHA256SUMS-macOS.txt", script)
+        self.assertIn("YunPin-IME-macOS-development-preview.sha256", script)
+        self.assertNotIn("YUNPIN_CI", script)
+        self.assertIn("未签名开发预览版", instructions)
+        self.assertIn("未经 Apple 公证", instructions)
+
+        if os.uname().sysname != "Darwin":
+            self.skipTest("native DMG behavior requires macOS hdiutil")
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-dmg-test-") as temporary:
+            build_root = Path(temporary) / "build"
+            package_dir = build_root / "package"
+            package_dir.mkdir(parents=True)
+            (package_dir / "YunPin-IME-development-preview.pkg").write_bytes(
+                b"unsigned development package fixture\n"
+            )
+            (
+                package_dir / "YunPin-IME-development-preview-source.tar.gz"
+            ).write_bytes(b"corresponding source fixture\n")
+            env = os.environ.copy()
+            env["YUNPIN_MACOS_BUILD_ROOT"] = str(build_root)
+            env["SOURCE_DATE_EPOCH"] = "1704067200"
+
+            first = run(str(script_path), env=env)
+            dmg = package_dir / "YunPin-IME-macOS-development-preview.dmg"
+            checksum = (
+                package_dir / "YunPin-IME-macOS-development-preview.sha256"
+            )
+            self.assertTrue(dmg.is_file())
+            self.assertTrue(checksum.is_file())
+            first_digest = hashlib.sha256(dmg.read_bytes()).hexdigest()
+            self.assertEqual(
+                f"{first_digest}  {dmg.name}\n",
+                checksum.read_text(encoding="utf-8"),
+            )
+            self.assertIn("verified read-only DMG contents", first.stdout)
+            run("hdiutil", "verify", str(dmg))
+            image_info = plistlib.loads(
+                run("hdiutil", "imageinfo", "-plist", str(dmg)).stdout.encode()
+            )
+            self.assertEqual("UDZO", image_info["Format"])
+
+            # Identical inputs plus the fixed source epoch must produce the
+            # same byte-for-byte UDZO image, not merely equivalent files.
+            run(str(script_path), env=env)
+            self.assertEqual(first_digest, hashlib.sha256(dmg.read_bytes()).hexdigest())
+
     def test_corresponding_source_exports_only_committed_project_files(self) -> None:
         archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
             encoding="utf-8"
@@ -758,6 +877,10 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('git -C "$REPO_ROOT" archive HEAD --', archive)
         self.assertNotIn('cp -R "${REPO_ROOT}/$path"', archive)
         self.assertIn("require_clean_repository", archive)
+        self.assertIn("export COPYFILE_DISABLE=1", archive)
+        self.assertIn("--exclude='._*'", archive)
+        self.assertIn("--exclude='.DS_Store'", archive)
+        self.assertIn("contains forbidden macOS metadata files", archive)
         common = (MACOS_DIR / "scripts" / "common.sh").read_text(encoding="utf-8")
         self.assertIn("status --porcelain --untracked-files=normal", common)
         self.assertIn(

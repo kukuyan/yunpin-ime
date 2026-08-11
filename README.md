@@ -4,6 +4,13 @@
 
 > 当前状态：开发预览。仓库已经包含可运行的候选排序核心、离线词库迁移工具、密文同步服务、Rime 平台配置和自动化测试；尚未发布经签名的 Windows/macOS 安装器。
 
+## 下载开发预览版
+
+[GitHub Releases](https://github.com/kukuyan/yunpin-ime/releases) 提供 Windows
+运行包和 macOS Universal DMG，并同时提供对应源码、SPDX SBOM 与统一
+`SHA256SUMS`。这些资产明确为**未签名、未公证的开发预览版**，仅供受控个人
+测试；请先核对校验值并阅读安装说明。正式签名版尚未发布。
+
 ## 核心特性
 
 - 排序固定为：手动置顶个人词组 → 高频个人/迁移词组 → 公共高频词包 → Rime 基础候选。

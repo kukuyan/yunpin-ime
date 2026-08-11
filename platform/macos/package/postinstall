@@ -151,9 +151,16 @@ executable="$app/Contents/MacOS/YunPin"
 shared="$app/Contents/SharedSupport"
 login_user="$(/usr/bin/stat -f%Su /dev/console)"
 
-if [[ "$login_user" == "root" || ! -x "$executable" ]]; then
-  exit 0
+if [[ ! -x "$executable" ]]; then
+  echo "YunPin: installed input-method executable is unavailable" >&2
+  exit 1
 fi
+if [[ "$login_user" == "root" ]]; then
+  echo "YunPin: no logged-in GUI user is available for input-source reconciliation" >&2
+  exit 1
+fi
+
+login_uid="$(/usr/bin/id -u "$login_user")"
 
 user_home="$(/usr/bin/dscl . -read "/Users/$login_user" NFSHomeDirectory | /usr/bin/awk '{print $2}')"
 user_rime="$user_home/Library/Application Support/YunPin/Rime"
@@ -178,5 +185,6 @@ done
 
 /usr/bin/killall YunPin >/dev/null 2>&1 || true
 "$executable" --register-input-source
-/usr/bin/sudo -u "$login_user" "$executable" --enable-input-source
+/bin/launchctl asuser "$login_uid" /usr/bin/sudo -u "$login_user" \
+  "$executable" --reconcile-input-source
 exit 0

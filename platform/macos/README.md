@@ -4,8 +4,9 @@
 
 The macOS client is a GPL-3.0-only derivative of the exact Squirrel 1.1.2
 commit recorded in `../upstream-lock.json`. It produces a Universal
-`YunPin.app` InputMethodKit bundle for macOS 13 or later and an unsigned
-development `.pkg`. It does not modify the pinned submodule in place.
+`YunPin.app` InputMethodKit bundle for macOS 13 or later, an unsigned
+development `.pkg` and a checksum-verified `.dmg`. It does not modify the
+pinned submodule in place.
 
 This slice is deliberately labelled **development preview**. It provides a
 buildable native InputMethodKit frontend, the original horizontal YunPin
@@ -91,12 +92,15 @@ Xcode registers macOS application products from DerivedData as a normal final
 build step. To keep those development copies out of the input-source menu, the
 preview build unregisters only its exact generated `YunPin.app` path after all
 verification. A separate fail-closed check accepts either no exact-path record
-or a disabled tombstone retained for a previously mounted removable volume,
-but rejects an active record or an incomplete LaunchServices dump. On current
-macOS versions an already-disabled removable-volume tombstone can make the
-unregister request return a nonzero status; the build accepts that status only
-after the full database check proves the exact path is inactive. It does not
-delete the build artifact or unregister the installed
+or a disabled tombstone retained for a previously mounted removable volume. A
+freshly seeded database with a structurally valid `Bundle: ... 0 units` table
+is also accepted because that table cardinality proves no bundle path can be
+active; a missing table, count mismatch, malformed record or active exact path
+still fails closed. Parse failures emit only structural counts, never the other
+applications' paths. On current macOS versions an already-disabled removable-
+volume tombstone can make the unregister request return a nonzero status; the
+build accepts that status only after the database check proves the exact path
+is inactive. It does not delete the build artifact or unregister the installed
 `/Library/Input Methods/YunPin.app`.
 
 ## Local verification
@@ -118,7 +122,7 @@ provided through `DEVELOPER_DIR`) and CMake. The pinned Squirrel source uses an
 Icon Composer project:
 
 ```sh
-make -C platform/macos package
+make -C platform/macos dmg BUILD_ROOT=build/macos
 ```
 
 The build downloads only the HTTPS archives listed in
@@ -133,12 +137,32 @@ deployment target. Outputs are under
 - `YunPin-IME-development-preview.pkg` — ad-hoc app signature and unsigned
   installer, for controlled development testing only;
 - `YunPin-IME-development-preview-source.tar.gz` — matching GPL corresponding
-  source, patches, build scripts and licenses.
+  source, patches, build scripts and licenses;
+- `YunPin-IME-macOS-development-preview.dmg` — reproducible UDZO container with
+  the unsigned package, corresponding source, Chinese installation guidance
+  and an internal checksum manifest;
+- `YunPin-IME-macOS-development-preview.sha256` — checksum of the DMG itself.
+
+The DMG builder uses the source commit time (or an explicit
+`SOURCE_DATE_EPOCH`), an allowlisted root, normalized HFS catalog metadata and a
+deterministic UDIF segment identifier. Identical inputs therefore produce the
+same DMG bytes. It runs `hdiutil verify`, attaches the image read-only, rejects
+unexpected files or symbolic links, compares every mounted file with staging,
+and verifies the internal checksum list before publishing the image atomically.
+Neither the DMG nor its enclosed package is Developer ID signed or notarized;
+both remain explicitly labelled as development previews. Personal dictionaries
+and user configuration are never staged.
 
 Installation refreshes the TIS registration for the fixed system app even
-when YunPin is already enabled, while preserving the user's enabled modes.
-Registration failure is returned to the package installer instead of being
-reported as a successful install.
+when YunPin is already enabled. The postinstall then enters the logged-in
+user's GUI bootstrap, enables and briefly selects each previously enabled mode
+(or the primary mode on a fresh install) so macOS persists it, and restores the
+input source that was active before the upgrade. This reconciles the stale
+runtime-cache/persistent-preference split that can otherwise make YunPin vanish
+from the input menu after an ad-hoc preview upgrade without leaving YunPin
+selected unexpectedly. Registration, persistence or selection restoration
+failure is returned to the package installer instead of being reported as a
+successful install.
 
 The GitHub `macos-client` job pairs the `macos-26` runner with its pinned Xcode
 26.4.1 and repeats
@@ -181,8 +205,9 @@ platform/macos/scripts/build-librime-yunpin.sh build/macos/squirrel
 
 Do not install the preview on a production workstation. On an isolated test
 account, inspect its checksum and source archive first, then install the package
-manually. The installer registers and enables YunPin but does not select it or
-overwrite existing Rime settings.
+manually. The installer registers and persistently enables YunPin, temporarily
+selects it only as part of reconciliation, restores the previously active input
+source, and does not overwrite unrecognised Rime settings.
 
 To inject or intentionally refresh the reviewed overlays without installing:
 

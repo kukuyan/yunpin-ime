@@ -7,6 +7,32 @@
     "plum": "4c28f11f451facef809b380502874a48ba964ddb",
     "Sparkle": "41847a58cdef7506b257591fcca6f9495df591d4"
   },
+  "nested_components": [
+    {
+      "name": "librime",
+      "version": "1.16.0",
+      "repository": "https://github.com/rime/librime.git",
+      "commit": "a251145d3aafa33871824a40bbec04c966bd8b56",
+      "license": "BSD-3-Clause",
+      "role": "macOS Rime engine submodule"
+    },
+    {
+      "name": "plum",
+      "version": "4c28f11f451facef809b380502874a48ba964ddb",
+      "repository": "https://github.com/rime/plum.git",
+      "commit": "4c28f11f451facef809b380502874a48ba964ddb",
+      "license": "LGPL-3.0",
+      "role": "macOS Rime data package installer submodule"
+    },
+    {
+      "name": "Sparkle",
+      "version": "2.6.2",
+      "repository": "https://github.com/sparkle-project/Sparkle",
+      "commit": "41847a58cdef7506b257591fcca6f9495df591d4",
+      "license": "MIT",
+      "role": "macOS update framework with update checks disabled"
+    }
+  ],
   "librime_patches": [
     {
       "path": "platform/patches/librime-1.16/0001-configurable-corrector-component.patch",
@@ -37,6 +63,10 @@
     {
       "path": "platform/patches/squirrel/0006-yunpin-refresh-input-source-registration.patch",
       "sha256": "b8f337f83776264ce8a812256011815260665a558267a689c71a071a823ef9de"
+    },
+    {
+      "path": "platform/patches/squirrel/0007-yunpin-reconcile-input-source-persistence.patch",
+      "sha256": "45b6c515f5c30fcaf642f2a34bbf61bc4978c906ae94d70d9781e35db91da611"
     }
   ],
   "archives": [
@@ -52,14 +82,18 @@
     },
     {
       "name": "boost_1_89_0.tar.gz",
+      "version": "1.89.0",
       "url": "https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz",
       "sha256": "9de758db755e8330a01d995b0a24d09798048400ac25c03fc5ea9be364b13c93",
+      "license": "BSL-1.0",
       "boost_source": true
     },
     {
       "name": "Sparkle-2.6.2.tar.xz",
+      "version": "2.6.2",
       "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.6.2/Sparkle-2.6.2.tar.xz",
-      "sha256": "2300a7dc2545a4968e54621b7f351d388ddf1a5cb49e79f6c99e9a09d826f5e8"
+      "sha256": "2300a7dc2545a4968e54621b7f351d388ddf1a5cb49e79f6c99e9a09d826f5e8",
+      "license": "MIT"
     },
     {
       "name": "rime-prelude-082425e.tar.gz",

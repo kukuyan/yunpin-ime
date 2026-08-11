@@ -1,0 +1,27 @@
+云拼输入法 macOS 未签名开发预览版
+====================================
+
+本磁盘映像只供个人开发测试。YunPin 应用仅使用 ad-hoc 签名，安装包未使用
+Developer ID 签名，也未经 Apple 公证；它不是正式稳定版。
+
+安装前：
+
+1. 在“终端”中校验本目录的 SHA256SUMS-macOS.txt：
+
+   cd "/Volumes/YunPin IME Preview"
+   shasum -a 256 -c SHA256SUMS-macOS.txt
+
+2. 保留 YunPin-IME-development-preview-source.tar.gz。它是本开发预览版所
+   对应的 GPL 源代码归档。
+
+安装：
+
+1. 双击 YunPin-IME-development-preview.pkg。
+2. 按安装器提示完成安装；若系统阻止未签名开发包，请不要绕过安全策略，
+   而应从源码自行构建，或等待正式签名并公证的发行版。
+3. 安装完成后，在“系统设置 → 键盘 → 输入法”中确认“云拼”已启用。
+
+隐私边界：
+
+本映像只包含安装包、对应源代码、本说明和校验清单，不包含个人词库、输入
+记录、用户配置或云端同步凭据。
