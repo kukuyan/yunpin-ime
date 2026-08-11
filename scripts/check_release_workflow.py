@@ -37,6 +37,8 @@ RELEASE_SNIPPETS = {
     "--draft --prerelease --verify-tag": "non-public staged prerelease",
     '"repos/${GITHUB_REPOSITORY}/releases?per_page=100"': "authenticated draft listing",
     "--paginate --slurp": "valid paginated release-list JSON",
+    "resolve_owned_draft_with_retry": "bounded draft visibility retry",
+    "readonly draft_resolve_attempts=6": "bounded retry attempts",
     "resolve-draft": "unique owned-draft resolution",
     "verify-draft": "owned-draft identity recheck",
     "verify-published": "published title, body, and state recheck",
@@ -46,13 +48,17 @@ RELEASE_SNIPPETS = {
     "--json isImmutable": "immutable-release publication gate",
     "gh release verify": "GitHub release attestation verification",
     'draft_marker="<!-- ${draft_owner} -->"': "per-run draft ownership marker",
-    'cleanup_release_id="$(python3 scripts/check_release_workflow.py resolve-draft': "fresh cleanup draft resolution",
+    'cleanup_release_id="$(resolve_owned_draft_with_retry': "fresh cleanup draft resolution",
     "gh api --method DELETE": "failed draft cleanup",
 }
 
 
 class ReleaseWorkflowError(ValueError):
     """The release response does not identify one run-owned draft."""
+
+
+class DraftNotVisibleError(ReleaseWorkflowError):
+    """The exact run-owned draft is not visible in the release list yet."""
 
 
 def _read_json(path: Path) -> Any:
@@ -70,11 +76,11 @@ def _release_rows(payload: Any) -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     for page in payload:
-        if isinstance(page, list):
-            candidates = page
-        else:
-            candidates = [page]
-        for candidate in candidates:
+        if not isinstance(page, list):
+            raise ReleaseWorkflowError(
+                "paginated release-list pages must be JSON arrays"
+            )
+        for candidate in page:
             if not isinstance(candidate, dict):
                 raise ReleaseWorkflowError("release-list rows must be JSON objects")
             rows.append(candidate)
@@ -139,6 +145,10 @@ def resolve_owned_draft(
         and row.get("name") == title
         and row.get("draft") is True
     ]
+    if not matches:
+        raise DraftNotVisibleError(
+            "run-owned draft is not visible in the authenticated release list"
+        )
     if len(matches) != 1:
         raise ReleaseWorkflowError(
             "expected exactly one draft matching tag+title+draft; "
@@ -358,6 +368,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 forbidden_marker=args.forbidden_marker,
                 expected_id=args.id,
             )
+    except DraftNotVisibleError as error:
+        print(f"release draft verification pending: {error}", file=sys.stderr)
+        return 2
     except ReleaseWorkflowError as error:
         print(f"release draft verification failed: {error}", file=sys.stderr)
         return 1
