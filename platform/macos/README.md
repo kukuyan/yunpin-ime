@@ -62,9 +62,13 @@ Squirrel input method:
 
 Squirrel's upstream Sparkle feed and menu are disabled, and its built-in Rime
 sync command is disabled so it cannot be mistaken for YunPin's encrypted cloud
-protocol. No input event performs network access. The package seeds only
-versioned public overlays when no user file exists; it never overwrites an
-existing user configuration. Personal dictionaries are not bundled.
+protocol. No input event performs network access. The package seeds versioned
+public overlays only when no user file or symbolic link exists. One reviewed
+upgrade migration recognizes the exact hash of YunPin's previously shipped
+aggressive correction overlay, saves a mode-600 backup, and atomically
+replaces only that known file with the conservative default. Every other
+existing configuration, including arbitrary custom content and links, is
+preserved. Personal dictionaries are not bundled.
 
 The app and input-source art are original YunPin vector shapes. The build
 replaces Squirrel's upstream icon source with `YunPin.icon` and replaces

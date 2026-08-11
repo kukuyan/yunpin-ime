@@ -716,6 +716,148 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('"$shared/lua/lunar.db" "$user_rime/lua/lunar.db"', postinstall)
         self.assertIn('install -m 600 -o "$login_user"', postinstall)
 
+    def test_postinstall_migrates_only_the_known_legacy_correction_overlay(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        legacy = MACOS_DIR / "tests" / "fixtures" / "legacy_correction_rime_ice.custom.yaml"
+        conservative = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        legacy_hash = hashlib.sha256(legacy.read_bytes()).hexdigest()
+        conservative_hash = hashlib.sha256(conservative.read_bytes()).hexdigest()
+        source = postinstall.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            "19dbc7deda115dbd7e3ea5b28ba9abfe406105d14f3f818d53c0998cf154ca45",
+            legacy_hash,
+        )
+        self.assertEqual(
+            "2bb3bf0666495843201a70e226710de18820f4222daf7df15ed94e9e0adcad37",
+            conservative_hash,
+        )
+        self.assertIn(f'yunpin_legacy_correction_overlay_sha256="{legacy_hash}"', source)
+        self.assertIn(f'yunpin_conservative_overlay_sha256="{conservative_hash}"', source)
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-migration-") as temporary:
+            root = Path(temporary)
+            user_overlay = root / "rime_ice.custom.yaml"
+            user_overlay.write_bytes(legacy.read_bytes())
+            user_overlay.chmod(0o644)
+            owner = run("id", "-un").stdout.strip()
+            command = (
+                'source "$1"; '
+                'yunpin_migrate_known_correction_overlay "$2" "$3" "$4"'
+            )
+
+            run(
+                "bash",
+                "-c",
+                command,
+                "yunpin-postinstall-test",
+                str(postinstall),
+                str(conservative),
+                str(user_overlay),
+                owner,
+            )
+
+            self.assertEqual(conservative.read_bytes(), user_overlay.read_bytes())
+            self.assertEqual(0o600, user_overlay.stat().st_mode & 0o777)
+            backups = list(root.glob("rime_ice.custom.yaml.pre-conservative-*"))
+            self.assertEqual(1, len(backups))
+            self.assertEqual(legacy.read_bytes(), backups[0].read_bytes())
+            self.assertEqual(0o600, backups[0].stat().st_mode & 0o777)
+            self.assertEqual([], list(root.glob("rime_ice.custom.yaml.migration.*")))
+
+            # The migration is idempotent once the conservative overlay is active.
+            run(
+                "bash",
+                "-c",
+                command,
+                "yunpin-postinstall-test",
+                str(postinstall),
+                str(conservative),
+                str(user_overlay),
+                owner,
+            )
+            self.assertEqual(backups, list(root.glob("rime_ice.custom.yaml.pre-conservative-*")))
+
+    def test_postinstall_preserves_custom_missing_and_linked_overlays(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        conservative = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        owner = run("id", "-un").stdout.strip()
+        command = (
+            'source "$1"; '
+            'yunpin_migrate_known_correction_overlay "$2" "$3" "$4"'
+        )
+        source = postinstall.read_text(encoding="utf-8")
+        self.assertIn(
+            'if [[ ! -e "$user_rime/$overlay" && ! -L "$user_rime/$overlay" ]]; then',
+            source,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-preserve-") as temporary:
+            root = Path(temporary)
+            custom = root / "custom.yaml"
+            custom.write_text("user-owned: true\n", encoding="utf-8")
+            before = custom.read_bytes()
+            missing = root / "missing.yaml"
+            linked = root / "linked.yaml"
+            linked.symlink_to(custom)
+            dangling_target = root / "must-not-be-created.yaml"
+            dangling = root / "dangling.yaml"
+            dangling.symlink_to(dangling_target)
+
+            for target in (custom, missing, linked, dangling):
+                run(
+                    "bash",
+                    "-c",
+                    command,
+                    "yunpin-postinstall-test",
+                    str(postinstall),
+                    str(conservative),
+                    str(target),
+                    owner,
+                )
+
+            self.assertEqual(before, custom.read_bytes())
+            self.assertFalse(missing.exists())
+            self.assertTrue(linked.is_symlink())
+            self.assertTrue(dangling.is_symlink())
+            self.assertEqual(str(dangling_target), os.readlink(dangling))
+            self.assertFalse(dangling_target.exists())
+            self.assertEqual([], list(root.glob("*.pre-conservative-*")))
+            self.assertEqual([], list(root.glob("*.migration.*")))
+
+    def test_postinstall_fails_closed_for_an_unreviewed_replacement(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        legacy = MACOS_DIR / "tests" / "fixtures" / "legacy_correction_rime_ice.custom.yaml"
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-fail-closed-") as temporary:
+            root = Path(temporary)
+            user_overlay = root / "rime_ice.custom.yaml"
+            user_overlay.write_bytes(legacy.read_bytes())
+            unexpected = root / "unexpected.yaml"
+            unexpected.write_text("patch: {}\n", encoding="utf-8")
+            owner = run("id", "-un").stdout.strip()
+            failed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'source "$1"; yunpin_migrate_known_correction_overlay "$2" "$3" "$4"',
+                    "yunpin-postinstall-test",
+                    str(postinstall),
+                    str(unexpected),
+                    str(user_overlay),
+                    owner,
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(0, failed.returncode)
+            self.assertIn("hash mismatch", failed.stderr)
+            self.assertEqual(legacy.read_bytes(), user_overlay.read_bytes())
+            self.assertEqual([], list(root.glob("*.pre-conservative-*")))
+            self.assertEqual([], list(root.glob("*.migration.*")))
+
     def test_shell_scripts_parse(self) -> None:
         scripts = sorted((MACOS_DIR / "scripts").glob("*.sh"))
         scripts.append(MACOS_DIR / "package" / "postinstall")
