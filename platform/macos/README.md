@@ -72,8 +72,10 @@ replaces Squirrel's upstream icon source with `YunPin.icon` and replaces
 Xcode registers macOS application products from DerivedData as a normal final
 build step. To keep those development copies out of the input-source menu, the
 preview build unregisters only its exact generated `YunPin.app` path after all
-verification and then confirms that path is absent from LaunchServices. It
-does not delete the build artifact or unregister the installed
+verification. A separate fail-closed check accepts either no exact-path record
+or a disabled tombstone retained for a previously mounted removable volume,
+but rejects an active record or an incomplete LaunchServices dump. It does not
+delete the build artifact or unregister the installed
 `/Library/Input Methods/YunPin.app`.
 
 ## Local verification

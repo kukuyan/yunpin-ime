@@ -367,28 +367,32 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_generated_bundle_is_signed_bottom_up_and_fails_closed(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(encoding="utf-8")
-        # Xcode 26 still schedules RegisterWithLaunchServices for a macOS app,
-        # even when an unsupported similarly named command-line setting is used.
-        # The build must therefore remove and verify the exact staging path.
+        # Xcode 26 schedules RegisterWithLaunchServices for the generated app.
+        # Remove only that exact staging path, then verify it is not active.
         self.assertNotIn("REGISTER_WITH_LAUNCH_SERVICES", build)
         self.assertNotIn("WRAPPER_EXTENSION", build)
+        self.assertNotIn("REGISTER_APP=NO", build)
         self.assertIn('"$lsregister" -u "$app"', build)
-        self.assertIn('"$lsregister" -dump', build)
-        self.assertIn('registration_check_status=("${PIPESTATUS[@]}")', build)
-        self.assertIn("unable to inspect LaunchServices", build)
-        self.assertIn("the exact YunPin build bundle remains registered", build)
+        self.assertIn('scripts/verify-launchservices-state.sh" "$app"', build)
+        self.assertNotIn('"$lsregister" -dump', build)
         self.assertNotIn("lsregister -f", build)
         verify_app = build.index('scripts/verify-app.sh" --require-universal "$app"')
         unregister = build.index('"$lsregister" -u "$app"')
-        assert_absent = build.index('"$lsregister" -dump')
+        launchservices = build.index('scripts/verify-launchservices-state.sh" "$app"')
         self.assertLess(verify_app, unregister)
-        self.assertLess(unregister, assert_absent)
+        self.assertLess(unregister, launchservices)
         self.assertIn('scripts/sign-app-adhoc.sh" "$app"', build)
-        self.assertLess(
-            build.index('scripts/verify-app.sh" --require-universal "$app"'),
-            build.index('"$lsregister" -u "$app"'),
-        )
         self.assertNotIn("warning: bundle signing failed", build)
+
+        launchservices_script = (
+            MACOS_DIR / "scripts" / "verify-launchservices-state.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Database is seeded.", launchservices_script)
+        self.assertIn("expected_records", launchservices_script)
+        self.assertIn("complete_records", launchservices_script)
+        self.assertIn("launch-disabled", launchservices_script)
+        self.assertIn("remains actively registered", launchservices_script)
+        self.assertIn("incomplete or unrecognized", launchservices_script)
 
         signing = (MACOS_DIR / "scripts" / "sign-app-adhoc.sh").read_text(
             encoding="utf-8"
@@ -421,6 +425,121 @@ class MacOSIntegrationTests(unittest.TestCase):
 
         readme = (MACOS_DIR / "README.md").read_text(encoding="utf-8")
         self.assertIn("ad-hoc app signature and unsigned", readme)
+
+    def test_launchservices_gate_distinguishes_active_records_from_tombstones(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="yunpin-launchservices-test-") as temporary:
+            root = Path(temporary)
+            app = root / "YunPin.app"
+            app.mkdir()
+            dump = root / "dump.txt"
+            fake = root / "lsregister"
+            fake.write_text(
+                "#!/bin/bash\n"
+                "[[ \"${1:-}\" == -dump ]] || exit 64\n"
+                "/bin/cat \"$YUNPIN_TEST_LS_DUMP\"\n"
+                "exit \"${YUNPIN_TEST_LS_STATUS:-0}\"\n",
+                encoding="utf-8",
+            )
+            fake.chmod(0o755)
+            env = os.environ.copy()
+            env["YUNPIN_LSREGISTER"] = str(fake)
+            env["YUNPIN_TEST_LS_DUMP"] = str(dump)
+            script = str(MACOS_DIR / "scripts" / "verify-launchservices-state.sh")
+
+            def records(*items: tuple[Path, str | None]) -> str:
+                body = [
+                    "Database is seeded.\n",
+                    f"Bundle:                     1024 ( 1 KB) {len(items)} units\n",
+                    "----------------------------------------\n",
+                ]
+                for path, flags in items:
+                    body.extend(
+                        [
+                            "bundle id:                  YunPin (0x1)\n",
+                            f"path:                       {path} (0x2)\n",
+                        ]
+                    )
+                    if flags is not None:
+                        body.append(f"bundle flags:               {flags}\n")
+                    body.append("----------------------------------------\n")
+                return "".join(body)
+
+            def run_dump(contents: str) -> subprocess.CompletedProcess[str]:
+                dump.write_text(contents, encoding="utf-8")
+                return subprocess.run(
+                    [script, str(app)], cwd=ROOT, env=env, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+
+            active = run_dump(records((app, "ui-element")))
+            self.assertNotEqual(0, active.returncode)
+            self.assertIn("remains actively registered", active.stderr)
+
+            disabled = run_dump(records((app, "ui-element  launch-disabled")))
+            self.assertEqual(0, disabled.returncode, disabled.stderr)
+
+            mixed = run_dump(
+                records(
+                    (app, "ui-element  launch-disabled"),
+                    (app, "ui-element"),
+                )
+            )
+            self.assertNotEqual(0, mixed.returncode)
+            self.assertIn("remains actively registered", mixed.stderr)
+
+            absent = run_dump(records((root / "Other.app", "ui-element")))
+            self.assertEqual(0, absent.returncode, absent.stderr)
+
+            truncated = run_dump(
+                "Database is seeded.\n"
+                "Bundle:                     1024 ( 1 KB) 1 units\n"
+                "----------------------------------------\n"
+                "bundle id:                  YunPin (0x1)\n"
+            )
+            self.assertNotEqual(0, truncated.returncode)
+            self.assertIn("incomplete or unrecognized", truncated.stderr)
+
+            missing_path = run_dump(
+                "Database is seeded.\n"
+                "Bundle:                     1024 ( 1 KB) 1 units\n"
+                "----------------------------------------\n"
+                "bundle id:                  YunPin (0x1)\n"
+                "bundle flags:               ui-element\n"
+                "----------------------------------------\n"
+            )
+            self.assertNotEqual(0, missing_path.returncode)
+            self.assertIn("incomplete or unrecognized", missing_path.stderr)
+
+            missing_flags = run_dump(records((app, None)))
+            self.assertNotEqual(0, missing_flags.returncode)
+            self.assertIn("incomplete or unrecognized", missing_flags.stderr)
+
+            malformed_target_path = run_dump(
+                "Database is seeded.\n"
+                "Bundle:                     1024 ( 1 KB) 1 units\n"
+                "----------------------------------------\n"
+                "bundle id:                  YunPin (0x1)\n"
+                f"path => {app} (0x2)\n"
+                "bundle flags:               ui-element  launch-disabled\n"
+                "----------------------------------------\n"
+            )
+            self.assertNotEqual(0, malformed_target_path.returncode)
+            self.assertIn("incomplete or unrecognized", malformed_target_path.stderr)
+
+            malformed = run_dump("unexpected output\n")
+            self.assertNotEqual(0, malformed.returncode)
+            self.assertIn("unrecognized database dump", malformed.stderr)
+
+            dump.write_text(
+                records((app, "ui-element  launch-disabled")), encoding="utf-8"
+            )
+            env["YUNPIN_TEST_LS_STATUS"] = "9"
+            failed_dump = subprocess.run(
+                [script, str(app)], cwd=ROOT, env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(0, failed_dump.returncode)
+            self.assertIn("unable to inspect LaunchServices", failed_dump.stderr)
 
     def test_adhoc_signing_script_orders_targets_and_stops_on_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="yunpin-signing-test-") as temporary:

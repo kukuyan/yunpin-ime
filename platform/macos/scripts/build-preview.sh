@@ -73,24 +73,9 @@ cp "${MACOS_DIR}/preview-manifest.json" "$shared_support/yunpin-preview.json"
 
 "${MACOS_DIR}/scripts/sign-app-adhoc.sh" "$app"
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
-lsregister="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
+lsregister="${YUNPIN_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister}"
 [[ -x "$lsregister" ]] || die "LaunchServices registration tool is unavailable"
 "$lsregister" -u "$app" >/dev/null || die "failed to unregister the exact YunPin build bundle"
-set +e
-"$lsregister" -dump | /usr/bin/awk -v target="$app" '
-  /^[[:space:]]*path:/ {
-    line = $0
-    sub(/^[[:space:]]*path:[[:space:]]*/, "", line)
-    sub(/[[:space:]]+\(0x[[:xdigit:]]+\)$/, "", line)
-    if (line == target) found = 1
-  }
-  END { exit found ? 0 : 1 }
-'
-registration_check_status=("${PIPESTATUS[@]}")
-set -e
-[[ "${registration_check_status[0]}" -eq 0 ]] || die "unable to inspect LaunchServices after unregistering the YunPin build bundle"
-if [[ "${registration_check_status[1]}" -eq 0 ]]; then
-  die "the exact YunPin build bundle remains registered with LaunchServices"
-fi
-[[ "${registration_check_status[1]}" -eq 1 ]] || die "unable to verify the YunPin build bundle registration state"
+YUNPIN_LSREGISTER="$lsregister" \
+  "${MACOS_DIR}/scripts/verify-launchservices-state.sh" "$app"
 printf 'built YunPin development preview: %s\n' "$app"
