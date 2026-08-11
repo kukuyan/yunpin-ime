@@ -233,6 +233,8 @@ jobs:
     # Keep the host OS and the Xcode 26 asset toolchain on the same runner
     # generation. Mixing Xcode 26 with macOS 15 crashes AssetCatalogAgent.
     runs-on: macos-26
+    env:
+      YUNPIN_MACOS_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

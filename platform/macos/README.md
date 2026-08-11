@@ -144,7 +144,11 @@ The GitHub `macos-client` job pairs the `macos-26` runner with its pinned Xcode
 26.4.1 and repeats
 the static tests, merged Universal librime build and headless ranking fixture,
 Universal Xcode build, bundle symbol verification, package build and artifact
-upload. Keeping the host OS and Xcode on the same runner generation avoids the
+upload. Its merged-librime build is capped at two parallel jobs to fit the
+runner's memory budget. Local builds use the same safe default; set
+`YUNPIN_MACOS_BUILD_JOBS` to another positive integer only when the build host
+has been sized for it. Invalid values stop the build before CMake starts.
+Keeping the host OS and Xcode on the same runner generation avoids the
 AssetCatalogAgent system-symbol mismatch seen when Xcode 26 ran on `macos-15`.
 A successful CI build proves source/build portability,
 that the app contains the module, and the synthetic candidate flow; it does not

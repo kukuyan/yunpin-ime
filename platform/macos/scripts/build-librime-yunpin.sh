@@ -6,6 +6,7 @@ source "$(dirname "$0")/common.sh"
 require_macos
 require_full_xcode
 resolve_cmake
+build_jobs="$(resolve_macos_build_jobs)"
 
 source_dir="${1:-${REPO_ROOT}/build/macos/squirrel}"
 [[ -d "$source_dir" ]] || die "prepared Squirrel source is missing: $source_dir"
@@ -36,7 +37,7 @@ ditto "$source_dir/download/lib" "$librime_dir/lib"
     -DENABLE_EXTERNAL_PLUGINS=ON \
     -DBUILD_TEST=OFF \
     -DENABLE_TIMESTAMP=OFF
-  cmake --build "$build_dir" --parallel
+  cmake --build "$build_dir" --parallel "$build_jobs"
   cmake --install "$build_dir"
 )
 

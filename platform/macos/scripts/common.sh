@@ -22,6 +22,13 @@ die() {
   exit 1
 }
 
+resolve_macos_build_jobs() {
+  local build_jobs="${YUNPIN_MACOS_BUILD_JOBS-2}"
+  [[ "$build_jobs" =~ ^[1-9][0-9]*$ ]] ||
+    die "YUNPIN_MACOS_BUILD_JOBS must be a positive integer"
+  printf '%s\n' "$build_jobs"
+}
+
 resolve_developer_dir() {
   if [[ -n "${DEVELOPER_DIR:-}" ]]; then
     if [[ -x "$DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then

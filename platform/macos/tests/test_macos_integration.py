@@ -320,6 +320,79 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('git -C "$source_dir/librime" diff --quiet', stage)
         self.assertIn("tracked changes outside the locked patch series", stage)
 
+    def test_merged_librime_build_has_bounded_parallelism(self) -> None:
+        build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('build_jobs="$(resolve_macos_build_jobs)"', build)
+        self.assertIn('cmake --build "$build_dir" --parallel "$build_jobs"', build)
+        self.assertNotRegex(
+            build,
+            r"cmake --build[^\n]*--parallel[ \t]*(?:\n|$)",
+        )
+
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        macos_job = workflow[
+            workflow.index("  macos-client:\n") : workflow.index("  required:\n")
+        ]
+        self.assertIn('YUNPIN_MACOS_BUILD_JOBS: "2"', macos_job)
+
+    def test_macos_build_jobs_default_override_and_validation(self) -> None:
+        common = str(MACOS_DIR / "scripts" / "common.sh")
+        command = 'source "$1"; resolve_macos_build_jobs'
+
+        default_env = os.environ.copy()
+        default_env.pop("YUNPIN_MACOS_BUILD_JOBS", None)
+        default = run(
+            "/bin/bash",
+            "-c",
+            command,
+            "yunpin-build-jobs-test",
+            common,
+            env=default_env,
+        )
+        self.assertEqual("2", default.stdout.strip())
+
+        override_env = default_env.copy()
+        override_env["YUNPIN_MACOS_BUILD_JOBS"] = "7"
+        override = run(
+            "/bin/bash",
+            "-c",
+            command,
+            "yunpin-build-jobs-test",
+            common,
+            env=override_env,
+        )
+        self.assertEqual("7", override.stdout.strip())
+
+        for invalid in ("", "0", "-1", "+2", "2.5", "2x", " 2"):
+            with self.subTest(invalid=invalid):
+                invalid_env = default_env.copy()
+                invalid_env["YUNPIN_MACOS_BUILD_JOBS"] = invalid
+                result = subprocess.run(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        command,
+                        "yunpin-build-jobs-test",
+                        common,
+                    ],
+                    cwd=ROOT,
+                    env=invalid_env,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertIn(
+                    "YUNPIN_MACOS_BUILD_JOBS must be a positive integer",
+                    result.stderr,
+                )
+
     def test_xcode_resolver_respects_the_active_versioned_selection(self) -> None:
         with tempfile.TemporaryDirectory(prefix="yunpin-xcode-select-") as temporary:
             root = Path(temporary)
