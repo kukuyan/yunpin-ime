@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-only
+---
+name: yunpin_e2e
+version: "1.0"
+sort: by_weight
+...
+云拼输入法	yun pin shu ru fa	100
+中国石化销售股份有限公司河北石家庄石油分公司	zhong guo shi hua xiao shou gu fen you xian gong si he bei shi jia zhuang shi you fen gong si	10
+合并为	he bing wei	100
+和	he	90
+合并	he bing	80
+日长	ri chang	100
+日历	ri chang	95
+日常	ri chang	90
+手速比较快的时候	shou su bi jiao kuai de shi hou	100000
+手续比较快的时候	shou xu bi jiao kuai de shi hou	100
+要具备一定的纠错联想能力	yao ju bei yi ding de jiu cuo lian xiang neng li	100000
+有具备一定的纠错联想能力	you ju bei yi ding de jiu cuo lian xiang neng li	100
+数据库使用的是哪个版本	shu ju ku shi yong de shi na ge ban ben	100
+数目录使用的是哪个版本	shu mu lu shi yong de shi na ge ban ben	10000000
+右侧是账号吗	you ce shi zhang hao ma	100
+右侧市长好吗	you ce shi zhang hao ma	90
+需	xu	1000
+速	su	1000
+有	you	1000
+要	yao	1000
+状态	zhuang tai	100000
+转台	zhuan tai	100
+上班	shang ban	1000
+山班	shan ban	50000

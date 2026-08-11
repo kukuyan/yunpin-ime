@@ -1,8 +1,9 @@
 # R0W Sogou vocabulary recovery runbook
 
-Status: **deferred**. R0W is currently unreachable because of its network
-fault. Do not connect to it, repair its network, change proxy/routes, or rely on
-an old address as part of YunPin bootstrap work.
+Status: **active recovery preview**. R0W network access was re-verified on
+2026-08-10. Reconfirm the live hostname and user before every recovery session;
+do not repair networking, change proxy/routes or rely on a historical address
+as part of vocabulary migration.
 
 Use this procedure only after the network is restored independently and the
 user explicitly reconfirms the recovery session. Historical host identity and
@@ -86,6 +87,13 @@ python -m yunpin_importer sogou D:\YunPin-Recovery\...\personal-backup.bin \
   --converter-sha256 HASH_OF_EXACT_CONVERTER
 ```
 
+The importer keeps up to 100,000 merged entries by default, matching the native
+private-index limit. The reviewed R0W conversion currently contains 94,382
+merged entries, so the confirmed import must retain all 94,382 rather than
+reusing the earlier 50,000-row truncated output. The immutable original
+snapshot remains the recovery source outside Git even after the complete
+private TSV is rebuilt.
+
 The default preview masks phrases and reports duplicates, missing pinyin and
 filter counts. Use `--reveal-phrases` only on the local private console. After
 review, repeat with `--confirm IMPORT --output D:\YunPin-Private\imported.tsv`.
@@ -98,6 +106,12 @@ For `.scel`, use `--source-format scel`. For Sogou text exports, use the normal
 - Source SHA-256 before and after conversion is identical to the snapshot.
 - Duplicate rows merge; useful frequency maps to `use_count`; missing readings
   are explicitly counted rather than guessed online.
+- The confirmed private TSV reports 94,382 retained entries and no
+  `over_private_snapshot_capacity` rejection for the reviewed R0W source.
+- Every reviewed non-standard personal code is either rejected or stored in the
+  private exact-only index. Its two/three-letter prefix and fuzzy aliases must
+  return no candidate; only the complete literal code may match. A one-letter
+  private code is always rejected.
 - Long organization phrases can be found from full pinyin and initials after
   they enter the local YunPin index.
 - A repository-wide scan finds no original Sogou file, converted personal TSV,

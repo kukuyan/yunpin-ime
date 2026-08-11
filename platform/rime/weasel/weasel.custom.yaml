@@ -26,6 +26,8 @@ patch:
   "style/layout/hilite_padding": 5
   "style/layout/round_corner": 6
   "style/layout/corner_radius": 8
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
   "preset_color_schemes/yunpin_light":
     name: "云拼浅色 / YunPin Light"
     author: "YunPin contributors"

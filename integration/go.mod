@@ -1,10 +1,12 @@
 module github.com/kukuyan/yunpin-ime/integration
 
-go 1.25.0
+go 1.25.12
 
 require (
+	github.com/kukuyan/yunpin-ime/localstore v0.0.0
 	github.com/kukuyan/yunpin-ime/protocol v0.0.0
 	github.com/kukuyan/yunpin-ime/sync v0.0.0
+	github.com/kukuyan/yunpin-ime/syncclient v0.0.0
 )
 
 require (
@@ -28,3 +30,7 @@ require (
 replace github.com/kukuyan/yunpin-ime/protocol => ../protocol
 
 replace github.com/kukuyan/yunpin-ime/sync => ../sync
+
+replace github.com/kukuyan/yunpin-ime/localstore => ../localstore
+
+replace github.com/kukuyan/yunpin-ime/syncclient => ../syncclient

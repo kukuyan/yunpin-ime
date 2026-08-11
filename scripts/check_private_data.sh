@@ -12,7 +12,7 @@ else
   files="$(find . -type f -not -path './.git/*')"
 fi
 
-bad_paths="$(printf '%s\n' "$files" | rg -i '(^|/)(conversations\.json|chat\.html|.*\.(scel|bin|sgpybin|sqlite|sqlite3|db|p12|pfx|mobileprovision|pem|key))$' || true)"
+bad_paths="$(printf '%s\n' "$files" | rg -i '(^|/)(conversations\.json|chat\.html|.*\.yunpinreplay|.*replay.*\.(jsonl|ndjson|sqlite|sqlite3|db)(-[^/]*)?|.*\.(scel|bin|sgpybin|sqlite|sqlite3|db|dpapi|p12|pfx|mobileprovision|pem|key))$' || true)"
 if [[ -n "$bad_paths" ]]; then
   echo "forbidden private/export/secret file types detected:" >&2
   echo "$bad_paths" >&2
@@ -33,4 +33,4 @@ if [[ -n "$secret_hits" ]]; then
   exit 1
 fi
 
-echo "privacy scan passed: no forbidden export, database, key, or known token pattern"
+echo "privacy scan passed: no forbidden replay trace, export, database, key, or known token pattern"

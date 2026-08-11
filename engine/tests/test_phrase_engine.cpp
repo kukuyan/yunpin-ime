@@ -135,6 +135,34 @@ void TestPinnedShortPhraseInitialsRemainAvailable() {
         "a long pin must still wait for two complete full-pinyin syllables");
 }
 
+void TestShortPrefixDoesNotInjectLongPhrases() {
+  PhraseIndex index({
+      Entry("merge-as", "合并为", "he bing wei", PhraseOrigin::kPublic, 0,
+            1000),
+      Entry("and", "和", "he", PhraseOrigin::kPublic, 0, 900),
+      Entry("merge", "合并", "he bing", PhraseOrigin::kPublic, 0, 800),
+      Entry("personal-two", "合约", "he yue", PhraseOrigin::kPersonal, 8,
+            700),
+      Entry("pinned-long", "河北石家庄公司", "he bei shi jia zhuang gong si",
+            PhraseOrigin::kPersonal, 10, 100, true),
+  });
+
+  const auto one_syllable = index.Query("he");
+  Check(!ContainsId(one_syllable, "merge-as"),
+        "one complete syllable must not inject a non-pinned three-syllable phrase");
+  Check(!ContainsId(one_syllable, "pinned-long"),
+        "one complete syllable must not inject a pinned long phrase");
+  Check(ContainsId(one_syllable, "and") &&
+            ContainsId(one_syllable, "merge"),
+        "the short-prefix guard must retain one- and two-syllable candidates");
+  Check(!ContainsId(index.Query("h"), "personal-two"),
+        "one incomplete letter must not inject a multi-syllable personal phrase");
+  Check(ContainsId(index.Query("hebing"), "merge-as"),
+        "two complete syllables must recall a non-pinned long phrase");
+  Check(!ContainsId(index.Query("hb"), "merge-as"),
+        "two short initials must not inject a non-pinned long phrase");
+}
+
 void TestSourcePrecedenceAndFirstPageQuota() {
   PhraseIndex index({
       Entry("pinned", "固定公司", "gong si", PhraseOrigin::kPersonal, 1,
@@ -149,26 +177,37 @@ void TestSourcePrecedenceAndFirstPageQuota() {
             1000),
       Entry("public-b", "公共公司乙", "gong si", PhraseOrigin::kPublic, 0,
             900),
-      Entry("base", "基础公司", "gong si", PhraseOrigin::kBase, 0, 500),
+      Entry("public-c", "公共公司丙", "gong si", PhraseOrigin::kPublic, 0,
+            800),
+      Entry("public-d", "公共公司丁", "gong si", PhraseOrigin::kPublic, 0,
+            700),
+      Entry("base-a", "基础公司甲", "gong si", PhraseOrigin::kBase, 0, 500),
+      Entry("base-b", "基础公司乙", "gong si", PhraseOrigin::kBase, 0, 400),
   });
 
-  const auto candidates = index.Query("gongsi", 7);
-  Check(candidates.size() == 7, "all seven matching candidates should return");
+  const auto candidates = index.Query("gongsi", 10);
+  Check(candidates.size() == 10, "all ten matching candidates should return");
   Check(candidates[0].id == "pinned", "manual pin must be first");
   Check(candidates[1].id == "imported",
         "highest-frequency personal/import candidate must follow pin");
-  Check(candidates[2].origin == PhraseOrigin::kPublic &&
-            candidates[3].origin == PhraseOrigin::kPublic &&
-            candidates[4].origin == PhraseOrigin::kBase,
-        "public then base candidates must fill the first-page quota");
+  Check(std::all_of(candidates.begin() + 2, candidates.begin() + 6,
+                    [](const Candidate& candidate) {
+                      return candidate.origin == PhraseOrigin::kPublic;
+                    }) &&
+            std::all_of(candidates.begin() + 6, candidates.begin() + 8,
+                        [](const Candidate& candidate) {
+                          return candidate.origin == PhraseOrigin::kBase;
+                        }),
+        "public then base candidates must fill the eight-item first page");
+  constexpr std::size_t first_page_limit = 8;
   const std::size_t first_page_personal = static_cast<std::size_t>(
-      std::count_if(candidates.begin(), candidates.begin() + 5,
+      std::count_if(candidates.begin(), candidates.begin() + first_page_limit,
                     [](const Candidate& candidate) {
                       return candidate.is_personal();
                     }));
   Check(first_page_personal == 2,
-        "the first five candidates must contain at most two personal items");
-  Check(candidates[5].id == "history" && candidates[6].id == "personal",
+        "the first eight candidates must contain at most two personal items");
+  Check(candidates[8].id == "history" && candidates[9].id == "personal",
         "deferred personal candidates must retain deterministic frequency order");
 }
 
@@ -379,6 +418,7 @@ int main() {
   try {
     TestAcceptanceAndRecallThresholds();
     TestPinnedShortPhraseInitialsRemainAvailable();
+    TestShortPrefixDoesNotInjectLongPhrases();
     TestSourcePrecedenceAndFirstPageQuota();
     TestLearningGateAndTombstones();
     TestConcurrentQueriesAndTombstone();

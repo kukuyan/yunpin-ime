@@ -10,7 +10,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "third_party" / "upstreams.lock.json"
 GO_LICENSE_LOCK = ROOT / "third_party" / "go-modules.lock.json"
-GO_MODULE_DIRS = ("protocol", "localstore", "sync", "integration")
+GO_MODULE_DIRS = (
+    "protocol",
+    "localstore",
+    "sync",
+    "syncclient",
+    "desktopagent",
+    "integration",
+)
 APPROVED_LICENSES = {
     "Apache-2.0",
     "BSD-2-Clause",
@@ -111,6 +118,7 @@ def check_go_license_lock(errors: list[str]) -> int:
         manifest[key] = row
 
     local_manifest: dict[tuple[str, str], dict] = {}
+    repository_license = (ROOT / "LICENSE").resolve()
     for row in local_rows:
         if not isinstance(row, dict):
             errors.append("go module license lock: malformed local replacement row")
@@ -124,11 +132,20 @@ def check_go_license_lock(errors: list[str]) -> int:
             continue
         if row.get("license") != "Apache-2.0":
             errors.append(f"{key[0]}@{key[1]}: local replacement must declare Apache-2.0")
+        source = row.get("license_source")
+        if not isinstance(source, str) or not source or Path(source).is_absolute():
+            errors.append(f"{key[0]}@{key[1]}: local license source must be repository-relative")
+        else:
+            resolved_source = (ROOT / source).resolve()
+            if resolved_source != repository_license or not resolved_source.is_file():
+                errors.append(
+                    f"{key[0]}@{key[1]}: local license source must resolve to LICENSE"
+                )
         local_manifest[key] = row
 
     locked: set[tuple[str, str]] = set()
     required_external: set[tuple[str, str]] = set()
-    observed_local: dict[tuple[str, str], tuple[str, Path]] = {}
+    observed_local: dict[tuple[str, str], list[tuple[str, Path]]] = {}
     for module_dir in GO_MODULE_DIRS:
         base = ROOT / module_dir
         try:
@@ -140,7 +157,7 @@ def check_go_license_lock(errors: list[str]) -> int:
         for pair in required:
             replacement = replacements.get(pair)
             if replacement and replacement.startswith("."):
-                observed_local[pair] = (replacement, base)
+                observed_local.setdefault(pair, []).append((replacement, base))
             else:
                 required_external.add(pair)
 
@@ -150,20 +167,24 @@ def check_go_license_lock(errors: list[str]) -> int:
         errors.append(f"{pair[0]}@{pair[1]}: locked module missing from go-modules.lock.json")
     for pair in sorted(set(manifest) - locked):
         errors.append(f"{pair[0]}@{pair[1]}: stale module in go-modules.lock.json")
-    for pair, replacement_data in sorted(observed_local.items()):
-        replacement, module_base = replacement_data
+    for pair, replacement_locations in sorted(observed_local.items()):
         row = local_manifest.get(pair)
         if row is None:
             errors.append(f"{pair[0]}@{pair[1]}: local replacement missing from license lock")
             continue
-        if row.get("replacement") != replacement:
-            errors.append(
-                f"{pair[0]}@{pair[1]}: replacement {replacement} does not match license lock "
-                f"{row.get('replacement')}"
-            )
-        resolved = (module_base / Path(replacement)).resolve()
-        if not resolved.is_dir() or ROOT not in resolved.parents:
-            errors.append(f"{pair[0]}@{pair[1]}: local replacement escapes or is missing")
+        for replacement, module_base in replacement_locations:
+            if row.get("replacement") != replacement:
+                errors.append(
+                    f"{pair[0]}@{pair[1]}: replacement {replacement} in "
+                    f"{module_base.relative_to(ROOT)}/go.mod does not match license lock "
+                    f"{row.get('replacement')}"
+                )
+            resolved = (module_base / Path(replacement)).resolve()
+            if not resolved.is_dir() or ROOT not in resolved.parents:
+                errors.append(
+                    f"{pair[0]}@{pair[1]}: local replacement in "
+                    f"{module_base.relative_to(ROOT)}/go.mod escapes or is missing"
+                )
     for pair in sorted(set(local_manifest) - set(observed_local)):
         errors.append(f"{pair[0]}@{pair[1]}: stale local replacement in license lock")
     return len(locked)

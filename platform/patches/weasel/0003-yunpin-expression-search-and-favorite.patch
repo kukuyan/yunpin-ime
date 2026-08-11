@@ -1,0 +1,19 @@
+SPDX-License-Identifier: GPL-3.0-only
+Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+Subject: [PATCH] yunpin: keep expression commit text side-effect free
+
+diff --git a/WeaselTSF/Composition.cpp b/WeaselTSF/Composition.cpp
+index e94cea0..e882b5f 100644
+--- a/WeaselTSF/Composition.cpp
++++ b/WeaselTSF/Composition.cpp
+@@ -364,6 +364,10 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
+ 
+ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
+                             const std::wstring& text) {
++  // YunPin expression actions are not connected in this preview. Candidate
++  // commit text is untrusted dictionary data, so it must never be parsed as
++  // a browser or file-system command. A future integration must carry a
++  // typed, explicitly armed action outside the ordinary commit string.
+   CInsertTextEditSession* pEditSession;
+   HRESULT hr;
+ 

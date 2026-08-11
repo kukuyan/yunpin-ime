@@ -1,0 +1,93 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: Reconcile the enabled input source through the login session
+
+diff --git a/sources/InputSource.swift b/sources/InputSource.swift
+index ab5632e..35c7bb1 100644
+--- a/sources/InputSource.swift
++++ b/sources/InputSource.swift
+@@ -66,6 +66,59 @@ final class SquirrelInstaller {
+     }
+   }
+-
++
++  @discardableResult
++  func reconcile() -> Bool {
++    let enabledInputModes = Set(enabledModes())
++    let modesToReconcile = enabledInputModes.isEmpty
++      ? [InputMode.primary]
++      : InputMode.allCases.filter { enabledInputModes.contains($0) }
++    let matchingSources = getInputSource(modes: modesToReconcile)
++    if matchingSources.count != modesToReconcile.count {
++      print("Failed to find every YunPin input source selected for reconciliation")
++      return false
++    }
++
++    guard let previousInputSource = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
++          getBool(for: previousInputSource, key: kTISPropertyInputSourceIsSelectCapable) == true else {
++      print("Cannot safely restore the previously selected input source")
++      return false
++    }
++
++    for mode in modesToReconcile {
++      guard let inputSource = matchingSources[mode],
++            getBool(for: inputSource, key: kTISPropertyInputSourceIsSelectCapable) == true else {
++        print("YunPin input source is not selectable: \(mode.rawValue)")
++        return false
++      }
++    }
++
++    var reconciliationSucceeded = true
++    for mode in modesToReconcile {
++      guard let inputSource = matchingSources[mode] else { return false }
++      let enableError = TISEnableInputSource(inputSource)
++      if enableError != noErr {
++        print("Failed to enable input source \(mode.rawValue): \(enableError)")
++        reconciliationSucceeded = false
++        break
++      }
++      let selectError = TISSelectInputSource(inputSource)
++      if selectError != noErr {
++        print("Failed to persist input source \(mode.rawValue): \(selectError)")
++        reconciliationSucceeded = false
++        break
++      }
++    }
++
++    let restoreError = TISSelectInputSource(previousInputSource)
++    if restoreError != noErr {
++      print("Failed to restore the previously selected input source: \(restoreError)")
++      return false
++    }
++    if !reconciliationSucceeded { return false }
++    print("Reconciled persistent YunPin input source state: \(modesToReconcile.map(\.rawValue))")
++    return true
++  }
++
+   func select(mode: InputMode? = nil) {
+     let enabledInputModes = enabledModes()
+     let modeToSelect = mode ?? .primary
+diff --git a/sources/Main.swift b/sources/Main.swift
+index 53f1172..23e0903 100644
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -45,6 +45,11 @@ struct SquirrelApp {
+             exit(EXIT_FAILURE)
+           }
+           return true
++        case "--reconcile-input-source":
++          guard installer.reconcile() else {
++            exit(EXIT_FAILURE)
++          }
++          return true
+         case "--enable-input-source":
+           if args.count > 2 {
+             let modes = args[2...].map { SquirrelInstaller.InputMode(rawValue: $0) }.compactMap { $0 }
+@@ -142,5 +147,6 @@ struct SquirrelApp {
+ Install YunPin:
+   --install, --register-input-source    register input source
++  --reconcile-input-source             persist enabled modes and restore selection
+   --enable-input-source [source id...]  input source list optional
+   --disable-input-source [source id...] input source list optional
+   --select-input-source [source id]     input source optional

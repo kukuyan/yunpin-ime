@@ -1,0 +1,148 @@
+{
+  "format": 1,
+  "squirrel_commit": "876adebaf2f612951dcdca8a591de65401222b9a",
+  "boost_version": "1.89.0",
+  "nested_submodules": {
+    "librime": "a251145d3aafa33871824a40bbec04c966bd8b56",
+    "plum": "4c28f11f451facef809b380502874a48ba964ddb",
+    "Sparkle": "41847a58cdef7506b257591fcca6f9495df591d4"
+  },
+  "nested_components": [
+    {
+      "name": "librime",
+      "version": "1.16.0",
+      "repository": "https://github.com/rime/librime.git",
+      "commit": "a251145d3aafa33871824a40bbec04c966bd8b56",
+      "license": "BSD-3-Clause",
+      "role": "macOS Rime engine submodule"
+    },
+    {
+      "name": "plum",
+      "version": "4c28f11f451facef809b380502874a48ba964ddb",
+      "repository": "https://github.com/rime/plum.git",
+      "commit": "4c28f11f451facef809b380502874a48ba964ddb",
+      "license": "LGPL-3.0",
+      "role": "macOS Rime data package installer submodule"
+    },
+    {
+      "name": "Sparkle",
+      "version": "2.6.2",
+      "repository": "https://github.com/sparkle-project/Sparkle",
+      "commit": "41847a58cdef7506b257591fcca6f9495df591d4",
+      "license": "MIT",
+      "role": "macOS update framework with update checks disabled"
+    }
+  ],
+  "librime_patches": [
+    {
+      "path": "platform/patches/librime-1.16/0001-configurable-corrector-component.patch",
+      "sha256": "79b0e7629b5eee454855187ddfcfc4f3014f4b24425bd0aa45f104593994d51b"
+    }
+  ],
+  "squirrel_patches": [
+    {
+      "path": "platform/patches/squirrel/0001-yunpin-development-preview-identity.patch",
+      "sha256": "653780ecbc1167e388c214c94d6de9b4ecb921426aaa08e077f42cea0834855a"
+    },
+    {
+      "path": "platform/patches/squirrel/0002-yunpin-original-input-source-artwork.patch",
+      "sha256": "127b199d87f0b5584c2c419228eae11d5264c60009c4922e337703a27495349a"
+    },
+    {
+      "path": "platform/patches/squirrel/0003-yunpin-original-app-icon-name.patch",
+      "sha256": "3a3db5d0a43b25895c440594c6e4a3c1b20a6f64816ae6144dcd500cee4b74b4"
+    },
+    {
+      "path": "platform/patches/squirrel/0004-yunpin-stable-app-icon-names.patch",
+      "sha256": "51a44be6b5f6e25725f9501b01f1f6c2ca9b3e027c13e5ec2c4315d313b87165"
+    },
+    {
+      "path": "platform/patches/squirrel/0005-yunpin-expression-search-and-favorite.patch",
+      "sha256": "aaf2dae4e94da7c00e7a2d8756da8710c1d9d5e38284825855a39171e478c65c"
+    },
+    {
+      "path": "platform/patches/squirrel/0006-yunpin-refresh-input-source-registration.patch",
+      "sha256": "b8f337f83776264ce8a812256011815260665a558267a689c71a071a823ef9de"
+    },
+    {
+      "path": "platform/patches/squirrel/0007-yunpin-reconcile-input-source-persistence.patch",
+      "sha256": "45b6c515f5c30fcaf642f2a34bbf61bc4978c906ae94d70d9781e35db91da611"
+    }
+  ],
+  "archives": [
+    {
+      "name": "rime-a251145-macOS-universal.tar.bz2",
+      "url": "https://github.com/rime/librime/releases/download/1.16.0/rime-a251145-macOS-universal.tar.bz2",
+      "sha256": "e4c9a8767a456f2550f1242921b7656c6e6be088c89a921274bd5d4404f58b99"
+    },
+    {
+      "name": "rime-deps-a251145-macOS-universal.tar.bz2",
+      "url": "https://github.com/rime/librime/releases/download/1.16.0/rime-deps-a251145-macOS-universal.tar.bz2",
+      "sha256": "087e753056f092f644cc4a470f64ecf2cd9de18e684b220e0588f86f6b91dfcc"
+    },
+    {
+      "name": "boost_1_89_0.tar.gz",
+      "version": "1.89.0",
+      "url": "https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz",
+      "sha256": "9de758db755e8330a01d995b0a24d09798048400ac25c03fc5ea9be364b13c93",
+      "license": "BSL-1.0",
+      "boost_source": true
+    },
+    {
+      "name": "Sparkle-2.6.2.tar.xz",
+      "version": "2.6.2",
+      "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.6.2/Sparkle-2.6.2.tar.xz",
+      "sha256": "2300a7dc2545a4968e54621b7f351d388ddf1a5cb49e79f6c99e9a09d826f5e8",
+      "license": "MIT"
+    },
+    {
+      "name": "rime-prelude-082425e.tar.gz",
+      "url": "https://github.com/rime/rime-prelude/archive/082425ea0684bca36474415d4a0e8db9b016487e.tar.gz",
+      "sha256": "66239ba4745d54471e5ce5540b45e86ec663ff5dba004cb23c95531a3bdec00f",
+      "plum_package": "prelude",
+      "commit": "082425ea0684bca36474415d4a0e8db9b016487e"
+    },
+    {
+      "name": "rime-luna-pinyin-56b934b.tar.gz",
+      "url": "https://github.com/rime/rime-luna-pinyin/archive/56b934b099dfbeab842320f13aa8b461a6ab3e42.tar.gz",
+      "sha256": "876c7ba559794f476abf7195a255aea29000cee281e6f5ec664928dce018bd90",
+      "plum_package": "luna-pinyin",
+      "commit": "56b934b099dfbeab842320f13aa8b461a6ab3e42"
+    },
+    {
+      "name": "rime-essay-e9b1a37.tar.gz",
+      "url": "https://github.com/rime/rime-essay/archive/e9b1a374a6ea015fca5bdd04318924b4483ac35a.tar.gz",
+      "sha256": "11559224d48709b0d77009a550804bfc2b763cfdf048c8d8fe224b3d36ba441c",
+      "plum_package": "essay",
+      "commit": "e9b1a374a6ea015fca5bdd04318924b4483ac35a"
+    },
+    {
+      "name": "rime-bopomofo-6085c9a.tar.gz",
+      "url": "https://github.com/rime/rime-bopomofo/archive/6085c9a38a4a728047862b33d67eee18aa86f3b9.tar.gz",
+      "sha256": "5fc0719e8fe9b2eb8aa05c505ffb2b39d972e637951531182dd7d745a83bda51",
+      "plum_package": "bopomofo",
+      "commit": "6085c9a38a4a728047862b33d67eee18aa86f3b9"
+    },
+    {
+      "name": "rime-cangjie-52d90a1.tar.gz",
+      "url": "https://github.com/rime/rime-cangjie/archive/52d90a1b1312e74042b38c1cbc8142defbc53171.tar.gz",
+      "sha256": "18d989bf21d0bb86b402f18be4dd060bf2653896c95448afb01d4da2e6be5464",
+      "plum_package": "cangjie",
+      "commit": "52d90a1b1312e74042b38c1cbc8142defbc53171"
+    },
+    {
+      "name": "rime-stroke-3a4b0f4.tar.gz",
+      "url": "https://github.com/rime/rime-stroke/archive/3a4b0f4013e2b4c14b1e80c92b1d4723eb65f39c.tar.gz",
+      "sha256": "14995408f49a8389bbcc50b8865ec8d1d90c26517cdb33f69b4a69b8a5d2ddb8",
+      "plum_package": "stroke",
+      "commit": "3a4b0f4013e2b4c14b1e80c92b1d4723eb65f39c"
+    },
+    {
+      "name": "rime-terra-pinyin-8a2c895.tar.gz",
+      "url": "https://github.com/rime/rime-terra-pinyin/archive/8a2c895ad7ee8e2b137d91be77f18f86b04d7fc9.tar.gz",
+      "sha256": "7507d3f00d0219f49e538653af1c8462345d0b2e691616145072e5c34584e621",
+      "plum_package": "terra-pinyin",
+      "commit": "8a2c895ad7ee8e2b137d91be77f18f86b04d7fc9"
+    }
+  ]
+}

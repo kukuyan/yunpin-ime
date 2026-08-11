@@ -1,0 +1,215 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# YunPin compatibility patch for librime 1.17.0.
+# Base-Commit: 33e78140250125871856cdc5b42ddc6a5fcd3cd4
+diff --git a/src/rime/candidate.h b/src/rime/candidate.h
+--- a/src/rime/candidate.h
++++ b/src/rime/candidate.h
+@@ -28,3 +28,4 @@ class Candidate {
+   size_t start() const { return start_; }
+   size_t end() const { return end_; }
++  bool is_correction() const { return is_correction_; }
+   double quality() const { return quality_; }
+@@ -40,3 +41,4 @@ class Candidate {
+   void set_start(size_t start) { start_ = start; }
+   void set_end(size_t end) { end_ = end; }
++  void set_correction(bool correction) { is_correction_ = correction; }
+   void set_quality(double quality) { quality_ = quality; }
+@@ -44,6 +46,7 @@ class Candidate {
+  private:
+   string type_;
+   size_t start_ = 0;
+   size_t end_ = 0;
++  bool is_correction_ = false;
+   double quality_ = 0.;
+ };
+diff --git a/src/rime/gear/script_translator.cc b/src/rime/gear/script_translator.cc
+--- a/src/rime/gear/script_translator.cc
++++ b/src/rime/gear/script_translator.cc
+@@ -182,24 +182,27 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
+ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
+     : Translator(ticket), Memory(ticket), TranslatorOptions(ticket) {
+   if (!engine_)
+     return;
++  string corrector_component = "corrector";
+   if (Config* config = engine_->schema()->config()) {
+     config->GetInt(name_space_ + "/spelling_hints", &spelling_hints_);
+     config->GetInt(name_space_ + "/max_word_length", &max_word_length_);
+     config->GetInt(name_space_ + "/core_word_length", &core_word_length_);
+     config->GetBool(name_space_ + "/always_show_comments",
+                     &always_show_comments_);
+     config->GetBool(name_space_ + "/enable_correction", &enable_correction_);
++    config->GetString(name_space_ + "/corrector_component",
++                      &corrector_component);
+     if (!config->GetBool(name_space_ + "/enable_word_completion",
+                          &enable_word_completion_)) {
+       enable_word_completion_ = enable_completion_;
+     }
+     config->GetInt(name_space_ + "/max_homophones", &max_homophones_);
+     poet_.reset(new Poet(language(), config));
+   }
+   if (enable_correction_) {
+-    if (auto* corrector = Corrector::Require("corrector")) {
++    if (auto* corrector = Corrector::Require(corrector_component)) {
+       corrector_.reset(corrector->Create(ticket));
+     }
+   }
+ }
+@@ -574,5 +577,7 @@ an<Candidate> ScriptTranslation::Peek() {
+     }
+   }
+   candidate_->set_syllabifier(syllabifier_);
++  candidate_->set_correction(syllabifier_->IsCorrection(
++      candidate_->code(), candidate_->end() - start_));
+   return candidate_;
+ }
+
+diff --git a/src/rime/algo/syllabifier.cc b/src/rime/algo/syllabifier.cc
+--- a/src/rime/algo/syllabifier.cc
++++ b/src/rime/algo/syllabifier.cc
+@@ -33,6 +33,71 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+   if (input.empty())
+     return 0;
+-
++  constexpr size_t kMaxCorrectionInputBytes = 128;
++  constexpr size_t kMaxCorrectionSearchesPerInput = 32;
++  const bool correction_analysis_enabled =
++      corrector_ && input.length() < kMaxCorrectionInputBytes;
++  const auto is_normal_exact_match =
++      [&prism](const Prism::Match& match) {
++        for (auto accessor = prism.QuerySpelling(match.value);
++             !accessor.exhausted(); accessor.Next()) {
++          const auto props = accessor.properties();
++          if (props.type == kNormalSpelling && !props.is_correction)
++            return true;
++        }
++        return false;
++      };
++  vector<bool> exact_path_reachable;
++  vector<bool> exact_suffix_reachable;
++  bool has_full_normal_exact_path = false;
++  if (correction_analysis_enabled) {
++  vector<vector<size_t>> normal_exact_ends(input.length() + 1);
++  for (size_t path_pos = 0; path_pos < input.length(); ++path_pos) {
++    size_t syllable_start = path_pos;
++    while (syllable_start < input.length() &&
++           delimiters_.find(input[syllable_start]) != string::npos) {
++      ++syllable_start;
++    }
++    if (syllable_start == input.length())
++      continue;
++    vector<Prism::Match> exact_path_matches;
++    prism.CommonPrefixSearch(input.substr(syllable_start),
++                             &exact_path_matches);
++    for (const auto& match : exact_path_matches) {
++      if (match.length == 0 ||
++          syllable_start + match.length > input.length() ||
++          !is_normal_exact_match(match)) {
++        continue;
++      }
++      size_t syllable_end = syllable_start + match.length;
++      while (syllable_end < input.length() &&
++             delimiters_.find(input[syllable_end]) != string::npos) {
++        ++syllable_end;
++      }
++      normal_exact_ends[path_pos].push_back(syllable_end);
++    }
++  }
++  exact_path_reachable.assign(input.length() + 1, false);
++  exact_path_reachable[0] = true;
++  for (size_t path_pos = 0; path_pos < input.length(); ++path_pos) {
++    if (!exact_path_reachable[path_pos])
++      continue;
++    for (const size_t syllable_end : normal_exact_ends[path_pos])
++      exact_path_reachable[syllable_end] = true;
++  }
++  exact_suffix_reachable.assign(input.length() + 1, false);
++  exact_suffix_reachable[input.length()] = true;
++  for (size_t path_pos = input.length(); path_pos-- > 0;) {
++    for (const size_t syllable_end : normal_exact_ends[path_pos]) {
++      if (exact_suffix_reachable[syllable_end]) {
++        exact_suffix_reachable[path_pos] = true;
++        break;
++      }
++    }
++  }
++  has_full_normal_exact_path = exact_path_reachable[input.length()];
++  }
+   size_t farthest = 0;
+   VertexQueue queue;
++  bool correction_offset_used = false;
++  size_t correction_searches = 0;
+   queue.push(Vertex{0, kNormalSpelling});  // start
+@@ -65,22 +130,44 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+     // see where we can go by advancing a syllable
+     vector<Prism::Match> matches;
+-    set<SyllableId> exact_match_syllables;
++    set<pair<SyllableId, size_t>> exact_matches;
++    set<pair<SyllableId, size_t>> correction_matches;
+     auto current_input = input.substr(begin_pos);
+     prism.CommonPrefixSearch(current_input, &matches);
+-    if (corrector_) {
++    if (correction_analysis_enabled) {
+-      for (auto& m : matches) {
+-        exact_match_syllables.insert(m.value);
++      for (const auto& m : matches) {
++        if (is_normal_exact_match(m)) {
++          exact_matches.insert({m.value, m.length});
++        }
+       }
+-      Corrections corrections;
+-      corrector_->ToleranceSearch(prism, current_input, &corrections, 5);
+-      for (const auto& m : corrections) {
+-        for (auto accessor = prism.QuerySpelling(m.first);
+-             !accessor.exhausted(); accessor.Next()) {
+-          auto props = accessor.properties();
+-          if (props.type == kNormalSpelling && !props.is_correction) {
+-            matches.push_back({m.first, m.second.length});
+-            break;
+-          }
+-        }
+-      }
++      if (correction_analysis_enabled && !has_full_normal_exact_path &&
++          exact_path_reachable[current_pos] && !correction_offset_used &&
++          correction_searches < kMaxCorrectionSearchesPerInput) {
++        ++correction_searches;
++        Corrections corrections;
++        corrector_->ToleranceSearch(prism, current_input, &corrections, 5);
++        bool correction_added = false;
++        for (const auto& m : corrections) {
++          if (m.second.length > input.length() - begin_pos)
++            continue;
++          size_t correction_end = begin_pos + m.second.length;
++          while (correction_end < input.length() &&
++                 delimiters_.find(input[correction_end]) != string::npos) {
++            ++correction_end;
++          }
++          if (!exact_suffix_reachable[correction_end])
++            continue;
++          for (auto accessor = prism.QuerySpelling(m.first);
++               !accessor.exhausted(); accessor.Next()) {
++            auto props = accessor.properties();
++            if (props.type == kNormalSpelling && !props.is_correction) {
++              matches.push_back({m.first, m.second.length});
++              correction_matches.insert({m.first, m.second.length});
++              correction_added = true;
++              break;
++            }
++          }
++        }
++        if (correction_added)
++          correction_offset_used = true;
++      }
+     }
+@@ -114,8 +201,10 @@ int Syllabifier::BuildSyllableGraph(const string& input,
+             props.end_pos = end_pos;
+             // add a syllable with properties to the edge's
+             // spelling-to-syllable map
+-            if (corrector_ && exact_match_syllables.find(m.value) ==
+-                                  exact_match_syllables.end()) {
++            if (correction_matches.find({m.value, m.length}) !=
++                    correction_matches.end() &&
++                exact_matches.find({m.value, m.length}) ==
++                    exact_matches.end()) {
+               props.is_correction = true;
+               props.credibility = kCorrectionCredibility;
+             }

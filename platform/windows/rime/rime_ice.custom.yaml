@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Windows preview overlay. The merged librime-yunpin module is activated by
+# the schema filter; personal data remains an external user-data file.
+
+patch:
+  "menu/page_size": 8
+  "menu/alternative_select_keys": "12345678"
+  "engine/filters/@before 0": yunpin_filter@yunpin
+  # Keep this final visibility filter immediately before Rime's uniquifier.
+  # The schema-menu option is absent/false on first run, so spelling comments
+  # stay hidden until the user explicitly selects "拼音开".
+  "engine/filters/@before last": yunpin_comment_filter@yunpin_comment_visibility
+  "switches/@after last":
+    name: yunpin_show_candidate_pinyin
+    states: [拼音关, 拼音开]
+  "translator/keep_comments": true
+  "corrector": "［{comment}］"
+  # Experimental opt-in only. Keep the exact Rime path unchanged by default.
+  "translator/enable_correction": false
+  "translator/corrector_component": yunpin_corrector
+  "translator/enable_word_completion": true
+  "translator/max_sentences": 2
+  "yunpin/tag": abc
+  "yunpin/snapshot": "yunpin/private.tsv"
+  "yunpin/max_candidates": 2
+  # The Windows TSF secure-input bridge has not passed host testing yet.
+  # Keep private candidates disabled in distributed development artifacts.
+  "yunpin/enabled": false
+  # This guard is public-data-only and never reads a private snapshot.
+  "yunpin/short_input_guard": true
+  # Keep literal long-input candidates ahead of automatic typo recovery.
+  "yunpin/long_correction_guard": true
+  "yunpin/long_correction_min_chars": 12
+  # Keep learning off until TSF secure-input and authenticated IPC pass.
+  "yunpin/session_learning": false
+  # The selected component is a strict no-op while this remains false; it does
+  # not fall back to librime's broader NearSearchCorrector.
+  "yunpin/typo_correction": false
+  "yunpin/typo_reviewed_confusions": false
+  # Reserved and inert until a typed/armed native action channel exists.
+  "yunpin/expression_search": false
