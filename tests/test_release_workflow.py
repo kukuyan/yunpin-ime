@@ -45,6 +45,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 state_path = Path(os.environ["FAKE_GH_STATE"])
 scenario = os.environ["FAKE_GH_SCENARIO"]
+hide_owned_lists = int(os.environ.get("FAKE_GH_HIDE_OWNED_LISTS", "0"))
+fail_release_lists = int(os.environ.get("FAKE_GH_FAIL_RELEASE_LISTS", "0"))
 
 
 def load_state():
@@ -141,9 +143,19 @@ if arguments[:2] == ["release", "create"]:
         "draft": True,
         "prerelease": True,
     }
-    if scenario in {"success", "patch_remote_wrong_name"}:
+    if scenario in {
+        "success",
+        "delayed_success",
+        "success_never_visible",
+        "patch_remote_wrong_name",
+    }:
         state["releases"].append(owned)
-    elif scenario == "create_nonzero_owned":
+        state["owned_ids"].append(owned["id"])
+    elif scenario in {
+        "create_nonzero_owned",
+        "create_nonzero_delayed_owned",
+        "owned_never_visible",
+    }:
         state["releases"].extend([
             {
                 **owned,
@@ -153,6 +165,7 @@ if arguments[:2] == ["release", "create"]:
             },
             owned,
         ])
+        state["owned_ids"].append(owned["id"])
     elif scenario == "external_only":
         state["releases"].append({
             **owned, "id": 601, "name": "External operator draft", "body": "external\n"
@@ -161,10 +174,16 @@ if arguments[:2] == ["release", "create"]:
         state["releases"].append({**owned, "id": 602, "body": "external\n"})
     elif scenario == "duplicate_owned":
         state["releases"].extend([owned, {**owned, "id": 502}])
+        state["owned_ids"].extend([501, 502])
     else:
         raise SystemExit(f"unknown scenario: {scenario}")
     save_state(state)
-    if scenario not in {"success", "patch_remote_wrong_name"}:
+    if scenario not in {
+        "success",
+        "delayed_success",
+        "success_never_visible",
+        "patch_remote_wrong_name",
+    }:
         raise SystemExit(41)
     print("https://example.invalid/releases/untagged-owned")
     raise SystemExit(0)
@@ -194,7 +213,17 @@ method, endpoint, input_path, raw_fields, typed_fields = api_request(arguments)
 state["api_calls"].append({"method": method, "endpoint": endpoint})
 
 if method == "GET" and endpoint.endswith("/releases?per_page=100"):
-    print(json.dumps([state["releases"]]))
+    state["release_list_calls"] += 1
+    if state["release_list_calls"] <= fail_release_lists:
+        save_state(state)
+        print("synthetic release-list failure", file=sys.stderr)
+        raise SystemExit(75)
+    visible = state["releases"]
+    if state["release_list_calls"] <= hide_owned_lists:
+        visible = [
+            row for row in visible if row["id"] not in set(state["owned_ids"])
+        ]
+    print(json.dumps([visible]))
 elif method == "POST" and endpoint.startswith("https://uploads.github.com/"):
     parsed = urlparse(endpoint)
     release_id = int(re.search(r"/releases/([0-9]+)/assets$", parsed.path).group(1))
@@ -251,6 +280,19 @@ raise SystemExit(f"unsupported fake-git command: {arguments}")
 '''
 
 
+FAKE_SLEEP = r'''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+state_path = Path(os.environ["FAKE_GH_STATE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+state["sleep_calls"].append(sys.argv[1])
+state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+'''
+
+
 def draft(release_id: object = 123456, **changes: object) -> dict[str, object]:
     row: dict[str, object] = {
         "id": release_id,
@@ -276,7 +318,12 @@ def publish_script() -> str:
     return "\n".join(body) + "\n"
 
 
-def run_publish_scenario(scenario: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+def run_publish_scenario(
+    scenario: str,
+    *,
+    hide_owned_lists: int = 0,
+    fail_release_lists: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], dict]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "scripts").mkdir()
@@ -301,7 +348,11 @@ def run_publish_scenario(scenario: str) -> tuple[subprocess.CompletedProcess[str
 
         fake_bin = root / "fake-bin"
         fake_bin.mkdir()
-        for name, source in (("gh", FAKE_GH), ("git", FAKE_GIT)):
+        for name, source in (
+            ("gh", FAKE_GH),
+            ("git", FAKE_GIT),
+            ("sleep", FAKE_SLEEP),
+        ):
             executable = fake_bin / name
             executable.write_text(textwrap.dedent(source), encoding="utf-8")
             executable.chmod(0o755)
@@ -318,6 +369,9 @@ def run_publish_scenario(scenario: str) -> tuple[subprocess.CompletedProcess[str
                     "calls": [],
                     "api_calls": [],
                     "patch_payload": None,
+                    "owned_ids": [],
+                    "release_list_calls": 0,
+                    "sleep_calls": [],
                 }
             ),
             encoding="utf-8",
@@ -335,6 +389,8 @@ def run_publish_scenario(scenario: str) -> tuple[subprocess.CompletedProcess[str
                 "GH_TOKEN": "synthetic-test-token",
                 "FAKE_GH_STATE": str(state_path),
                 "FAKE_GH_SCENARIO": scenario,
+                "FAKE_GH_HIDE_OWNED_LISTS": str(hide_owned_lists),
+                "FAKE_GH_FAIL_RELEASE_LISTS": str(fail_release_lists),
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
         )
@@ -389,6 +445,16 @@ class ReleaseDraftResolutionTests(unittest.TestCase):
                 workflow.ReleaseWorkflowError, "invalid release-list JSON"
             ):
                 workflow._read_json(response)
+
+        with self.assertRaisesRegex(
+            workflow.ReleaseWorkflowError, "pages must be JSON arrays"
+        ):
+            workflow.resolve_owned_draft(
+                [{"message": "Not Found", "status": "404"}],
+                tag=TAG,
+                title=TITLE,
+                owner_marker=MARKER,
+            )
 
         for bad_id in (
             "123\n456",
@@ -462,6 +528,32 @@ class ReleaseDraftResolutionTests(unittest.TestCase):
         self.assertEqual("456789\n", completed.stdout)
         self.assertEqual("", completed.stderr)
 
+    def test_resolver_cli_marks_zero_matches_as_retryable_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            response = Path(directory) / "response.json"
+            response.write_text("[[]]\n", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "check_release_workflow.py"),
+                    "resolve-draft",
+                    "--response",
+                    str(response),
+                    "--tag",
+                    TAG,
+                    "--title",
+                    TITLE,
+                    "--owner-marker",
+                    MARKER,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(2, completed.returncode)
+        self.assertEqual("", completed.stdout)
+        self.assertIn("not visible", completed.stderr)
+
     def test_published_identity_checks_exact_title_body_and_typed_state(self) -> None:
         published = {
             "id": 501,
@@ -508,6 +600,26 @@ class ReleaseDraftResolutionTests(unittest.TestCase):
     "workflow state-machine harness requires a POSIX Bash runner",
 )
 class ReleaseWorkflowStateMachineTests(unittest.TestCase):
+    def test_delayed_visibility_after_successful_create_publishes(self) -> None:
+        completed, state = run_publish_scenario(
+            "delayed_success", hide_owned_lists=2
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual(3, state["release_list_calls"])
+        self.assertEqual(["1", "2"], state["sleep_calls"])
+        self.assertEqual([], state["deleted"])
+        self.assertIs(state["releases"][0]["draft"], False)
+
+    def test_transient_release_list_failures_recover(self) -> None:
+        completed, state = run_publish_scenario(
+            "success", fail_release_lists=2
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual(3, state["release_list_calls"])
+        self.assertEqual(["1", "2"], state["sleep_calls"])
+        self.assertEqual([], state["deleted"])
+        self.assertIs(state["releases"][0]["draft"], False)
+
     def test_create_error_after_server_create_deletes_only_owned_draft(self) -> None:
         completed, state = run_publish_scenario("create_nonzero_owned")
         self.assertNotEqual(0, completed.returncode)
@@ -524,6 +636,47 @@ class ReleaseWorkflowStateMachineTests(unittest.TestCase):
                 }
             ],
             delete_calls,
+        )
+
+    def test_create_error_cleanup_waits_for_delayed_owned_draft(self) -> None:
+        completed, state = run_publish_scenario(
+            "create_nonzero_delayed_owned", hide_owned_lists=2
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertEqual(3, state["release_list_calls"])
+        self.assertEqual(["1", "2"], state["sleep_calls"])
+        self.assertEqual([501], state["deleted"])
+        self.assertEqual([600], [release["id"] for release in state["releases"]])
+
+    def test_never_visible_owned_draft_fails_without_delete(self) -> None:
+        completed, state = run_publish_scenario(
+            "owned_never_visible", hide_owned_lists=100
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertEqual(6, state["release_list_calls"])
+        self.assertEqual(["1", "2", "4", "8", "8"], state["sleep_calls"])
+        self.assertEqual([], state["deleted"])
+        self.assertEqual(
+            [600, 501], [release["id"] for release in state["releases"]]
+        )
+        self.assertFalse(
+            any(call["method"] == "DELETE" for call in state["api_calls"])
+        )
+
+    def test_successful_create_never_visible_exhausts_main_and_cleanup_safely(self) -> None:
+        completed, state = run_publish_scenario(
+            "success_never_visible", hide_owned_lists=100
+        )
+        self.assertNotEqual(0, completed.returncode)
+        self.assertEqual(12, state["release_list_calls"])
+        self.assertEqual(
+            ["1", "2", "4", "8", "8"] * 2,
+            state["sleep_calls"],
+        )
+        self.assertEqual([], state["deleted"])
+        self.assertEqual([501], [release["id"] for release in state["releases"]])
+        self.assertFalse(
+            any(call["method"] == "DELETE" for call in state["api_calls"])
         )
 
     def test_external_markerless_and_duplicate_drafts_are_never_deleted(self) -> None:
@@ -583,8 +736,7 @@ class ReleaseWorkflowStaticTests(unittest.TestCase):
         cleanup = release.split("cleanup_failed_draft() {", 1)[1].split(
             "trap cleanup_failed_draft EXIT", 1
         )[0]
-        self.assertIn("cleanup_release_id=\"$(python3", cleanup)
-        self.assertIn("resolve-draft", cleanup)
+        self.assertIn("cleanup_release_id=\"$(resolve_owned_draft_with_retry", cleanup)
         self.assertIn("verify-draft", cleanup)
         self.assertIn("releases/${cleanup_release_id}", cleanup)
         self.assertNotIn("releases/${release_id}", cleanup)
