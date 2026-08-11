@@ -372,15 +372,14 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("REGISTER_WITH_LAUNCH_SERVICES", build)
         self.assertNotIn("WRAPPER_EXTENSION", build)
         self.assertNotIn("REGISTER_APP=NO", build)
-        self.assertIn('"$lsregister" -u "$app"', build)
-        self.assertIn('scripts/verify-launchservices-state.sh" "$app"', build)
+        self.assertIn('scripts/verify-launchservices-state.sh" --unregister "$app"', build)
         self.assertNotIn('"$lsregister" -dump', build)
         self.assertNotIn("lsregister -f", build)
         verify_app = build.index('scripts/verify-app.sh" --require-universal "$app"')
-        unregister = build.index('"$lsregister" -u "$app"')
-        launchservices = build.index('scripts/verify-launchservices-state.sh" "$app"')
-        self.assertLess(verify_app, unregister)
-        self.assertLess(unregister, launchservices)
+        launchservices = build.index(
+            'scripts/verify-launchservices-state.sh" --unregister "$app"'
+        )
+        self.assertLess(verify_app, launchservices)
         self.assertIn('scripts/sign-app-adhoc.sh" "$app"', build)
         self.assertNotIn("warning: bundle signing failed", build)
 
@@ -391,6 +390,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("expected_records", launchservices_script)
         self.assertIn("complete_records", launchservices_script)
         self.assertIn("launch-disabled", launchservices_script)
+        self.assertIn('"$lsregister" -u "$app"', launchservices_script)
+        self.assertIn("unregister_status", launchservices_script)
         self.assertIn("remains actively registered", launchservices_script)
         self.assertIn("incomplete or unrecognized", launchservices_script)
 
@@ -435,9 +436,12 @@ class MacOSIntegrationTests(unittest.TestCase):
             fake = root / "lsregister"
             fake.write_text(
                 "#!/bin/bash\n"
-                "[[ \"${1:-}\" == -dump ]] || exit 64\n"
-                "/bin/cat \"$YUNPIN_TEST_LS_DUMP\"\n"
-                "exit \"${YUNPIN_TEST_LS_STATUS:-0}\"\n",
+                "case \"${1:-}\" in\n"
+                "  -u) exit \"${YUNPIN_TEST_LS_UNREGISTER_STATUS:-0}\" ;;\n"
+                "  -dump) /bin/cat \"$YUNPIN_TEST_LS_DUMP\"; "
+                "exit \"${YUNPIN_TEST_LS_STATUS:-0}\" ;;\n"
+                "  *) exit 64 ;;\n"
+                "esac\n",
                 encoding="utf-8",
             )
             fake.chmod(0o755)
@@ -471,12 +475,39 @@ class MacOSIntegrationTests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
 
+            def unregister_with_dump(
+                contents: str, status: int
+            ) -> subprocess.CompletedProcess[str]:
+                dump.write_text(contents, encoding="utf-8")
+                child_env = env.copy()
+                child_env["YUNPIN_TEST_LS_UNREGISTER_STATUS"] = str(status)
+                return subprocess.run(
+                    [script, "--unregister", str(app)],
+                    cwd=ROOT,
+                    env=child_env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
             active = run_dump(records((app, "ui-element")))
             self.assertNotEqual(0, active.returncode)
             self.assertIn("remains actively registered", active.stderr)
 
             disabled = run_dump(records((app, "ui-element  launch-disabled")))
             self.assertEqual(0, disabled.returncode, disabled.stderr)
+
+            idempotent = unregister_with_dump(
+                records((app, "ui-element  launch-disabled")), 23
+            )
+            self.assertEqual(0, idempotent.returncode, idempotent.stderr)
+            self.assertIn("unregister returned status 23", idempotent.stderr)
+
+            unregister_failed_active = unregister_with_dump(
+                records((app, "ui-element")), 23
+            )
+            self.assertNotEqual(0, unregister_failed_active.returncode)
+            self.assertIn("after unregister status 23", unregister_failed_active.stderr)
 
             mixed = run_dump(
                 records(

@@ -75,7 +75,6 @@ cp "${MACOS_DIR}/preview-manifest.json" "$shared_support/yunpin-preview.json"
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
 lsregister="${YUNPIN_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister}"
 [[ -x "$lsregister" ]] || die "LaunchServices registration tool is unavailable"
-"$lsregister" -u "$app" >/dev/null || die "failed to unregister the exact YunPin build bundle"
 YUNPIN_LSREGISTER="$lsregister" \
-  "${MACOS_DIR}/scripts/verify-launchservices-state.sh" "$app"
+  "${MACOS_DIR}/scripts/verify-launchservices-state.sh" --unregister "$app"
 printf 'built YunPin development preview: %s\n' "$app"

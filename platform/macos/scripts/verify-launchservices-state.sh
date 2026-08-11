@@ -4,12 +4,26 @@ set -euo pipefail
 
 source "$(dirname "$0")/common.sh"
 
+unregister=false
+if [[ "${1:-}" == "--unregister" ]]; then
+  unregister=true
+  shift
+fi
 app="${1:-}"
 [[ -n "$app" && -d "$app" ]] || die "YunPin build bundle is missing: $app"
 [[ "$app" == /* ]] || die "YunPin build bundle path must be absolute"
+[[ "$#" -eq 1 ]] || die "unexpected LaunchServices verification arguments"
 
 lsregister="${YUNPIN_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister}"
 [[ -x "$lsregister" ]] || die "LaunchServices registration tool is unavailable"
+
+unregister_status=0
+if [[ "$unregister" == true ]]; then
+  set +e
+  "$lsregister" -u "$app" >/dev/null 2>&1
+  unregister_status=$?
+  set -e
+fi
 
 dump="$(mktemp "${TMPDIR:-/tmp}/yunpin-launchservices.XXXXXX")"
 trap 'rm -f "$dump"' EXIT
@@ -107,9 +121,18 @@ set -e
 
 case "$parse_status" in
   0) ;;
-  1) die "the exact YunPin build bundle remains actively registered with LaunchServices" ;;
+  1)
+    if [[ "$unregister" == true ]]; then
+      die "the exact YunPin build bundle remains actively registered with LaunchServices after unregister status $unregister_status"
+    fi
+    die "the exact YunPin build bundle remains actively registered with LaunchServices"
+    ;;
   2) die "LaunchServices returned an incomplete or unrecognized database dump" ;;
   *) die "unable to parse the LaunchServices database dump" ;;
 esac
 
+if [[ "$unregister" == true && "$unregister_status" -ne 0 ]]; then
+  printf 'LaunchServices unregister returned status %s; verified final state is inactive: %s\n' \
+    "$unregister_status" "$app" >&2
+fi
 printf 'verified YunPin build path is not active in LaunchServices: %s\n' "$app"

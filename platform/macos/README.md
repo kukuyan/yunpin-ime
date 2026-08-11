@@ -74,7 +74,10 @@ build step. To keep those development copies out of the input-source menu, the
 preview build unregisters only its exact generated `YunPin.app` path after all
 verification. A separate fail-closed check accepts either no exact-path record
 or a disabled tombstone retained for a previously mounted removable volume,
-but rejects an active record or an incomplete LaunchServices dump. It does not
+but rejects an active record or an incomplete LaunchServices dump. On current
+macOS versions an already-disabled removable-volume tombstone can make the
+unregister request return a nonzero status; the build accepts that status only
+after the full database check proves the exact path is inactive. It does not
 delete the build artifact or unregister the installed
 `/Library/Input Methods/YunPin.app`.
 
