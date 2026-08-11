@@ -102,41 +102,106 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          created=false
+          create_attempted=false
           release_id=""
           release_version="${RELEASE_TAG#v}"
           release_title="YunPin IME ${release_version} (unsigned preview)"
+          draft_owner="yunpin-release-run:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          draft_title="${release_title} [draft ${draft_owner}]"
+          draft_marker="<!-- ${draft_owner} -->"
+          owned_notes="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-notes.XXXXXX")"
+          release_list="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-list.XXXXXX")"
+          release_identity="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-identity.XXXXXX")"
+          published_identity="$(mktemp "${RUNNER_TEMP:?}/yunpin-published-identity.XXXXXX")"
+          cp build/release-dist/RELEASE-NOTES.md "${owned_notes}"
+          printf '\n%s\n' "${draft_marker}" >>"${owned_notes}"
+
+          fetch_authenticated_releases() {
+            output=$1
+            gh api -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" >"${output}"
+          }
+
           cleanup_failed_draft() {
             status=$?
-            if [[ ${status} -ne 0 && "${created}" == true ]]; then
-              if [[ -z "${release_id}" ]]; then
-                release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-                  --jq ".[] | select(.tag_name == \"${RELEASE_TAG}\" and .name == \"${release_title}\" and .draft == true) | .id" \
-                  | head -n 1 || true)"
-              fi
-              if [[ -n "${release_id}" ]]; then
-                candidate_identity="$(gh api \
-                  "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-                  --jq '[.tag_name, .name, (.draft|tostring)] | @tsv' || true)"
-                expected_identity="${RELEASE_TAG}"$'\t'"${release_title}"$'\t'"true"
-                if [[ "${candidate_identity}" == "${expected_identity}" ]]; then
-                  gh api --method DELETE \
-                    "repos/${GITHUB_REPOSITORY}/releases/${release_id}" >/dev/null || true
+            trap - EXIT
+            if [[ ${status} -ne 0 && "${create_attempted}" == true ]]; then
+              cleanup_list="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-cleanup-list.XXXXXX")"
+              cleanup_identity="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-cleanup-identity.XXXXXX")"
+              cleanup_release_id=""
+              if fetch_authenticated_releases "${cleanup_list}"; then
+                if cleanup_release_id="$(python3 scripts/check_release_workflow.py resolve-draft \
+                  --response "${cleanup_list}" \
+                  --tag "${RELEASE_TAG}" \
+                  --title "${draft_title}" \
+                  --owner-marker "${draft_marker}")" \
+                  && [[ "${cleanup_release_id}" =~ ^[0-9]+$ ]]; then
+                  if gh api -H "Accept: application/vnd.github+json" \
+                    -H "X-GitHub-Api-Version: 2026-03-10" \
+                    "repos/${GITHUB_REPOSITORY}/releases/${cleanup_release_id}" \
+                    >"${cleanup_identity}" \
+                    && python3 scripts/check_release_workflow.py verify-draft \
+                      --response "${cleanup_identity}" \
+                      --tag "${RELEASE_TAG}" \
+                      --title "${draft_title}" \
+                      --owner-marker "${draft_marker}" \
+                      --id "${cleanup_release_id}" >/dev/null; then
+                    gh api --method DELETE \
+                      "repos/${GITHUB_REPOSITORY}/releases/${cleanup_release_id}" \
+                      >/dev/null || true
+                  fi
                 fi
               fi
+              rm -f "${cleanup_list}" "${cleanup_identity}"
             fi
+            rm -f "${owned_notes}" "${release_list}" "${release_identity}" \
+              "${published_identity}"
             exit "${status}"
           }
           trap cleanup_failed_draft EXIT
 
-          gh release create "${RELEASE_TAG}" --draft --prerelease --verify-tag --title "${release_title}" --notes-file build/release-dist/RELEASE-NOTES.md
-          created=true
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .id)"
+          create_attempted=true
+          gh release create "${RELEASE_TAG}" --draft --prerelease --verify-tag \
+            --title "${draft_title}" --notes-file "${owned_notes}"
+          fetch_authenticated_releases "${release_list}"
+          release_id="$(python3 scripts/check_release_workflow.py resolve-draft \
+            --response "${release_list}" \
+            --tag "${RELEASE_TAG}" \
+            --title "${draft_title}" \
+            --owner-marker "${draft_marker}")"
+          [[ "${release_id}" =~ ^[0-9]+$ ]]
+          gh api -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            >"${release_identity}"
+          python3 scripts/check_release_workflow.py verify-draft \
+            --response "${release_identity}" \
+            --tag "${RELEASE_TAG}" \
+            --title "${draft_title}" \
+            --owner-marker "${draft_marker}" \
+            --id "${release_id}" >/dev/null
 
-          mapfile -t assets < <(find build/release-dist -maxdepth 1 -type f \
+          assets=()
+          while IFS= read -r asset; do
+            assets+=("${asset}")
+          done < <(find build/release-dist -maxdepth 1 -type f \
             ! -name RELEASE-NOTES.md -print | sort)
           test "${#assets[@]}" -eq 7
-          gh release upload "${RELEASE_TAG}" "${assets[@]}"
+          for asset in "${assets[@]}"; do
+            asset_name="$(basename "${asset}")"
+            encoded_name="$(python3 -c \
+              'import sys; from urllib.parse import quote; print(quote(sys.argv[1], safe=""))' \
+              "${asset_name}")"
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              -H "Content-Type: application/octet-stream" \
+              --input "${asset}" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${encoded_name}" \
+              >/dev/null
+          done
 
           remote_assets="build/release-remote-assets.json"
           gh api -H "Accept: application/vnd.github+json" \
@@ -153,9 +218,25 @@ jobs:
             "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "${EXPECTED_SHA}"
 
+          # Remove the private run marker and publish in one transition. If
+          # this request partially succeeds, cleanup cannot match/delete the
+          # now-public release or any independently-created draft.
           gh api --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            -f "name=${release_title}" \
+            -F "body=@build/release-dist/RELEASE-NOTES.md" \
             -F draft=false -F prerelease=true >/dev/null
+          gh api -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            >"${published_identity}"
+          python3 scripts/check_release_workflow.py verify-published \
+            --response "${published_identity}" \
+            --tag "${RELEASE_TAG}" \
+            --title "${release_title}" \
+            --notes-file build/release-dist/RELEASE-NOTES.md \
+            --forbidden-marker "${draft_marker}" \
+            --id "${release_id}" >/dev/null
           test "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" = false
           test "$(gh release view "${RELEASE_TAG}" --json isPrerelease --jq .isPrerelease)" = true
           test "$(gh release view "${RELEASE_TAG}" --json isImmutable --jq .isImmutable)" = true
@@ -164,3 +245,5 @@ jobs:
           test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "${EXPECTED_SHA}"
           gh release verify "${RELEASE_TAG}" --format json >/dev/null
           trap - EXIT
+          rm -f "${owned_notes}" "${release_list}" "${release_identity}" \
+            "${published_identity}"
