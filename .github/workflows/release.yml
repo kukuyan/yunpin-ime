@@ -113,6 +113,9 @@ jobs:
           release_list="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-list.XXXXXX")"
           release_identity="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-identity.XXXXXX")"
           published_identity="$(mktemp "${RUNNER_TEMP:?}/yunpin-published-identity.XXXXXX")"
+          readonly draft_resolve_attempts=6
+          readonly draft_resolve_initial_delay=1
+          readonly draft_resolve_max_delay=8
           cp build/release-dist/RELEASE-NOTES.md "${owned_notes}"
           printf '\n%s\n' "${draft_marker}" >>"${owned_notes}"
 
@@ -124,6 +127,66 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/releases?per_page=100" >"${output}"
           }
 
+          resolve_owned_draft_with_retry() {
+            local output=$1
+            local attempt=1
+            local delay=${draft_resolve_initial_delay}
+            local candidate=""
+            local resolution_status=0
+            local resolver_error="${output}.resolve-error"
+            while (( attempt <= draft_resolve_attempts )); do
+              : >"${resolver_error}"
+              if fetch_authenticated_releases "${output}"; then
+                if candidate="$(python3 scripts/check_release_workflow.py resolve-draft \
+                  --response "${output}" \
+                  --tag "${RELEASE_TAG}" \
+                  --title "${draft_title}" \
+                  --owner-marker "${draft_marker}" 2>"${resolver_error}")"; then
+                  if [[ "${candidate}" =~ ^[0-9]+$ ]]; then
+                    rm -f "${resolver_error}"
+                    printf '%s\n' "${candidate}"
+                    return 0
+                  fi
+                  printf '%s\n' "draft resolver returned a non-numeric ID" \
+                    >"${resolver_error}"
+                  resolution_status=1
+                else
+                  resolution_status=$?
+                fi
+              else
+                resolution_status=2
+                printf '%s\n' "authenticated release list request failed" \
+                  >"${resolver_error}"
+              fi
+
+              # Only an absent draft (resolver status 2) or a transient list
+              # request failure is retryable. Ambiguity, invalid JSON, marker
+              # mismatch, and invalid IDs remain terminal and fail closed.
+              if [[ ${resolution_status} -ne 2 ]]; then
+                cat "${resolver_error}" >&2
+                rm -f "${resolver_error}"
+                return 1
+              fi
+              if (( attempt == draft_resolve_attempts )); then
+                cat "${resolver_error}" >&2
+                printf 'run-owned draft remained invisible after %s attempts\n' \
+                  "${draft_resolve_attempts}" >&2
+                rm -f "${resolver_error}"
+                return 1
+              fi
+
+              printf 'run-owned draft not visible; retry %s/%s in %ss\n' \
+                "${attempt}" "${draft_resolve_attempts}" "${delay}" >&2
+              sleep "${delay}"
+              delay=$((delay * 2))
+              if (( delay > draft_resolve_max_delay )); then
+                delay=${draft_resolve_max_delay}
+              fi
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+
           cleanup_failed_draft() {
             status=$?
             trap - EXIT
@@ -131,13 +194,9 @@ jobs:
               cleanup_list="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-cleanup-list.XXXXXX")"
               cleanup_identity="$(mktemp "${RUNNER_TEMP:?}/yunpin-release-cleanup-identity.XXXXXX")"
               cleanup_release_id=""
-              if fetch_authenticated_releases "${cleanup_list}"; then
-                if cleanup_release_id="$(python3 scripts/check_release_workflow.py resolve-draft \
-                  --response "${cleanup_list}" \
-                  --tag "${RELEASE_TAG}" \
-                  --title "${draft_title}" \
-                  --owner-marker "${draft_marker}")" \
-                  && [[ "${cleanup_release_id}" =~ ^[0-9]+$ ]]; then
+              if cleanup_release_id="$(resolve_owned_draft_with_retry \
+                "${cleanup_list}")" \
+                && [[ "${cleanup_release_id}" =~ ^[0-9]+$ ]]; then
                   if gh api -H "Accept: application/vnd.github+json" \
                     -H "X-GitHub-Api-Version: 2026-03-10" \
                     "repos/${GITHUB_REPOSITORY}/releases/${cleanup_release_id}" \
@@ -152,7 +211,6 @@ jobs:
                       "repos/${GITHUB_REPOSITORY}/releases/${cleanup_release_id}" \
                       >/dev/null || true
                   fi
-                fi
               fi
               rm -f "${cleanup_list}" "${cleanup_identity}"
             fi
@@ -165,12 +223,7 @@ jobs:
           create_attempted=true
           gh release create "${RELEASE_TAG}" --draft --prerelease --verify-tag \
             --title "${draft_title}" --notes-file "${owned_notes}"
-          fetch_authenticated_releases "${release_list}"
-          release_id="$(python3 scripts/check_release_workflow.py resolve-draft \
-            --response "${release_list}" \
-            --tag "${RELEASE_TAG}" \
-            --title "${draft_title}" \
-            --owner-marker "${draft_marker}")"
+          release_id="$(resolve_owned_draft_with_retry "${release_list}")"
           [[ "${release_id}" =~ ^[0-9]+$ ]]
           gh api -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
