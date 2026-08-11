@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 from pathlib import Path
 import re
 import sys
+from typing import Any, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,13 +35,167 @@ RELEASE_SNIPPETS = {
     "persist-credentials: false": "non-persistent checkout credentials",
     "gh release create": "draft release creation",
     "--draft --prerelease --verify-tag": "non-public staged prerelease",
-    "gh release upload": "release asset upload",
+    '"repos/${GITHUB_REPOSITORY}/releases?per_page=100"': "authenticated draft listing",
+    "--paginate --slurp": "valid paginated release-list JSON",
+    "resolve-draft": "unique owned-draft resolution",
+    "verify-draft": "owned-draft identity recheck",
+    "verify-published": "published title, body, and state recheck",
+    '[[ "${release_id}" =~ ^[0-9]+$ ]]': "numeric release ID gate",
+    'https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets': "ID-addressed release asset upload",
     "draft=false": "atomic public visibility transition",
     "--json isImmutable": "immutable-release publication gate",
     "gh release verify": "GitHub release attestation verification",
-    "(.draft|tostring)": "draft-only failure cleanup gate",
+    'draft_marker="<!-- ${draft_owner} -->"': "per-run draft ownership marker",
+    'cleanup_release_id="$(python3 scripts/check_release_workflow.py resolve-draft': "fresh cleanup draft resolution",
     "gh api --method DELETE": "failed draft cleanup",
 }
+
+
+class ReleaseWorkflowError(ValueError):
+    """The release response does not identify one run-owned draft."""
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReleaseWorkflowError(f"invalid release-list JSON: {error}") from error
+
+
+def _release_rows(payload: Any) -> list[dict[str, Any]]:
+    """Flatten `gh api --paginate --slurp` output without accepting objects."""
+
+    if not isinstance(payload, list):
+        raise ReleaseWorkflowError("release-list response must be a JSON array")
+
+    rows: list[dict[str, Any]] = []
+    for page in payload:
+        if isinstance(page, list):
+            candidates = page
+        else:
+            candidates = [page]
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ReleaseWorkflowError("release-list rows must be JSON objects")
+            rows.append(candidate)
+    return rows
+
+
+def _validated_owned_draft(
+    release: dict[str, Any],
+    *,
+    tag: str,
+    title: str,
+    owner_marker: str,
+    expected_id: str | None = None,
+) -> str:
+    if release.get("tag_name") != tag:
+        raise ReleaseWorkflowError("draft tag does not match this run")
+    if release.get("name") != title:
+        raise ReleaseWorkflowError("draft title does not match this run")
+    if release.get("draft") is not True:
+        raise ReleaseWorkflowError("release is not a draft")
+    if release.get("prerelease") is not True:
+        raise ReleaseWorkflowError("draft is not marked as a prerelease")
+
+    body = release.get("body")
+    if not isinstance(body, str) or owner_marker not in {
+        line.strip() for line in body.splitlines()
+    }:
+        raise ReleaseWorkflowError("draft lacks this run's ownership marker")
+
+    return _validated_release_id(release, expected_id=expected_id)
+
+
+def _validated_release_id(
+    release: dict[str, Any], *, expected_id: str | None = None
+) -> str:
+    release_id = release.get("id")
+    # GitHub's REST API emits a positive JSON integer. Reject strings even if
+    # they contain digits so command output can never become a shell fragment.
+    if type(release_id) is not int or release_id <= 0:  # noqa: E721
+        raise ReleaseWorkflowError("draft ID must be a positive JSON integer")
+    numeric_id = str(release_id)
+    if not numeric_id.isascii() or not numeric_id.isdecimal():
+        raise ReleaseWorkflowError("draft ID must contain ASCII digits only")
+    if expected_id is not None and numeric_id != expected_id:
+        raise ReleaseWorkflowError("draft ID changed during identity recheck")
+    return numeric_id
+
+
+def resolve_owned_draft(
+    payload: Any,
+    *,
+    tag: str,
+    title: str,
+    owner_marker: str,
+) -> str:
+    """Resolve exactly one tag+title+draft tuple, then prove run ownership."""
+
+    matches = [
+        row
+        for row in _release_rows(payload)
+        if row.get("tag_name") == tag
+        and row.get("name") == title
+        and row.get("draft") is True
+    ]
+    if len(matches) != 1:
+        raise ReleaseWorkflowError(
+            "expected exactly one draft matching tag+title+draft; "
+            f"found {len(matches)}"
+        )
+    return _validated_owned_draft(
+        matches[0],
+        tag=tag,
+        title=title,
+        owner_marker=owner_marker,
+    )
+
+
+def verify_owned_draft(
+    payload: Any,
+    *,
+    tag: str,
+    title: str,
+    owner_marker: str,
+    expected_id: str,
+) -> str:
+    if not isinstance(payload, dict):
+        raise ReleaseWorkflowError("release identity response must be a JSON object")
+    return _validated_owned_draft(
+        payload,
+        tag=tag,
+        title=title,
+        owner_marker=owner_marker,
+        expected_id=expected_id,
+    )
+
+
+def verify_published_release(
+    payload: Any,
+    *,
+    tag: str,
+    title: str,
+    expected_body: str,
+    forbidden_marker: str,
+    expected_id: str,
+) -> str:
+    if not isinstance(payload, dict):
+        raise ReleaseWorkflowError("published release response must be a JSON object")
+    if payload.get("tag_name") != tag:
+        raise ReleaseWorkflowError("published release tag does not match this run")
+    if payload.get("name") != title:
+        raise ReleaseWorkflowError("published release title was not finalized")
+    if payload.get("body") != expected_body:
+        raise ReleaseWorkflowError("published release body was not finalized exactly")
+    if forbidden_marker in expected_body or forbidden_marker in str(payload.get("body")):
+        raise ReleaseWorkflowError("published release still contains the draft marker")
+    if payload.get("draft") is not False:
+        raise ReleaseWorkflowError("published release still reports draft=true")
+    if payload.get("prerelease") is not True:
+        raise ReleaseWorkflowError("published release is not a prerelease")
+    return _validated_release_id(payload, expected_id=expected_id)
+
 
 CI_SNIPPETS = {
     'tags: ["v*-preview.*"]': "preview tag trigger",
@@ -80,7 +237,7 @@ def _missing(text: str, snippets: dict[str, str], scope: str) -> list[str]:
     ]
 
 
-def main() -> int:
+def check_static_contract() -> int:
     missing_files = [
         str(path.relative_to(ROOT))
         for path in (RELEASE_WORKFLOW, CI_WORKFLOW)
@@ -107,6 +264,26 @@ def main() -> int:
     if "softprops/action-gh-release" in release or "ncipollo/release-action" in release:
         errors.append("release publishing must use the runner's built-in gh CLI")
 
+    create_offset = release.find("gh release create")
+    if create_offset >= 0:
+        after_create = release[create_offset:]
+        if "releases/tags/${RELEASE_TAG}" in after_create:
+            errors.append(
+                "draft publication must not query /releases/tags after creation"
+            )
+        if "gh release upload" in after_create:
+            errors.append(
+                "draft assets must upload by numeric release ID, not by tag"
+            )
+        if "head -n 1" in after_create:
+            errors.append("draft resolution must reject ambiguity, not select the first row")
+
+        publish_offset = after_create.find("-F draft=false")
+        if publish_offset < 0:
+            errors.append("draft publication transition is missing")
+        elif "gh release view" in after_create[:publish_offset]:
+            errors.append("draft phase must not use tag-based gh release view")
+
     for path, text in ((RELEASE_WORKFLOW, release), (CI_WORKFLOW, ci)):
         for source, number, value in _uses_values(path, text):
             if value.startswith("./"):
@@ -120,6 +297,71 @@ def main() -> int:
         print("\n".join(errors), file=sys.stderr)
         return 1
     print("release workflow contract passed: full CI -> draft -> verified prerelease")
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command")
+    for command in ("resolve-draft", "verify-draft"):
+        subparser = subparsers.add_parser(command)
+        subparser.add_argument("--response", required=True, type=Path)
+        subparser.add_argument("--tag", required=True)
+        subparser.add_argument("--title", required=True)
+        subparser.add_argument("--owner-marker", required=True)
+        if command == "verify-draft":
+            subparser.add_argument("--id", required=True)
+    published = subparsers.add_parser("verify-published")
+    published.add_argument("--response", required=True, type=Path)
+    published.add_argument("--tag", required=True)
+    published.add_argument("--title", required=True)
+    published.add_argument("--notes-file", required=True, type=Path)
+    published.add_argument("--forbidden-marker", required=True)
+    published.add_argument("--id", required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command is None:
+        return check_static_contract()
+
+    try:
+        payload = _read_json(args.response)
+        if args.command == "resolve-draft":
+            release_id = resolve_owned_draft(
+                payload,
+                tag=args.tag,
+                title=args.title,
+                owner_marker=args.owner_marker,
+            )
+        elif args.command == "verify-draft":
+            release_id = verify_owned_draft(
+                payload,
+                tag=args.tag,
+                title=args.title,
+                owner_marker=args.owner_marker,
+                expected_id=args.id,
+            )
+        else:
+            try:
+                expected_body = args.notes_file.read_text(encoding="utf-8")
+            except OSError as error:
+                raise ReleaseWorkflowError(
+                    f"cannot read final release notes: {error}"
+                ) from error
+            release_id = verify_published_release(
+                payload,
+                tag=args.tag,
+                title=args.title,
+                expected_body=expected_body,
+                forbidden_marker=args.forbidden_marker,
+                expected_id=args.id,
+            )
+    except ReleaseWorkflowError as error:
+        print(f"release draft verification failed: {error}", file=sys.stderr)
+        return 1
+    print(release_id)
     return 0
 
 

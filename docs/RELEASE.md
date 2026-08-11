@@ -47,14 +47,26 @@ one canonical `SHA256SUMS`, `RELEASE-METADATA.json` and SPDX 2.3 SBOM. It then:
 1. re-fetches the tag and fails if it moved;
 2. refuses to overwrite an existing Release;
 3. creates a non-public draft marked prerelease;
-4. uploads the exact seven-asset allowlist and compares every remote asset's
-   `uploaded` state, byte size and SHA-256 digest with the local file;
-5. makes the draft public only after the comparison passes.
+4. resolves that draft from the authenticated paginated Release list using an
+   exact, unique `tag + run-owned title + draft=true` identity and a per-run
+   body marker; it rejects non-numeric IDs, malformed responses and ambiguous
+   matches rather than querying the draft-invisible `/releases/tags/{tag}`
+   endpoint;
+5. uploads the exact seven-asset allowlist directly by the verified numeric
+   Release ID and compares every remote asset's `uploaded` state, byte size and
+   SHA-256 digest with the local file;
+6. removes the private run marker and makes the draft public in one transition
+   only after the comparison passes, then reads the Release back by numeric ID
+   and requires the exact final title/body, `draft=false` and
+   `prerelease=true` before the immutable-release and attestation gates run.
 
-A failed upload removes the draft created by that run. No partially uploaded
-Release becomes visible. All external Actions are pinned to full commit hashes;
-publication itself uses the runner-provided `gh` CLI and `GITHUB_TOKEN` with
-job-scoped `contents: write` permission.
+A failed upload re-lists and re-verifies the run-owned draft instead of trusting
+the working ID variable, then removes only that exact draft. A malformed ID or
+JSON response, another draft with the same identity, a missing ownership marker,
+or an identity change leaves all drafts untouched for manual inspection. No
+partially uploaded Release becomes visible. All external Actions are pinned to
+full commit hashes; publication itself uses the runner-provided `gh` CLI and
+`GITHUB_TOKEN` with job-scoped `contents: write` permission.
 
 The public preview assets are:
 
