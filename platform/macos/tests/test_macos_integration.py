@@ -237,6 +237,10 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertFalse(manifest["yunpin_typo_correction_native_host_e2e"])
         self.assertFalse(manifest["yunpin_typo_correction_production_dictionary_e2e"])
         self.assertTrue(manifest["yunpin_session_correction_librime_e2e"])
+        self.assertTrue(manifest["yunpin_candidate_pinyin_toggle_librime_e2e"])
+        self.assertFalse(
+            manifest["yunpin_candidate_pinyin_toggle_native_host_e2e"]
+        )
         self.assertFalse(manifest["yunpin_learning_bridge"])
         self.assertFalse(manifest["yunpin_local_model_sidecar"])
         self.assertFalse(manifest["mixed_chinese_english_input"])
@@ -262,6 +266,23 @@ class MacOSIntegrationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("engine/filters/@before 0\": yunpin_filter@yunpin", overlay)
+        self.assertIn(
+            "engine/filters/@before last\": "
+            "yunpin_comment_filter@yunpin_comment_visibility",
+            overlay,
+        )
+        self.assertIn("name: yunpin_show_candidate_pinyin", overlay)
+        self.assertIn("states: [拼音关, 拼音开]", overlay)
+        self.assertNotIn("reset:", overlay)
+        self.assertIn("translator/keep_comments\": true", overlay)
+        self.assertIn('corrector\": "［{comment}］"', overlay)
+        default_overlay = (
+            ROOT / "platform" / "rime" / "squirrel" / "default.custom.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "switcher/save_options/@after last\": yunpin_show_candidate_pinyin",
+            default_overlay,
+        )
         self.assertIn("yunpin/snapshot\": yunpin/private.tsv", overlay)
         self.assertIn("yunpin/max_candidates\": 2", overlay)
         self.assertIn("yunpin/short_input_guard\": true", overlay)
@@ -720,7 +741,14 @@ class MacOSIntegrationTests(unittest.TestCase):
         postinstall = MACOS_DIR / "package" / "postinstall"
         legacy = MACOS_DIR / "tests" / "fixtures" / "legacy_correction_rime_ice.custom.yaml"
         conservative = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        previous = (
+            MACOS_DIR
+            / "tests"
+            / "fixtures"
+            / "previous_conservative_rime_ice.custom.yaml"
+        )
         legacy_hash = hashlib.sha256(legacy.read_bytes()).hexdigest()
+        previous_hash = hashlib.sha256(previous.read_bytes()).hexdigest()
         conservative_hash = hashlib.sha256(conservative.read_bytes()).hexdigest()
         source = postinstall.read_text(encoding="utf-8")
 
@@ -730,10 +758,28 @@ class MacOSIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(
             "2bb3bf0666495843201a70e226710de18820f4222daf7df15ed94e9e0adcad37",
+            previous_hash,
+        )
+        self.assertEqual(
+            "25e07ca2754e0bb67407f44b9f675dd8c54a09b1ee33de94de1016ed7088daa7",
             conservative_hash,
         )
         self.assertIn(f'yunpin_legacy_correction_overlay_sha256="{legacy_hash}"', source)
+        self.assertIn(
+            f'yunpin_previous_conservative_overlay_sha256="{previous_hash}"',
+            source,
+        )
         self.assertIn(f'yunpin_conservative_overlay_sha256="{conservative_hash}"', source)
+        self.assertIn(
+            'yunpin_previous_default_overlay_sha256='
+            '"23039527ee16342493e346cdc80ebf50f6729cc562b6c85436f7f60651e97bfa"',
+            source,
+        )
+        self.assertIn(
+            'yunpin_candidate_pinyin_default_overlay_sha256='
+            '"857057ff6b5e939c534f644ec24652ae487c85927591e44135e380f61a25fd1b"',
+            source,
+        )
 
         with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-migration-") as temporary:
             root = Path(temporary)
@@ -777,6 +823,101 @@ class MacOSIntegrationTests(unittest.TestCase):
                 owner,
             )
             self.assertEqual(backups, list(root.glob("rime_ice.custom.yaml.pre-conservative-*")))
+
+    def test_postinstall_upgrades_the_previous_conservative_overlay(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        previous = (
+            MACOS_DIR
+            / "tests"
+            / "fixtures"
+            / "previous_conservative_rime_ice.custom.yaml"
+        )
+        current = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        owner = run("id", "-un").stdout.strip()
+        command = (
+            'source "$1"; '
+            'yunpin_migrate_known_correction_overlay "$2" "$3" "$4"'
+        )
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-menu-") as temporary:
+            root = Path(temporary)
+            user_overlay = root / "rime_ice.custom.yaml"
+            user_overlay.write_bytes(previous.read_bytes())
+            run(
+                "bash",
+                "-c",
+                command,
+                "yunpin-postinstall-test",
+                str(postinstall),
+                str(current),
+                str(user_overlay),
+                owner,
+            )
+            self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
+            backups = list(root.glob("rime_ice.custom.yaml.pre-conservative-*"))
+            self.assertEqual(1, len(backups))
+            self.assertEqual(previous.read_bytes(), backups[0].read_bytes())
+
+    def test_postinstall_upgrades_the_known_default_overlay_for_saved_option(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        current = ROOT / "platform" / "rime" / "squirrel" / "default.custom.yaml"
+        previous_bytes = (
+            "# SPDX-License-Identifier: GPL-3.0-only\n"
+            "# YunPin macOS development-preview defaults. Personal data is never bundled.\n\n"
+            "patch:\n"
+            '  "schema_list":\n'
+            "    - schema: rime_ice\n"
+            '  "menu/page_size": 8\n'
+            '  "menu/alternative_select_keys": "12345678"\n'
+        ).encode("utf-8")
+        self.assertEqual(
+            "23039527ee16342493e346cdc80ebf50f6729cc562b6c85436f7f60651e97bfa",
+            hashlib.sha256(previous_bytes).hexdigest(),
+        )
+        self.assertEqual(
+            "857057ff6b5e939c534f644ec24652ae487c85927591e44135e380f61a25fd1b",
+            hashlib.sha256(current.read_bytes()).hexdigest(),
+        )
+        owner = run("id", "-un").stdout.strip()
+        command = (
+            'source "$1"; '
+            'yunpin_migrate_known_default_overlay "$2" "$3" "$4"'
+        )
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-default-") as temporary:
+            root = Path(temporary)
+            user_overlay = root / "default.custom.yaml"
+            user_overlay.write_bytes(previous_bytes)
+            run(
+                "bash",
+                "-c",
+                command,
+                "yunpin-postinstall-test",
+                str(postinstall),
+                str(current),
+                str(user_overlay),
+                owner,
+            )
+            self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
+            backups = list(root.glob("default.custom.yaml.pre-candidate-pinyin-*"))
+            self.assertEqual(1, len(backups))
+            self.assertEqual(previous_bytes, backups[0].read_bytes())
+
+            # Once upgraded, a repeated installer run must not create another backup.
+            run(
+                "bash",
+                "-c",
+                command,
+                "yunpin-postinstall-test",
+                str(postinstall),
+                str(current),
+                str(user_overlay),
+                owner,
+            )
+            self.assertEqual(
+                backups,
+                list(root.glob("default.custom.yaml.pre-candidate-pinyin-*")),
+            )
 
     def test_postinstall_preserves_custom_missing_and_linked_overlays(self) -> None:
         postinstall = MACOS_DIR / "package" / "postinstall"

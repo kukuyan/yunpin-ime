@@ -123,6 +123,11 @@ if ($forbiddenPrivate) {
 $config = Get-Content -LiteralPath (Join-Path $BundleRoot "rime-data\rime_ice.custom.yaml") -Raw
 foreach ($pattern in @(
     'yunpin_filter@yunpin',
+    'yunpin_comment_filter@yunpin_comment_visibility',
+    'name: yunpin_show_candidate_pinyin',
+    'states: \[拼音关, 拼音开\]',
+    '(?m)^\s*"translator/keep_comments": true\s*$',
+    '(?m)^\s*"corrector": "［\{comment\}］"\s*$',
     '(?m)^\s*"yunpin/enabled": false\s*$',
     '(?m)^\s*"yunpin/short_input_guard": true\s*$',
     '(?m)^\s*"yunpin/session_learning": false\s*$',
@@ -134,6 +139,10 @@ foreach ($pattern in @(
     if ($config -notmatch $pattern) {
         throw "Packaged Rime configuration is missing safety setting: $pattern"
     }
+}
+$defaultConfig = Get-Content -LiteralPath (Join-Path $BundleRoot "rime-data\default.custom.yaml") -Raw
+if ($defaultConfig -notmatch 'switcher/save_options/@after last": yunpin_show_candidate_pinyin') {
+    throw "Packaged Rime defaults do not save the candidate-Pinyin preference"
 }
 $installer = Get-Content -LiteralPath (Join-Path $BundleRoot "Install-Preview.ps1") -Raw
 if ($installer -notmatch 'AcceptUnsignedDevelopmentBuild' -or $installer -notmatch 'Assert-BundleManifest') {

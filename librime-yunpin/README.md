@@ -4,7 +4,8 @@
 index and librime. It registers `yunpin_filter`, which wraps the already merged
 Rime translation, injects at most two personal candidates, and removes an
 upstream duplicate before `uniquifier` runs. It also registers the isolated
-`yunpin_corrector` used for bounded, deterministic local Pinyin typo recovery.
+`yunpin_corrector` used for bounded, deterministic local Pinyin typo recovery,
+plus `yunpin_comment_filter` for the display-only candidate-Pinyin preference.
 
 This is a development-preview bridge. It performs one bounded TSV load while
 the schema components are initialized. Candidate queries and the conservative
@@ -98,6 +99,39 @@ channel, ordinary, imported and synchronized text must always remain text.
 falls back to librime's broader `NearSearchCorrector`. Both desktop overlays
 also ship with `translator/enable_correction: false`. Enabling typo recovery
 therefore requires an explicit experimental change to both switches.
+
+## Candidate-Pinyin display option
+
+`yunpin_comment_filter` lets the desktop schema expose a `拼音关 / 拼音开`
+switch without altering candidate identity, order, quality, preedit or commit
+text. It must be the last display filter immediately before `uniquifier`.
+When `yunpin_show_candidate_pinyin` is absent or false, the filter masks only
+full-width-bracket comments whose body is Latin Pinyin; pronunciation and
+spelling notes containing Chinese remain visible. When the option is true, the
+upstream translation is returned unchanged.
+
+The mask is a flattened `ShadowCandidate` that points directly to the genuine
+candidate. Existing emoji or conversion shadows are unwrapped first, while the
+currently visible text, bounds, quality, preedit and correction flag are
+preserved. Selection and learning therefore still resolve to the original
+candidate. The schema keeps `translator/keep_comments: true` and retains the
+frontend `[comment]` placeholder; this filter alone decides whether Pinyin is
+visible.
+
+```yaml
+switches:
+  - name: yunpin_show_candidate_pinyin
+    states: [拼音关, 拼音开]
+
+engine:
+  filters:
+    - yunpin_comment_filter@yunpin_comment_visibility
+    - uniquifier
+```
+
+The switch has no `reset`, so a previously unseen option defaults to false and
+can be listed in `switcher/save_options`. Frontends still define whether that
+preference is scoped to an app, text field or broader session.
 
 ## Deterministic Pinyin typo correction
 
@@ -222,15 +256,16 @@ before installed desktop clients can display history across restarts.
 
 ## Build modes
 
-At repository root the directory builds five test targets and no plugin: the
+At repository root the directory builds seven test targets and no plugin: the
 snapshot/parser tests, a synthetic 100,000-row snapshot benchmark, the
-session-learning state-machine tests, the portable typo-variant tests, and a
-candidate-ordering test that compiles the real
-`src/rime_yunpin_filter.cpp` against `tests/rime_stubs/`. Those stubs declare
-only the slice of the librime API the filter touches, so ordering regressions
-are caught on a machine without librime, Boost or glog. They are pinned to the
-librime commit in `platform/upstream-lock.json`; re-check them against the real
-headers whenever that moves.
+session-learning state-machine tests, replay-ring tests, portable typo-variant
+tests, candidate-ordering tests and candidate-comment visibility tests. The two
+filter tests compile the production sources against `tests/rime_stubs/`. Those
+stubs declare only the slice of the librime API the filters touch, so ordering,
+identity and display regressions are caught on a machine without librime,
+Boost or glog. They are pinned to the librime commit in
+`platform/upstream-lock.json`; re-check them against the real headers whenever
+that moves.
 
 The benchmark uses generated public fixture values only. It requires all
 100,000 rows to survive parsing and index replacement, parse plus build to

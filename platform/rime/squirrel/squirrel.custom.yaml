@@ -8,6 +8,8 @@ patch:
   "style/inline_candidate": false
   "style/memorize_size": true
   "style/show_paging": false
+  # The schema's "拼音关 / 拼音开" option controls whether [comment] is empty.
+  # Keeping the placeholder lets the user reveal spelling hints on demand.
   "style/candidate_format": "[label]. [candidate] [comment]"
   "style/font_face": "PingFang SC"
   "style/font_point": 15

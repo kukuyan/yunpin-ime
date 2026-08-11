@@ -8,6 +8,8 @@ switches:
   - name: ascii_mode
     reset: 0
     states: [中文, ASCII]
+  - name: yunpin_show_candidate_pinyin
+    states: [拼音关, 拼音开]
 
 engine:
   processors:
@@ -25,6 +27,7 @@ engine:
     - echo_translator
   filters:
     - yunpin_filter@yunpin
+    - yunpin_comment_filter@yunpin_comment_visibility
     - uniquifier
 
 speller:
@@ -40,6 +43,10 @@ translator:
   corrector_component: yunpin_corrector
   spelling_hints: 32
   always_show_comments: true
+  keep_comments: true
+  comment_format:
+    - xform/^/［/
+    - xform/$/］/
 
 yunpin:
   tag: abc

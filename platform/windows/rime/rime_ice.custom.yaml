@@ -6,6 +6,15 @@ patch:
   "menu/page_size": 8
   "menu/alternative_select_keys": "12345678"
   "engine/filters/@before 0": yunpin_filter@yunpin
+  # Keep this final visibility filter immediately before Rime's uniquifier.
+  # The schema-menu option is absent/false on first run, so spelling comments
+  # stay hidden until the user explicitly selects "拼音开".
+  "engine/filters/@before last": yunpin_comment_filter@yunpin_comment_visibility
+  "switches/@after last":
+    name: yunpin_show_candidate_pinyin
+    states: [拼音关, 拼音开]
+  "translator/keep_comments": true
+  "corrector": "［{comment}］"
   # Experimental opt-in only. Keep the exact Rime path unchanged by default.
   "translator/enable_correction": false
   "translator/corrector_component": yunpin_corrector

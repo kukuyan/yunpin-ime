@@ -38,6 +38,7 @@ set(yunpin_core_src
 if(DEFINED rime_library)
   add_library(rime-yunpin-objs OBJECT
     ${yunpin_core_src}
+    src/rime_yunpin_comment_filter.cpp
     src/rime_yunpin_corrector.cpp
     src/rime_yunpin_filter.cpp
     src/yunpin_module.cpp
@@ -148,4 +149,31 @@ else()
     )
   endif()
   add_test(NAME yunpin_filter_behaviour_tests COMMAND yunpin_filter_behaviour_tests)
+
+  # Candidate annotation visibility is an independent, display-only filter.
+  # Compile its production source against the same version-locked librime
+  # stubs so ShadowCandidate identity and translation exhaustion stay covered
+  # without requiring a frontend build.
+  add_executable(yunpin_comment_filter_behaviour_tests
+    tests/comment_filter_behaviour_test.cpp
+    src/rime_yunpin_comment_filter.cpp
+  )
+  target_include_directories(yunpin_comment_filter_behaviour_tests PRIVATE
+    tests/rime_stubs
+    src
+  )
+  target_compile_features(yunpin_comment_filter_behaviour_tests PRIVATE
+    cxx_std_17
+  )
+  if(MSVC)
+    target_compile_options(yunpin_comment_filter_behaviour_tests PRIVATE
+      /W4 /WX /permissive-
+    )
+  else()
+    target_compile_options(yunpin_comment_filter_behaviour_tests PRIVATE
+      -Wall -Wextra -Wpedantic -Werror
+    )
+  endif()
+  add_test(NAME yunpin_comment_filter_behaviour_tests
+    COMMAND yunpin_comment_filter_behaviour_tests)
 endif()

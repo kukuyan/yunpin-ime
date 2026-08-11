@@ -23,6 +23,9 @@ using std::list; using std::set; using std::string; using std::vector;
 using path = std::filesystem::path;
 template <class T> using an = std::shared_ptr<T>;
 template <class T> using of = std::shared_ptr<T>;
+template <class X, class Y> an<X> As(const an<Y>& value) {
+  return std::dynamic_pointer_cast<X>(value);
+}
 template <class T, class... A> an<T> New(A&&... a) {
   return std::make_shared<T>(std::forward<A>(a)...);
 }

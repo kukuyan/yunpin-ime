@@ -207,6 +207,41 @@ bool ExpectCandidatesPresent(RimeApi* api,
   return true;
 }
 
+bool ExpectCandidatePinyinToggle(RimeApi* api, RimeSessionId session) {
+  constexpr const char* kInput = "shangban";
+  constexpr const char* kCandidate = "上班";
+  std::vector<std::string> default_off;
+  if (!Compose(api, session, kInput, &default_off) || default_off.empty() ||
+      default_off.front() != kCandidate ||
+      !CandidateComment(api, session, kCandidate).empty()) {
+    std::cerr << "candidate Pinyin was not hidden by default\n";
+    return false;
+  }
+
+  api->set_option(session, "yunpin_show_candidate_pinyin", True);
+  std::vector<std::string> visible;
+  if (!Compose(api, session, kInput, &visible) || visible != default_off) {
+    std::cerr << "showing candidate Pinyin changed candidate order or count\n";
+    return false;
+  }
+  const std::string visible_comment =
+      CandidateComment(api, session, kCandidate);
+  if (visible_comment.find("shang ban") == std::string::npos) {
+    std::cerr << "candidate Pinyin did not become visible after enabling it\n";
+    return false;
+  }
+
+  api->set_option(session, "yunpin_show_candidate_pinyin", False);
+  std::vector<std::string> hidden_again;
+  if (!Compose(api, session, kInput, &hidden_again) ||
+      hidden_again != default_off ||
+      !CandidateComment(api, session, kCandidate).empty()) {
+    std::cerr << "candidate Pinyin did not hide again without ranking changes\n";
+    return false;
+  }
+  return true;
+}
+
 bool SelectAndDrain(RimeApi* api,
                     RimeSessionId session,
                     const std::vector<std::string>& candidates,
@@ -385,6 +420,7 @@ int main(int argc, char** argv) {
        ok;
   ok = ExpectCandidateFirst(api, session, "shangban", "上班") && ok;
   ok = ExpectCandidateAbsent(api, session, "shangban", "山班") && ok;
+  ok = ExpectCandidatePinyinToggle(api, session) && ok;
 
   // `youceshizhanghaoma` has two exact homophone parses. This fixture only
   // proves both stay ordinary dictionary candidates; choosing between them is
@@ -399,10 +435,12 @@ int main(int argc, char** argv) {
   // bridge correction at total rank #2; the filter must never promote it to
   // #1. Two invalid regions cannot be joined by one correction edge and must
   // fail closed.
+  api->set_option(session, "yunpin_show_candidate_pinyin", True);
   ok = ExpectCandidateAtRank(
            api, session, "shousubijiaokuaideshihouu",
            "手速比较快的时候", 2, "shou su") &&
        ok;
+  api->set_option(session, "yunpin_show_candidate_pinyin", False);
   ok = ExpectCandidateAbsent(
            api, session, "shouusubijiaokuaideshihouu",
            "手速比较快的时候") &&
@@ -469,6 +507,7 @@ int main(int argc, char** argv) {
   std::cout
       << "verified conservative one-bridge correction, exact-input "
          "stability, short guard, ranking, quota, deduplication, commit, "
-         "session correction, and private-mode suppression\n";
+         "candidate-Pinyin visibility, session correction, and private-mode "
+         "suppression\n";
   return 0;
 }

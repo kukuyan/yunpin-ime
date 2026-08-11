@@ -258,6 +258,28 @@ class WindowsClientTests(unittest.TestCase):
     def test_private_filter_is_present_but_safely_disabled(self) -> None:
         config = (WINDOWS / "rime" / "rime_ice.custom.yaml").read_text(encoding="utf-8")
         self.assertIn('"engine/filters/@before 0": yunpin_filter@yunpin', config)
+        self.assertIn(
+            '"engine/filters/@before last": '
+            "yunpin_comment_filter@yunpin_comment_visibility",
+            config,
+        )
+        self.assertIn("name: yunpin_show_candidate_pinyin", config)
+        self.assertIn("states: [拼音关, 拼音开]", config)
+        self.assertNotIn("reset:", config)
+        self.assertIn('"translator/keep_comments": true', config)
+        self.assertIn('"corrector": "［{comment}］"', config)
+        package_test = (WINDOWS / "scripts" / "Test-Package.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("yunpin_comment_filter@yunpin_comment_visibility", package_test)
+        self.assertIn("yunpin_show_candidate_pinyin", package_test)
+        default_overlay = (
+            ROOT / "platform" / "rime" / "weasel" / "default.custom.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '"switcher/save_options/@after last": yunpin_show_candidate_pinyin',
+            default_overlay,
+        )
         self.assertIn('"yunpin/snapshot": "yunpin/private.tsv"', config)
         self.assertIn('"yunpin/max_candidates": 2', config)
         self.assertIn('"yunpin/enabled": false', config)

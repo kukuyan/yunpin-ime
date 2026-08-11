@@ -6,3 +6,6 @@ patch:
     - schema: rime_ice
   "menu/page_size": 8
   "menu/alternative_select_keys": "12345678"
+  # Remember an explicit choice from the schema menu. Rime treats a missing
+  # option as false, so the first-run/default state remains "拼音关".
+  "switcher/save_options/@after last": yunpin_show_candidate_pinyin

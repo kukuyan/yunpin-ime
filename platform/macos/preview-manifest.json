@@ -20,6 +20,8 @@
   "yunpin_typo_correction_native_host_e2e": false,
   "yunpin_typo_correction_production_dictionary_e2e": false,
   "yunpin_session_correction_librime_e2e": true,
+  "yunpin_candidate_pinyin_toggle_librime_e2e": true,
+  "yunpin_candidate_pinyin_toggle_native_host_e2e": false,
   "yunpin_learning_bridge": false,
   "yunpin_local_model_sidecar": false,
   "mixed_chinese_english_input": false,

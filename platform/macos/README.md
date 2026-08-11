@@ -12,8 +12,9 @@ buildable native InputMethodKit frontend, the original horizontal YunPin
 candidate theme, Rime Ice data, isolated user storage and offline packaging.
 The build stages the Apache-2.0 `librime-yunpin` adapter and portable `engine/`
 sources into Squirrel's exact nested librime checkout, then merges the `yunpin`
-module, `yunpin_filter` and schema-local `yunpin_corrector` into the Universal
-runtime. A base-commit and SHA-256-locked compatibility patch for Squirrel's
+module, `yunpin_filter`, candidate-comment visibility filter and schema-local
+`yunpin_corrector` into the Universal runtime. A base-commit and SHA-256-locked
+compatibility patch for Squirrel's
 librime 1.16 lets ScriptTranslator select that unique corrector and classify an
 exact match by `(spelling ID, consumed input length)` without replacing the
 upstream process-global component. The schema places the filter before
@@ -64,15 +65,28 @@ Squirrel's upstream Sparkle feed and menu are disabled, and its built-in Rime
 sync command is disabled so it cannot be mistaken for YunPin's encrypted cloud
 protocol. No input event performs network access. The package seeds versioned
 public overlays only when no user file or symbolic link exists. One reviewed
-upgrade migration recognizes the exact hash of YunPin's previously shipped
-aggressive correction overlay, saves a mode-600 backup, and atomically
-replaces only that known file with the conservative default. Every other
-existing configuration, including arbitrary custom content and links, is
-preserved. Personal dictionaries are not bundled.
+upgrade migration recognizes the exact hashes of YunPin's previously shipped
+aggressive correction overlay and the immediately previous conservative
+overlay, saves a mode-600 backup, and atomically replaces only those known files
+with the current conservative default. A separate exact-hash migration updates
+the previously shipped default overlay so the new candidate-Pinyin choice can
+be saved. This lets an existing installation receive the menu and its preference
+without treating arbitrary user configuration as package-owned. Every other
+existing configuration, including custom content and links, is preserved.
+Personal dictionaries are not bundled.
 
 The app and input-source art are original YunPin vector shapes. The build
 replaces Squirrel's upstream icon source with `YunPin.icon` and replaces
 `rime.pdf` with a newly rendered `yunpin.pdf` before Xcode sees the project.
+The compact candidate template retains Rime's comment placeholder, but the
+schema-menu option `拼音关 / 拼音开` controls a final display-only filter. It is
+off on first run, so bracketed spelling hints are hidden by default while
+candidate order, text, score and commit behavior remain unchanged. Open the
+Rime schema menu with `F4` or `Control+grave` and choose `拼音开` to reveal the
+hints, or `拼音关` to hide them again; a new package or redeploy is not needed.
+The option intentionally has no `reset`, and is listed under `save_options`,
+but Squirrel scopes non-global switches by app/input session, so another app or
+text field may keep its own state instead of inheriting a machine-wide choice.
 Xcode registers macOS application products from DerivedData as a normal final
 build step. To keep those development copies out of the input-source menu, the
 preview build unregisters only its exact generated `YunPin.app` path after all

@@ -91,6 +91,50 @@ class PlatformConfigTests(unittest.TestCase):
             self.assertIn('"style/color_scheme_dark": yunpin_dark', overlay)
             self.assertNotIn("preset_color_schemes/sogou", overlay.lower())
 
+        # The schema-level visibility filter empties spelling comments while
+        # the option is off. Keep the placeholder so selecting "拼音开" can
+        # reveal them without replacing or reloading the desktop theme.
+        self.assertIn(
+            '"style/candidate_format": "[label]. [candidate] [comment]"', squirrel
+        )
+
+    def test_candidate_pinyin_is_a_saved_default_off_schema_option(self):
+        schema_overlays = (
+            self.repository / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml",
+            self.repository / "platform" / "windows" / "rime" / "rime_ice.custom.yaml",
+        )
+        for path in schema_overlays:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(overlay=path):
+                self.assertIn(
+                    '"engine/filters/@before last": '
+                    "yunpin_comment_filter@yunpin_comment_visibility",
+                    text,
+                )
+                self.assertIn('"switches/@after last":', text)
+                self.assertIn("name: yunpin_show_candidate_pinyin", text)
+                self.assertIn("states: [拼音关, 拼音开]", text)
+                self.assertIn('"translator/keep_comments": true', text)
+                self.assertIn('"corrector": "［{comment}］"', text)
+                switch = re.search(
+                    r'^  "switches/@after last":\n(?P<body>(?:    .*\n)+)',
+                    text,
+                    flags=re.MULTILINE,
+                )
+                self.assertIsNotNone(switch)
+                self.assertNotIn("reset:", switch.group("body"))
+
+        for path in (
+            self.repository / "platform" / "rime" / "squirrel" / "default.custom.yaml",
+            self.repository / "platform" / "rime" / "weasel" / "default.custom.yaml",
+        ):
+            with self.subTest(default_overlay=path):
+                self.assertIn(
+                    '"switcher/save_options/@after last": '
+                    "yunpin_show_candidate_pinyin",
+                    path.read_text(encoding="utf-8"),
+                )
+
     def test_no_shipped_overlay_enables_the_expression_actions(self):
         for name in (
             self.repository / "platform" / "windows" / "rime" / "rime_ice.custom.yaml",

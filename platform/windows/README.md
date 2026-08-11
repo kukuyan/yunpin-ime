@@ -42,6 +42,15 @@ only an in-memory check over Rime's already-produced candidates, so Windows can
 drop implausible long pure-CJK predictions for one/two-letter input without
 loading personal data.
 
+Candidate spelling comments are a separate display preference. The schema menu
+offers `拼音关 / 拼音开`, defaults to off when the option is absent, and places a
+display-only `yunpin_comment_filter` immediately before Rime's `uniquifier`.
+Open the schema menu with `F4` or `Control+grave` to reveal or hide bracketed
+Pinyin without changing candidate order, scoring or commit text. The switch has
+no `reset` and is included in `save_options`; Weasel still decides the scope of
+non-global option persistence, so it must not be described as a guaranteed
+machine-wide preference.
+
 `"yunpin/session_learning": false` is a separate Windows safety gate. Session
 correction stays disabled until TSF secure-input and authenticated IPC behavior
 has passed real-host testing; enabling the public short-input guard does not
