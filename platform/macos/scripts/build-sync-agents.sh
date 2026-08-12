@@ -50,12 +50,15 @@ build_slice() {
 }
 
 for variant in public private; do
-  tags=()
-  if [[ "$variant" == private ]]; then
-    tags=(-tags=yunpin_pairing_private)
+  if [[ "$variant" == public ]]; then
+    build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64"
+    build_slice amd64 x86_64 "$slice_root/yunpin-sync-agent-$variant-x86_64"
+  else
+    build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64" \
+      -tags=yunpin_pairing_private
+    build_slice amd64 x86_64 "$slice_root/yunpin-sync-agent-$variant-x86_64" \
+      -tags=yunpin_pairing_private
   fi
-  build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64" "${tags[@]}"
-  build_slice amd64 x86_64 "$slice_root/yunpin-sync-agent-$variant-x86_64" "${tags[@]}"
   output="$public_binary"
   if [[ "$variant" == private ]]; then
     output="$private_binary"

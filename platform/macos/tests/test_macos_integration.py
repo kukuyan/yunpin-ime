@@ -338,6 +338,16 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("go mod verify", agent_build)
         self.assertIn("package_go_licenses.py", agent_build)
         self.assertIn('publicReleaseEligible', agent_build)
+        self.assertNotIn('${tags[@]}', agent_build)
+        self.assertIn(
+            'build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64"\n',
+            agent_build,
+        )
+        self.assertIn(
+            'build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64" \\\n'
+            '      -tags=yunpin_pairing_private',
+            agent_build,
+        )
         self.assertIn('sign_adhoc "$sync_agent"', sign)
         self.assertLess(sign.index('sign_adhoc "$sync_agent"'), sign.index('sign_adhoc "$app"'))
         for required in (
