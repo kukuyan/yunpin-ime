@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Wed, 12 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Start the private native selection spooler
+
+Drain YunPin's bounded in-process selection queue from a background native
+worker into the per-user desktop agent incoming directory.  Keyboard and
+notifier callbacks remain memory-only, while the worker owns private durable
+atomic files.  Stop the worker before every librime finalization boundary.
+---
+ sources/Main.swift                        |  1 +
+ sources/Squirrel-Bridging-Header.h       |  7 +++++++
+ sources/SquirrelApplicationDelegate.swift | 18 ++++++++++++++++++
+ 3 files changed, 26 insertions(+)
+
+diff --git a/sources/Main.swift b/sources/Main.swift
+index b07df61..01bd02d 100644
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -134,5 +134,6 @@ struct SquirrelApp {
+       // finally run everything
+       app.run()
++      YunPinStopNativeSelectionSpoolerV1()
+       print("YunPin is quitting...")
+       rimeAPI.finalize()
+     }
+diff --git a/sources/Squirrel-Bridging-Header.h b/sources/Squirrel-Bridging-Header.h
+index daab558..3a06538 100644
+--- a/sources/Squirrel-Bridging-Header.h
++++ b/sources/Squirrel-Bridging-Header.h
+@@ -3,4 +3,10 @@
+ //
+ 
++#include <stdbool.h>
++
+ #import <rime_api_stdbool.h>
+ #import <rime/key_table.h>
++
++bool YunPinStartNativeSelectionSpoolerV1(
++    const char* absolute_utf8_directory);
++void YunPinStopNativeSelectionSpoolerV1(void);
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+index 5a41ad3..8397bd3 100644
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -147,6 +147,23 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+   func startRime(fullCheck: Bool) {
+     print("Initializing la rime...")
+     rimeAPI.initialize(nil)
++    if let applicationSupport = FileManager.default.urls(
++      for: .applicationSupportDirectory, in: .userDomainMask
++    ).first {
++      let incoming = applicationSupport
++        .appendingPathComponent("YunPin", isDirectory: true)
++        .appendingPathComponent("Sync", isDirectory: true)
++        .appendingPathComponent("native-events", isDirectory: true)
++        .appendingPathComponent("incoming", isDirectory: true)
++      let started = incoming.path(percentEncoded: false).withCString {
++        YunPinStartNativeSelectionSpoolerV1($0)
++      }
++      if !started {
++        print("YunPin native selection spooler unavailable; events remain local-only.")
++      }
++    } else {
++      print("YunPin native selection spool directory unavailable; events remain local-only.")
++    }
+     // check for configuration updates
+     if rimeAPI.start_maintenance(fullCheck) {
+       // update squirrel config
+@@ -289,5 +301,6 @@ private extension SquirrelApplicationDelegate {
+   func shutdownRime() {
+     config?.close()
++    YunPinStopNativeSelectionSpoolerV1()
+     rimeAPI.finalize()
+   }
+ 
+-- 
+2.50.1

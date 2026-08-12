@@ -49,6 +49,20 @@ func jitter(duration time.Duration) time.Duration {
 	return duration * time.Duration(90+value.Int64()) / 100
 }
 
+func classifyRunResult(summary SyncSummary, syncErr error, options RunOptions, backoff time.Duration) (RunEvent, time.Duration, time.Duration) {
+	if errors.Is(syncErr, ErrRimeMaintenanceBusy) {
+		return RunEvent{Code: "sync_deferred_busy"}, options.MinBackoff, options.MinBackoff
+	}
+	if syncErr != nil {
+		nextBackoff := options.MaxBackoff
+		if backoff < options.MaxBackoff/2 {
+			nextBackoff = backoff * 2
+		}
+		return RunEvent{Code: "sync_failed"}, backoff, nextBackoff
+	}
+	return RunEvent{Code: "sync_complete", Successful: true, Summary: summary}, options.Interval, options.MinBackoff
+}
+
 func runLoop(ctx context.Context, syncNow func(context.Context) (SyncSummary, error), options RunOptions) error {
 	if syncNow == nil {
 		return errors.New("sync operation is required")
@@ -67,19 +81,8 @@ func runLoop(ctx context.Context, syncNow func(context.Context) (SyncSummary, er
 			return nil
 		}
 		summary, syncErr := syncNow(ctx)
-		delay := options.Interval
-		event := RunEvent{Code: "sync_complete", Successful: true, Summary: summary}
-		if syncErr != nil {
-			delay = backoff
-			event = RunEvent{Code: "sync_failed"}
-			if backoff < options.MaxBackoff/2 {
-				backoff *= 2
-			} else {
-				backoff = options.MaxBackoff
-			}
-		} else {
-			backoff = options.MinBackoff
-		}
+		event, delay, nextBackoff := classifyRunResult(summary, syncErr, options, backoff)
+		backoff = nextBackoff
 		if options.OnEvent != nil {
 			options.OnEvent(event)
 		}
@@ -96,5 +99,8 @@ func runLoop(ctx context.Context, syncNow func(context.Context) (SyncSummary, er
 }
 
 func (agent Agent) Run(ctx context.Context, options RunOptions) error {
+	if agent.RimeUserDBExportPath != "" && agent.RimeUserDBRefresh == nil {
+		return errors.New("resident Rime userdb ingestion requires the fixed platform maintenance refresher")
+	}
 	return runLoop(ctx, agent.SyncOnce, options)
 }

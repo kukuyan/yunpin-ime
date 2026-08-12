@@ -24,6 +24,7 @@ endif()
 set(yunpin_core_src
   "${YUNPIN_ENGINE_ROOT}/src/phrase_engine.cpp"
   "${YUNPIN_ENGINE_ROOT}/src/correction_learning.cpp"
+  src/native_selection_events.cpp
   src/replay_native.cpp
   src/snapshot_store.cpp
   src/session_learning.cpp
@@ -56,8 +57,13 @@ if(DEFINED rime_library)
   endif()
   set(plugin_name rime-yunpin PARENT_SCOPE)
   set(plugin_objs $<TARGET_OBJECTS:rime-yunpin-objs> PARENT_SCOPE)
-  set(plugin_deps ${rime_library} PARENT_SCOPE)
+  if(WIN32)
+    set(plugin_deps ${rime_library} Advapi32 Shell32 Ole32 Uuid PARENT_SCOPE)
+  else()
+    set(plugin_deps ${rime_library} PARENT_SCOPE)
+  endif()
   set(plugin_modules "yunpin" PARENT_SCOPE)
+
 else()
   find_package(Threads REQUIRED)
   add_library(yunpin_snapshot STATIC ${yunpin_core_src})
@@ -66,6 +72,9 @@ else()
     "${YUNPIN_ENGINE_ROOT}/include"
   )
   target_compile_features(yunpin_snapshot PUBLIC cxx_std_17)
+  if(WIN32)
+    target_link_libraries(yunpin_snapshot PUBLIC Advapi32 Shell32 Ole32 Uuid)
+  endif()
   if(MSVC)
     target_compile_options(yunpin_snapshot PRIVATE /W4 /WX /permissive-)
   else()
@@ -103,6 +112,16 @@ else()
   )
   add_test(NAME yunpin_session_learning_tests
     COMMAND yunpin_session_learning_tests)
+
+  add_executable(yunpin_native_selection_events_tests
+    tests/native_selection_events_test.cpp
+  )
+  target_link_libraries(yunpin_native_selection_events_tests PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  add_test(NAME yunpin_native_selection_events_tests
+    COMMAND yunpin_native_selection_events_tests)
 
   add_executable(yunpin_replay_native_tests
     tests/replay_native_test.cpp

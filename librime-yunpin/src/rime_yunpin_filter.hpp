@@ -15,6 +15,7 @@ namespace rime {
 
 class Context;
 class KeyEvent;
+class YunPinSessionLearningBridge;
 
 class YunPinFilter : public Filter {
  public:
@@ -30,9 +31,7 @@ class YunPinFilter : public Filter {
  private:
   bool LoadSnapshot(const std::string& relative_path);
   bool PrivateModeEnabled() const;
-  void OnCommit(Context* context);
-  void OnContextUpdate(Context* context);
-  void OnUnhandledKey(Context* context, const KeyEvent& key_event);
+  void DisconnectLearningNotifiers() noexcept;
   // True while either the private overlay or the conservative short-input
   // guard has work to do. Expression actions remain disconnected.
   bool Active() const;
@@ -56,9 +55,15 @@ class YunPinFilter : public Filter {
   // automatic correction may occupy total rank two or three; all remaining
   // correction candidates fail closed instead of spilling onto later pages.
   bool long_correction_guard_{false};
+  // Fail closed unless a reviewed platform overlay explicitly enables
+  // learning. Both shipped overlays remain false until their trusted
+  // secure/private-field bridges and real-host lifecycle tests pass.
   bool session_learning_enabled_{false};
   bool private_ready_{false};
-  std::unique_ptr<yunpin::SessionLearning> session_learning_;
+  // Callbacks lock a weak reference to this state instead of capturing the
+  // filter.  This matters when an IMK/TSF host tears down a session from a
+  // nested notifier or while an old Menu still owns a filtered translation.
+  std::shared_ptr<YunPinSessionLearningBridge> session_learning_;
   connection commit_connection_;
   connection update_connection_;
   connection unhandled_key_connection_;

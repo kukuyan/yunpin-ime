@@ -36,7 +36,7 @@ func (endpoint Endpoint) String() string {
 
 func (endpoint Endpoint) resolve(path string) string {
 	resolved := *endpoint.base
-	resolved.Path = path
+	resolved.Path, resolved.RawQuery, _ = strings.Cut(path, "?")
 	return resolved.String()
 }
 

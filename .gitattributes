@@ -2,6 +2,10 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+# Unified-diff context lines and format-patch signatures intentionally end in
+# one space. Source patches are applied with --whitespace=error-all, so validate
+# their payload at apply time instead of treating the patch transport as code.
+*.patch -whitespace
 *.png binary
 *.jpg binary
 *.ico binary

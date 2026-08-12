@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Wed, 12 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Start the private native selection spooler
+
+Connect the bounded selection queue inside rime.dll to the desktop agent's
+per-user incoming directory.  A native background worker owns disk I/O; TSF
+key handling only publishes to memory.  Stop the worker before librime is
+finalized.
+---
+ RimeWithWeasel/RimeWithWeasel.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index d819ede..909c8fd 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -33,6 +33,16 @@ typedef enum { COLOR_ABGR = 0, COLOR_ARGB, COLOR_RGBA } ColorFormat;
+ using namespace weasel;
+ 
+ static RimeApi* rime_api;
++extern "C" bool YunPinStartDefaultNativeSelectionSpoolerV1() noexcept;
++extern "C" void YunPinStopNativeSelectionSpoolerV1() noexcept;
++
++static void StartYunPinNativeSelectionSpooler() noexcept {
++  if (!YunPinStartDefaultNativeSelectionSpoolerV1()) {
++    LOG(WARNING) << "YunPin native selection spooler unavailable; events "
++                    "remain local-only.";
++  }
++}
++
+ WeaselSessionId _GenerateNewWeaselSessionId(SessionStatusMap sm, DWORD pid) {
+   if (sm.empty())
+     return (WeaselSessionId)(pid + 1);
+@@ -153,6 +163,8 @@ void RimeWithWeaselHandler::Initialize() {
+ 
+   LOG(INFO) << "Initializing la rime.";
+   rime_api->initialize(NULL);
++  StartYunPinNativeSelectionSpooler();
++
+ #if 0
+   if (rime_api->start_maintenance(/*full_check = */ False)) {
+     m_disabled = true;
+@@ -192,6 +204,7 @@ void RimeWithWeaselHandler::Finalize() {
+   m_disabled = true;
+   m_session_status_map.clear();
+   LOG(INFO) << "Finalizing la rime.";
++  YunPinStopNativeSelectionSpoolerV1();
+   rime_api->finalize();
+ }
+ 
+-- 
+2.50.1

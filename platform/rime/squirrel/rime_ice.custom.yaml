@@ -29,7 +29,9 @@ patch:
   # literal candidate exists; they never displace that candidate from #1.
   "yunpin/long_correction_guard": true
   "yunpin/long_correction_min_chars": 12
-  "yunpin/session_learning": true
+  # Fail closed until the IMK host supplies a trustworthy positive
+  # yunpin_learning_allowed signal for a non-secure text field.
+  "yunpin/session_learning": false
   "yunpin/typo_correction": false
   # Valid-Pinyin substitutions (for example you -> yao) require a separate,
   # explicit experiment even when typo correction itself is enabled.

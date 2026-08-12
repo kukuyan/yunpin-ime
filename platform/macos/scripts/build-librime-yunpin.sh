@@ -46,6 +46,7 @@ library="$install_dir/lib/librime.1.dylib"
 architectures="$(lipo -archs "$library")"
 [[ " $architectures " == *" arm64 "* && " $architectures " == *" x86_64 "* ]] || die "merged librime is not universal: $architectures"
 nm -gU "$library" | grep -F 'rime_require_module_yunpin' >/dev/null || die "merged librime does not export the YunPin module"
+nm -gU "$library" | grep -F 'YunPinStartNativeSelectionSpoolerV1' >/dev/null || die "merged librime does not export the YunPin native spooler"
 
 cp -L "$library" "$source_dir/lib/librime.1.dylib"
 cp "$install_dir/bin/rime_deployer" "$source_dir/bin/rime_deployer"

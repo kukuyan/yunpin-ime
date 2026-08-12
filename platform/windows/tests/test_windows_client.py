@@ -116,6 +116,18 @@ class WindowsClientTests(unittest.TestCase):
             composition = (target / "WeaselTSF" / "Composition.cpp").read_text(
                 encoding="utf-8-sig"
             )
+            rime_with_weasel = (
+                target / "RimeWithWeasel" / "RimeWithWeasel.cpp"
+            ).read_text(encoding="utf-8-sig")
+            configurator = (
+                target / "WeaselDeployer" / "Configurator.cpp"
+            ).read_text(encoding="utf-8-sig")
+            ipc_client = (
+                target / "WeaselIPC" / "WeaselClientImpl.cpp"
+            ).read_text(encoding="utf-8-sig")
+            ipc_server = (
+                target / "WeaselIPCServer" / "WeaselServerImpl.cpp"
+            ).read_text(encoding="utf-8-sig")
             self.assertIn("YunPin", constants)
             self.assertIn(self.lock["identity"]["pipeName"], ipc)
             self.assertIn("0x1c4fbfe5", globals_cpp.lower())
@@ -127,6 +139,45 @@ class WindowsClientTests(unittest.TestCase):
             self.assertNotIn("winsparkle.h", server_main.lower())
             self.assertIn("YunPinDeployer.exe", server)
             self.assertIn("typed, explicitly armed action", composition)
+            self.assertIn(
+                "YunPinStartDefaultNativeSelectionSpoolerV1()",
+                rime_with_weasel,
+            )
+            self.assertNotIn("LOCALAPPDATA", rime_with_weasel)
+            self.assertNotIn("_wdupenv_s", rime_with_weasel)
+            self.assertLess(
+                rime_with_weasel.index("StartYunPinNativeSelectionSpooler();"),
+                rime_with_weasel.index("#if 0", rime_with_weasel.index("void RimeWithWeaselHandler::Initialize")),
+            )
+            self.assertLess(
+                rime_with_weasel.index("YunPinStopNativeSelectionSpoolerV1();"),
+                rime_with_weasel.index("rime_api->finalize();"),
+            )
+            self.assertIn("bool RimeWithWeaselHandler::_SessionsAreIdle()", rime_with_weasel)
+            self.assertIn("!status.is_composing", rime_with_weasel)
+            self.assertIn("if (!session_id || !rime_api->find_session(session_id))", rime_with_weasel)
+            self.assertIn("if (!rime_api->get_status(session_id, &status))", rime_with_weasel)
+            idle_gate = rime_with_weasel.index("bool RimeWithWeaselHandler::TryStartMaintenance()")
+            self.assertLess(
+                rime_with_weasel.index("if (!_SessionsAreIdle())", idle_gate),
+                rime_with_weasel.index("StartMaintenance();", idle_gate),
+            )
+            sync_method = configurator[configurator.index("int Configurator::SyncUserData()") :]
+            self.assertIn("constexpr int kMaintenanceBusyExitCode = 75", sync_method)
+            self.assertIn("client.TryStartMaintenance()", sync_method)
+            connect_gate = sync_method[
+                sync_method.index("if (!client.Connect())") :
+                sync_method.index("LOG(INFO) << \"Requesting idle-only")
+            ]
+            self.assertIn("return kMaintenanceBusyExitCode", connect_gate)
+            self.assertLess(
+                sync_method.index("client.TryStartMaintenance()"),
+                sync_method.index("rime->sync_user_data()"),
+            )
+            self.assertNotIn("client.StartMaintenance()", sync_method)
+            self.assertIn("WEASEL_IPC_MAINTENANCE_IF_IDLE", ipc_client)
+            self.assertIn("m_pRequestHandler->TryStartMaintenance()", ipc_server)
+            self.assertIn("std::lock_guard guard(g_api_mutex)", ipc_server)
             for forbidden in (
                 "yunpin-search:",
                 "yunpin-fav:",
@@ -150,19 +201,23 @@ class WindowsClientTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), row["sha256"])
             patch_text = patch.read_text(encoding="utf-8")
             self.assertIn(self.lock["librime"]["commit"], patch_text)
-            self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
-            self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
-            self.assertIn("bool correction_offset_used = false", patch_text)
-            self.assertIn("kMaxCorrectionInputBytes = 128", patch_text)
-            self.assertIn("kMaxCorrectionSearchesPerInput = 32", patch_text)
-            self.assertIn("if (correction_analysis_enabled)", patch_text)
-            self.assertIn("vector<vector<size_t>> normal_exact_ends", patch_text)
-            self.assertIn("exact_path_reachable[current_pos]", patch_text)
-            self.assertIn("exact_suffix_reachable[correction_end]", patch_text)
-            self.assertIn("has_full_normal_exact_path", patch_text)
-            self.assertIn("++correction_searches", patch_text)
-            self.assertNotIn("!has_exact_match", patch_text)
-            self.assertIn("if (correction_added)", patch_text)
+            if "0001-configurable-corrector" in row["path"]:
+                self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
+                self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
+                self.assertIn("bool correction_offset_used = false", patch_text)
+                self.assertIn("kMaxCorrectionInputBytes = 128", patch_text)
+                self.assertIn("kMaxCorrectionSearchesPerInput = 32", patch_text)
+                self.assertIn("if (correction_analysis_enabled)", patch_text)
+                self.assertIn("vector<vector<size_t>> normal_exact_ends", patch_text)
+                self.assertIn("exact_path_reachable[current_pos]", patch_text)
+                self.assertIn("exact_suffix_reachable[correction_end]", patch_text)
+                self.assertIn("has_full_normal_exact_path", patch_text)
+                self.assertIn("++correction_searches", patch_text)
+                self.assertNotIn("!has_exact_match", patch_text)
+                self.assertIn("if (correction_added)", patch_text)
+            else:
+                self.assertIn("commit_connection_.disconnect()", patch_text)
+                self.assertIn("filters_.clear()", patch_text)
 
         librime_archive = subprocess.run(
             ["git", "-C", str(ROOT / "third_party" / "librime"), "archive", "HEAD"],
@@ -204,6 +259,8 @@ class WindowsClientTests(unittest.TestCase):
             '"WeaselSetup\\WeaselSetup.ico"',
             '"x64", "Win32"',
             "Q\\(yunpin\\)",
+            "YunPinStartNativeSelectionSpoolerV1",
+            '"dumpbin.exe" /nologo /exports',
             'libboost_wserialization-vc143-mt-s-x32-1_84.lib',
             'libboost_wserialization-vc143-mt-s-x64-1_84.lib',
             'boost-msvc-user-config.jam',
@@ -242,6 +299,52 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("return nullptr;", corrector)
         self.assertNotIn("new NearSearchCorrector", corrector)
         self.assertTrue((ROOT / "engine" / "src" / "phrase_engine.cpp").is_file())
+
+    def test_sync_agent_package_and_private_e2e_artifact_are_separate(self) -> None:
+        build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        agent_build = (WINDOWS / "scripts" / "Build-SyncAgents.ps1").read_text(
+            encoding="utf-8"
+        )
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        package_test = (WINDOWS / "scripts" / "Test-Package.ps1").read_text(
+            encoding="utf-8"
+        )
+        installer = (WINDOWS / "package" / "Install-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        uninstaller = (WINDOWS / "package" / "Uninstall-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"Build-SyncAgents.ps1"', build)
+        self.assertIn('"desktopagent\\public"', agent_build)
+        self.assertIn('"e2e-private\\windows"', agent_build)
+        self.assertIn('BuildTag "yunpin_pairing_private"', agent_build)
+        self.assertIn("go mod verify", agent_build)
+        self.assertIn("package_go_licenses.py", agent_build)
+        self.assertIn('publicReleaseEligible = $false', agent_build)
+        self.assertIn('"desktopagent\\public\\yunpin-sync-agent.exe"', package)
+        self.assertNotIn("e2e-private", package)
+        for tree in ("desktopagent", "localstore", "protocol", "syncclient"):
+            self.assertIn(f'"{tree}"', package)
+        self.assertIn("third_party\\go-modules.lock.json", package)
+        for required in (
+            'Get-PeMachine -Path $syncAgent',
+            'Invoke-AgentCapture -Executable $syncAgent -Arguments @("install-probe")',
+            'Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")',
+            'yunpin-sync-agent: unknown command',
+        ):
+            self.assertIn(required, package_test)
+        self.assertIn('"Install-SyncAgent.ps1"', installer)
+        self.assertIn('"Verify-SyncAgent.ps1"', installer)
+        self.assertIn("-ExpectedSha256 $bundleManifest[$syncManifestPath]", installer)
+        self.assertIn('syncAgentRegistration = "disabled"', installer)
+        self.assertNotIn('Enable-SyncAgent.ps1")', installer)
+        self.assertIn('"support\\sync-agent\\Uninstall-SyncAgent.ps1"', uninstaller)
 
     def test_original_windows_icon_replaces_upstream_brand_asset(self) -> None:
         svg = (WINDOWS / "assets" / "yunpin-mark.svg").read_text(encoding="utf-8")
@@ -367,6 +470,42 @@ class WindowsClientTests(unittest.TestCase):
         self.assertEqual(mapping["WeaselDeployer.exe"], "YunPinDeployer.exe")
         self.assertEqual(mapping["WeaselSetup.exe"], "YunPinSetup.exe")
         self.assertEqual(len(set(mapping.values())), len(mapping))
+
+    def test_native_spool_producer_matches_windows_consumer_contract(self) -> None:
+        source = (
+            ROOT / "librime-yunpin" / "src" / "native_selection_events.cpp"
+        ).read_text(encoding="utf-8")
+        header = (
+            ROOT
+            / "librime-yunpin"
+            / "include"
+            / "yunpin"
+            / "native_selection_events.hpp"
+        ).read_text(encoding="utf-8")
+        cmake = (ROOT / "librime-yunpin" / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "SHGetKnownFolderPath",
+            "FOLDERID_LocalAppData",
+            "KF_FLAG_CREATE | KF_FLAG_NO_ALIAS",
+            "kPrivateWindowsFullControl = 0x001f01ff",
+            "WinLocalSystemSid",
+            "OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE",
+            "SE_DACL_PROTECTED",
+            "SE_DACL_AUTO_INHERIT_REQ",
+            "FILE_FLAG_OPEN_REPARSE_POINT",
+            "GetFinalPathNameByHandleW",
+            "LockFileEx",
+            "final_identity == created_identity",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+        self.assertNotIn('getenv("LOCALAPPDATA")', source)
+        self.assertNotIn("_wdupenv_s", source)
+        self.assertIn("YunPinStartDefaultNativeSelectionSpoolerV1", header)
+        for library in ("Advapi32", "Shell32", "Ole32", "Uuid"):
+            self.assertIn(library, cmake)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,10 @@ type Paths struct {
 	DatabasePath       string
 	LockPath           string
 	CredentialService  string
+	NativeEventsPath   string
+	BaselinePath       string
+	SnapshotPath       string
+	SnapshotStatePath  string
 }
 
 const DefaultProfile = "default"

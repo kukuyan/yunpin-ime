@@ -425,6 +425,17 @@ foreach ($requiredOutput in @(
     }
 }
 
+foreach ($rimeOutput in @("output\rime.dll", "output\Win32\rime.dll")) {
+    $rimePath = Join-Path $weaselSource $rimeOutput
+    $exports = & "dumpbin.exe" /nologo /exports $rimePath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "dumpbin failed while checking native spooler export in ${rimeOutput}"
+    }
+    if (($exports -join "`n") -notmatch 'YunPinStartNativeSelectionSpoolerV1') {
+        throw "Merged librime does not export the YunPin native spooler: ${rimeOutput}"
+    }
+}
+
 $setupBinaryText = [Text.Encoding]::Unicode.GetString(
     [IO.File]::ReadAllBytes((Join-Path $weaselSource "output\WeaselSetup.exe"))
 )
@@ -437,6 +448,8 @@ $serverBinaryText = [Text.Encoding]::Unicode.GetString(
 if (-not $serverBinaryText.Contains("YunPinDeployer.exe") -or $serverBinaryText.Contains("WeaselDeployer.exe")) {
     throw "Built server binary does not carry the isolated YunPin runtime identity"
 }
+
+& (Join-Path $scriptRoot "Build-SyncAgents.ps1") -OutputRoot $OutputRoot
 
 if (-not $SkipPackage) {
     & (Join-Path $scriptRoot "Package-Preview.ps1") -OutputRoot $OutputRoot -WeaselSource $weaselSource

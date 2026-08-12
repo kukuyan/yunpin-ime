@@ -117,6 +117,7 @@ function Assert-BundleManifest {
         throw "MANIFEST.sha256 is missing"
     }
     $prefix = [IO.Path]::GetFullPath($BundleRoot).TrimEnd("\") + "\"
+    $expected = @{}
     foreach ($line in Get-Content -LiteralPath $manifest) {
         if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
             throw "Malformed manifest row: $line"
@@ -133,7 +134,9 @@ function Assert-BundleManifest {
         if ($observed -ne $Matches[1]) {
             throw "Manifest hash mismatch: $relative"
         }
+        $expected[$Matches[2]] = $Matches[1]
     }
+    return $expected
 }
 
 function Copy-OverlayWithBackup {
@@ -172,7 +175,7 @@ if ($windowsVersion.Major -lt 10 -or $windowsVersion.Build -lt 19045) {
 }
 
 $bundleRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Assert-BundleManifest -BundleRoot $bundleRoot
+$bundleManifest = Assert-BundleManifest -BundleRoot $bundleRoot
 $metadata = Get-Content -LiteralPath (Join-Path $bundleRoot "BUILD-METADATA.json") -Raw | ConvertFrom-Json
 if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or $metadata.privateCandidateSnapshotEnabled -ne $false) {
     throw "Unexpected development-preview metadata"
@@ -213,6 +216,12 @@ try {
     )) {
         Copy-Item -LiteralPath (Join-Path $bundleRoot $supportFile) -Destination $supportRoot -Force
     }
+    $syncBundleRoot = Join-Path $bundleRoot "sync-agent"
+    $syncSupportRoot = Join-Path $supportRoot "sync-agent"
+    New-Item -ItemType Directory -Path $syncSupportRoot -Force | Out-Null
+    Get-ChildItem -LiteralPath $syncBundleRoot -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $syncSupportRoot -Force
+    }
     New-Item -ItemType Directory -Path $incoming -Force | Out-Null
     Get-ChildItem -LiteralPath (Join-Path $bundleRoot "runtime") -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $incoming -Recurse -Force
@@ -243,6 +252,16 @@ try {
     New-ItemProperty -Path $runKey -Name "YunPinIMEPreview" -PropertyType String -Value ('"' + $server + '"') -Force | Out-Null
     Start-Process -FilePath $server | Out-Null
 
+    $syncInstaller = Join-Path $syncSupportRoot "Install-SyncAgent.ps1"
+    $syncVerifier = Join-Path $syncSupportRoot "Verify-SyncAgent.ps1"
+    $syncAgent = Join-Path $syncSupportRoot "yunpin-sync-agent.exe"
+    $syncManifestPath = "sync-agent/yunpin-sync-agent.exe"
+    if (-not $bundleManifest.ContainsKey($syncManifestPath)) {
+        throw "Public sync agent is absent from the verified bundle manifest."
+    }
+    & $syncInstaller -AgentPath $syncAgent -ExpectedSha256 $bundleManifest[$syncManifestPath]
+    & $syncVerifier
+
     $state = [ordered]@{
         schemaVersion = 1
         installedAtUtc = [DateTime]::UtcNow.ToString("o")
@@ -252,6 +271,7 @@ try {
         previousRuntime = $(if (Test-Path $previous) { $previous } else { $null })
         registry64Runtime = $current
         unsignedDevelopmentBuild = $true
+        syncAgentRegistration = "disabled"
     }
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $InstallRoot "install-state.json") -Encoding UTF8
 } catch {
@@ -265,3 +285,4 @@ Write-Host "YunPin Windows development preview installed."
 Write-Host "Runtime: $current"
 Write-Host "User data: $UserDataRoot"
 Write-Host "Private YunPin candidates remain disabled pending the secure-input and IPC gates."
+Write-Host "YunPinSyncAgent is installed but its scheduled task remains disabled pending private E2E setup."

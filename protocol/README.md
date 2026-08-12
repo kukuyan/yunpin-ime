@@ -2,7 +2,7 @@
 
 The server transports opaque envelopes. Clients own encryption, signatures, CRDT merge, and local index rebuilding.
 
-The Go reference also implements checksummed recovery text, encrypted recovery packages, domain-separated recovery authentication, and X25519-derived one-time pairing boxes. A QR code transports the recovery text or pairing session payload; it never changes the cryptographic encoding.
+The Go reference also implements checksummed recovery text, encrypted recovery packages, domain-separated recovery authentication, and pairing v2 packages derived from both a 32-byte out-of-band PSK and X25519. The pairing transcript binds account/pairing/device IDs plus both Ed25519/X25519 public keys; a creator-signed roster is carried only inside the authenticated encrypted package. A QR code transports the recovery text or pairing invitation; the raw PSK is never sent to the relay.
 
 ## Identifiers and keys
 

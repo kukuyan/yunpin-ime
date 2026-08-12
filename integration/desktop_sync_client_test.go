@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -43,16 +44,23 @@ func (transport *dropFirstSyncResponse) RoundTrip(request *http.Request) (*http.
 	return nil, errors.New("synthetic lost response after relay commit")
 }
 
-func syntheticRegistration(seed byte, recovery []byte) (syncclient.AccountRegistration, ed25519.PrivateKey) {
-	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
+func syntheticRegistration(seed byte, recovery []byte) (syncclient.AccountRegistration, protocol.DeviceKeys) {
+	random := make([]byte, 96)
+	for index := range random {
+		random[index] = seed + byte(index)
+	}
+	keys, err := protocol.NewDeviceKeys(bytes.NewReader(random))
+	if err != nil {
+		panic(err)
+	}
 	return syncclient.AccountRegistration{
 		RecoveryAuthentication: recovery,
 		DeviceRegistration: syncclient.DeviceRegistration{
 			DeviceNameCiphertext: bytes.Repeat([]byte{seed + 0x10}, 32),
-			Ed25519PublicKey:     private.Public().(ed25519.PublicKey),
-			X25519PublicKey:      bytes.Repeat([]byte{seed + 0x20}, 32),
+			Ed25519PublicKey:     keys.Ed25519Public,
+			X25519PublicKey:      keys.X25519Public,
 		},
-	}, private
+	}, keys
 }
 
 func openSynchronizedStore(t *testing.T, deviceID []byte, dataKey, idKey []byte) *localstore.Store {
@@ -88,8 +96,16 @@ func TestTwoHeadlessDesktopWorkersConvergeAndRetryLostResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registrationA, privateA := syntheticRegistration(0x41, recoveryAuthentication)
-	accountA, err := normalClient.CreateAccount(ctx, registrationA)
+	registrationA, keysA := syntheticRegistration(0x41, recoveryAuthentication)
+	provisioningRandom := make([]byte, 96)
+	for index := range provisioningRandom {
+		provisioningRandom[index] = byte(index + 1)
+	}
+	credentialsA, err := syncclient.GenerateAccountCredentials(bytes.NewReader(provisioningRandom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountA, err := normalClient.CreateAccount(ctx, credentialsA, registrationA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,11 +120,68 @@ func TestTwoHeadlessDesktopWorkersConvergeAndRetryLostResponse(t *testing.T) {
 	if err := normalClient.PutKeyring(ctx, accountA.DeviceToken, 1, recoveryBox); err != nil {
 		t.Fatal(err)
 	}
-	registrationB, privateB := syntheticRegistration(0x42, recoveryAuthentication)
-	accountB, err := normalClient.RecoverAccount(ctx, accountA.AccountID, registrationB)
+	if err := normalClient.SealAccount(ctx, accountA.AccountID, accountA.DeviceToken); err != nil {
+		t.Fatal(err)
+	}
+	registrationB, keysB := syntheticRegistration(0x42, recoveryAuthentication)
+	deviceRandom := make([]byte, 80)
+	for index := range deviceRandom {
+		deviceRandom[index] = byte(index + 101)
+	}
+	credentialsB, err := syncclient.GenerateDeviceCredentials(accountA.AccountID, bytes.NewReader(deviceRandom))
 	if err != nil {
 		t.Fatal(err)
 	}
+	invitation, err := syncclient.GeneratePairingInvitation(accountA, registrationA.DeviceRegistration,
+		bytes.NewReader(bytes.Repeat([]byte{0x65}, 48)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invitation, err = normalClient.CreatePairing(ctx, accountA, invitation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := normalClient.JoinPairing(ctx, invitation, credentialsB, registrationB.DeviceRegistration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roster, err := protocol.SignPairingRoster(accountA.AccountID, 1, []protocol.PairingRosterDevice{
+		{DeviceID: accountA.DeviceID, Ed25519PublicKey: keysA.Ed25519Public, X25519PublicKey: keysA.X25519Public},
+		{DeviceID: credentialsB.DeviceID, Ed25519PublicKey: keysB.Ed25519Public, X25519PublicKey: keysB.X25519Public},
+	}, accountA.DeviceID, keysA.Ed25519Private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairingPackage := protocol.PairingPackage{
+		CurrentEpoch: 1, EpochKeys: []protocol.PairingEpochKey{{Epoch: 1, Key: epochKey}},
+		ObjectIDKey: objectIDKey, Roster: roster,
+	}
+	pairingBox, err := syncclient.SealPairingPackage(invitation, transcript, pairingPackage,
+		keysA.X25519Private, bytes.NewReader(bytes.Repeat([]byte{0x66}, 24)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := normalClient.ApprovePairing(ctx, invitation.PairingID, accountA.DeviceToken, pairingBox); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := normalClient.ClaimPairing(ctx, invitation, credentialsB, transcript, keysB.Ed25519Private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openedPairing, err := syncclient.OpenPairingClaim(invitation, credentialsB, transcript, keysB.X25519Private, claim)
+	if err != nil || !reflect.DeepEqual(openedPairing, pairingPackage) {
+		t.Fatalf("authenticated pairing package mismatch: payload=%#v err=%v", openedPairing, err)
+	}
+	if state, err := normalClient.ReadyPairing(ctx, invitation.PairingID, credentialsB.DeviceToken); err != nil || state != "ready" {
+		t.Fatalf("joining device readiness state=%q err=%v", state, err)
+	}
+	if err := normalClient.FinalizePairing(ctx, invitation.PairingID, accountA.DeviceToken); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := normalClient.ReadyPairing(ctx, invitation.PairingID, credentialsB.DeviceToken); err != nil || state != "finalized" {
+		t.Fatalf("finalized joining state=%q err=%v", state, err)
+	}
+	accountB := claim.Account
 	if !bytes.Equal(accountA.AccountID, accountB.AccountID) || bytes.Equal(accountA.DeviceID, accountB.DeviceID) {
 		t.Fatal("account recovery did not create a distinct device in the same account")
 	}
@@ -123,23 +196,23 @@ func TestTwoHeadlessDesktopWorkersConvergeAndRetryLostResponse(t *testing.T) {
 	}
 
 	storeA := openSynchronizedStore(t, accountA.DeviceID, bytes.Repeat([]byte{0x51}, 32), objectIDKey)
-	storeB := openSynchronizedStore(t, accountB.DeviceID, bytes.Repeat([]byte{0x61}, 32), recovered.ObjectIDKey)
+	storeB := openSynchronizedStore(t, accountB.DeviceID, bytes.Repeat([]byte{0x61}, 32), openedPairing.ObjectIDKey)
 	phrase := localstore.Phrase{Text: "合成桌面同步测试", Pinyin: "he cheng zhuo mian tong bu ce shi", Pinned: true}
 	if err := storeA.SaveExplicit(ctx, phrase); err != nil {
 		t.Fatal(err)
 	}
 	verificationKeys := map[string]ed25519.PublicKey{
-		hex.EncodeToString(accountA.DeviceID): privateA.Public().(ed25519.PublicKey),
-		hex.EncodeToString(accountB.DeviceID): privateB.Public().(ed25519.PublicKey),
+		hex.EncodeToString(accountA.DeviceID): keysA.Ed25519Public,
+		hex.EncodeToString(accountB.DeviceID): keysB.Ed25519Public,
 	}
 	sessionA := syncclient.Session{
 		AccountID: accountA.AccountID, DeviceID: accountA.DeviceID, DeviceToken: accountA.DeviceToken,
-		KeyEpoch: 1, EpochKeys: map[uint64][]byte{1: epochKey}, SigningPrivate: privateA,
+		KeyEpoch: 1, EpochKeys: map[uint64][]byte{1: epochKey}, SigningPrivate: keysA.Ed25519Private,
 		VerificationKeys: verificationKeys,
 	}
 	sessionB := syncclient.Session{
 		AccountID: accountB.AccountID, DeviceID: accountB.DeviceID, DeviceToken: accountB.DeviceToken,
-		KeyEpoch: recovered.CurrentEpoch, EpochKeys: map[uint64][]byte{recovered.CurrentEpoch: recovered.EpochKey}, SigningPrivate: privateB,
+		KeyEpoch: openedPairing.CurrentEpoch, EpochKeys: map[uint64][]byte{openedPairing.CurrentEpoch: openedPairing.EpochKeys[0].Key}, SigningPrivate: keysB.Ed25519Private,
 		VerificationKeys: verificationKeys,
 	}
 	droppingClient := syncclient.New(endpoint, syncclient.WithTransport(&dropFirstSyncResponse{base: http.DefaultTransport}))

@@ -36,9 +36,11 @@ tar -C "$source_dir" \
 # corresponding source nor appropriate release material.
 git -C "$REPO_ROOT" archive HEAD -- \
   LICENSE NOTICE THIRD_PARTY_NOTICES.md \
+  third_party/go-modules.lock.json scripts/package_go_licenses.py \
   platform/LICENSE-BOUNDARIES.md platform/upstream-lock.json \
   platform/macos platform/rime platform/patches/squirrel \
   platform/patches/librime-1.16 \
+  desktopagent localstore protocol syncclient \
   engine librime-yunpin | \
   tar -C "$staging/YunPin-IME/YunPin" -xf -
 

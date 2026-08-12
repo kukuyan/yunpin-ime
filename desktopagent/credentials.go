@@ -10,14 +10,18 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"github.com/kukuyan/yunpin-ime/protocol"
+	"golang.org/x/crypto/curve25519"
 )
 
 const (
-	CredentialBundleVersion = 1
-	maxCredentialBlobBytes  = 64 * 1024
-	maxDeviceTokenBytes     = 512
-	maxEpochKeys            = 64
-	maxVerificationKeys     = 256
+	legacyCredentialBundleVersion = 1
+	CredentialBundleVersion       = 2
+	maxCredentialBlobBytes        = 64 * 1024
+	maxDeviceTokenBytes           = 512
+	maxEpochKeys                  = 64
+	maxVerificationKeys           = 256
 )
 
 var credentialMagic = [4]byte{'Y', 'P', 'C', 'B'}
@@ -38,6 +42,11 @@ type CredentialBundleV1 struct {
 	CurrentEpoch     uint64
 	EpochKeys        map[uint64][32]byte
 	VerificationKeys map[[16]byte][ed25519.PublicKeySize]byte
+	X25519PublicKeys map[[16]byte][32]byte
+	// TrustedRoster is the complete creator-signed trust statement received
+	// through pairing. A freshly created first device has a bootstrap self-only
+	// trust set and an empty roster until it explicitly approves device two.
+	TrustedRoster protocol.PairingRoster
 }
 
 func allZero(value []byte) bool {
@@ -63,8 +72,108 @@ func validDeviceToken(value []byte) bool {
 	return true
 }
 
+func rosterIsEmpty(roster protocol.PairingRoster) bool {
+	return roster.Version == 0 && len(roster.AccountID) == 0 && len(roster.Devices) == 0 &&
+		len(roster.SignerDeviceID) == 0 && len(roster.Signature) == 0
+}
+
+func trustFromRoster(roster protocol.PairingRoster) (map[[16]byte][ed25519.PublicKeySize]byte, map[[16]byte][32]byte, error) {
+	if err := protocol.VerifyPairingRoster(roster); err != nil {
+		return nil, nil, err
+	}
+	verification := make(map[[16]byte][ed25519.PublicKeySize]byte, len(roster.Devices))
+	x25519 := make(map[[16]byte][32]byte, len(roster.Devices))
+	for _, device := range roster.Devices {
+		var id [16]byte
+		var ed [ed25519.PublicKeySize]byte
+		var x [32]byte
+		copy(id[:], device.DeviceID)
+		copy(ed[:], device.Ed25519PublicKey)
+		copy(x[:], device.X25519PublicKey)
+		verification[id] = ed
+		x25519[id] = x
+	}
+	return verification, x25519, nil
+}
+
+func equalVerificationTrust(left, right map[[16]byte][ed25519.PublicKeySize]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, key := range left {
+		if other, ok := right[id]; !ok || other != key {
+			return false
+		}
+	}
+	return true
+}
+
+func equalX25519Trust(left, right map[[16]byte][32]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, key := range left {
+		if other, ok := right[id]; !ok || other != key {
+			return false
+		}
+	}
+	return true
+}
+
+func clonePairingRoster(roster protocol.PairingRoster) protocol.PairingRoster {
+	cloned := protocol.PairingRoster{
+		Version: roster.Version, AccountID: append([]byte(nil), roster.AccountID...),
+		SignerDeviceID: append([]byte(nil), roster.SignerDeviceID...), Signature: append([]byte(nil), roster.Signature...),
+		Devices: make([]protocol.PairingRosterDevice, len(roster.Devices)),
+	}
+	for index, device := range roster.Devices {
+		cloned.Devices[index] = protocol.PairingRosterDevice{
+			DeviceID:         append([]byte(nil), device.DeviceID...),
+			Ed25519PublicKey: append([]byte(nil), device.Ed25519PublicKey...),
+			X25519PublicKey:  append([]byte(nil), device.X25519PublicKey...),
+		}
+	}
+	return cloned
+}
+
+func applyTrustedRoster(bundle *CredentialBundleV1, roster protocol.PairingRoster) error {
+	if bundle == nil || !bytes.Equal(roster.AccountID, bundle.AccountID[:]) {
+		return errors.New("trusted roster account does not match credential")
+	}
+	verification, x25519, err := trustFromRoster(roster)
+	if err != nil {
+		return err
+	}
+	if len(roster.Devices) != 2 {
+		return errors.New("this preview supports exactly two devices in its signed trust roster")
+	}
+	bundle.Version = CredentialBundleVersion
+	bundle.TrustedRoster = clonePairingRoster(roster)
+	bundle.VerificationKeys = verification
+	bundle.X25519PublicKeys = x25519
+	return nil
+}
+
+func populateBootstrapTrust(bundle *CredentialBundleV1) error {
+	if bundle == nil {
+		return errors.New("credential bundle is required")
+	}
+	edPublic := ed25519.NewKeyFromSeed(bundle.SigningSeed[:]).Public().(ed25519.PublicKey)
+	xPublic, err := curve25519.X25519(bundle.X25519Private[:], curve25519.Basepoint)
+	if err != nil {
+		return err
+	}
+	var ed [ed25519.PublicKeySize]byte
+	var x [32]byte
+	copy(ed[:], edPublic)
+	copy(x[:], xPublic)
+	bundle.VerificationKeys = map[[16]byte][ed25519.PublicKeySize]byte{bundle.DeviceID: ed}
+	bundle.X25519PublicKeys = map[[16]byte][32]byte{bundle.DeviceID: x}
+	return nil
+}
+
 func (bundle CredentialBundleV1) Validate() error {
-	if bundle.Version != CredentialBundleVersion {
+	if bundle.Version != legacyCredentialBundleVersion && bundle.Version != CredentialBundleVersion {
 		return fmt.Errorf("unsupported credential bundle version %d", bundle.Version)
 	}
 	if allZero(bundle.AccountID[:]) || allZero(bundle.DeviceID[:]) {
@@ -106,15 +215,52 @@ func (bundle CredentialBundleV1) Validate() error {
 	if !validSelf {
 		return errors.New("current device verification key does not match its signing seed")
 	}
+	if bundle.Version == legacyCredentialBundleVersion {
+		if !rosterIsEmpty(bundle.TrustedRoster) {
+			return errors.New("legacy credential unexpectedly contains a trusted roster")
+		}
+		return nil
+	}
+	wantX, err := curve25519.X25519(bundle.X25519Private[:], curve25519.Basepoint)
+	if err != nil {
+		return errors.New("credential X25519 private key is invalid")
+	}
+	selfX, selfXFound := bundle.X25519PublicKeys[bundle.DeviceID]
+	if !selfXFound || !bytes.Equal(selfX[:], wantX) {
+		return errors.New("current device X25519 public key does not match its private key")
+	}
+	if rosterIsEmpty(bundle.TrustedRoster) {
+		if len(bundle.VerificationKeys) != 1 || len(bundle.X25519PublicKeys) != 1 {
+			return errors.New("bootstrap credential may trust only itself before its first signed roster")
+		}
+		return nil
+	}
+	if len(bundle.TrustedRoster.Devices) != 2 {
+		return errors.New("this preview supports exactly two trusted devices")
+	}
+	if !bytes.Equal(bundle.TrustedRoster.AccountID, bundle.AccountID[:]) {
+		return errors.New("trusted roster belongs to another account")
+	}
+	rosterVerification, rosterX25519, err := trustFromRoster(bundle.TrustedRoster)
+	if err != nil {
+		return fmt.Errorf("validate trusted roster: %w", err)
+	}
+	if !equalVerificationTrust(bundle.VerificationKeys, rosterVerification) ||
+		!equalX25519Trust(bundle.X25519PublicKeys, rosterX25519) {
+		return errors.New("credential trust maps are not derived exactly from the signed roster")
+	}
 	return nil
 }
 
-// EncodeCredentialBundle emits one canonical, fixed-width binary record:
-// magic, version, IDs, token, device secrets, ordered epochs, then ordered
-// verification keys. Maps are sorted so the same credential has one encoding.
+// EncodeCredentialBundle emits the v2 canonical binary record. Verification
+// and X25519 trust maps are never serialized independently: after bootstrap
+// they are reconstructed only from the complete signed roster.
 func EncodeCredentialBundle(bundle CredentialBundleV1) ([]byte, error) {
 	if err := bundle.Validate(); err != nil {
 		return nil, err
+	}
+	if bundle.Version != CredentialBundleVersion {
+		return nil, errors.New("legacy credential must be upgraded before it is encoded")
 	}
 	var encoded bytes.Buffer
 	encoded.Grow(256 + len(bundle.DeviceToken) + len(bundle.EpochKeys)*40 + len(bundle.VerificationKeys)*48)
@@ -142,18 +288,20 @@ func EncodeCredentialBundle(bundle CredentialBundleV1) ([]byte, error) {
 		encoded.Write(key[:])
 	}
 
-	devices := make([][16]byte, 0, len(bundle.VerificationKeys))
-	for device := range bundle.VerificationKeys {
-		devices = append(devices, device)
-	}
-	sort.Slice(devices, func(left, right int) bool {
-		return bytes.Compare(devices[left][:], devices[right][:]) < 0
-	})
-	_ = binary.Write(&encoded, binary.BigEndian, uint16(len(devices)))
-	for _, device := range devices {
-		encoded.Write(device[:])
-		key := bundle.VerificationKeys[device]
-		encoded.Write(key[:])
+	if rosterIsEmpty(bundle.TrustedRoster) {
+		encoded.WriteByte(0)
+	} else {
+		encoded.WriteByte(1)
+		_ = binary.Write(&encoded, binary.BigEndian, bundle.TrustedRoster.Version)
+		encoded.Write(bundle.TrustedRoster.AccountID)
+		encoded.Write(bundle.TrustedRoster.SignerDeviceID)
+		_ = binary.Write(&encoded, binary.BigEndian, uint16(len(bundle.TrustedRoster.Devices)))
+		for _, device := range bundle.TrustedRoster.Devices {
+			encoded.Write(device.DeviceID)
+			encoded.Write(device.Ed25519PublicKey)
+			encoded.Write(device.X25519PublicKey)
+		}
+		encoded.Write(bundle.TrustedRoster.Signature)
 	}
 	if encoded.Len() > maxCredentialBlobBytes {
 		return nil, errors.New("credential bundle exceeds size limit")
@@ -210,7 +358,7 @@ func DecodeCredentialBundle(encoded []byte) (CredentialBundleV1, error) {
 		return CredentialBundleV1{}, errors.New("credential bundle magic is invalid")
 	}
 	version, err := reader.take(1)
-	if err != nil || version[0] != CredentialBundleVersion {
+	if err != nil || (version[0] != legacyCredentialBundleVersion && version[0] != CredentialBundleVersion) {
 		return CredentialBundleV1{}, errors.New("credential bundle version is unsupported")
 	}
 	bundle := CredentialBundleV1{Version: version[0]}
@@ -272,26 +420,86 @@ func DecodeCredentialBundle(encoded []byte) (CredentialBundleV1, error) {
 		}
 		bundle.EpochKeys[epoch] = key
 	}
-	verificationCount, err := reader.uint16()
-	if err != nil || verificationCount < 1 || verificationCount > maxVerificationKeys {
-		return CredentialBundleV1{}, errors.New("credential bundle verification-key count is invalid")
-	}
-	bundle.VerificationKeys = make(map[[16]byte][ed25519.PublicKeySize]byte, verificationCount)
-	var previousDevice [16]byte
-	for index := 0; index < int(verificationCount); index++ {
-		var device [16]byte
-		if err := copyFixed(device[:], &reader); err != nil {
-			return CredentialBundleV1{}, err
+	if bundle.Version == legacyCredentialBundleVersion {
+		verificationCount, err := reader.uint16()
+		if err != nil || verificationCount < 1 || verificationCount > maxVerificationKeys {
+			return CredentialBundleV1{}, errors.New("credential bundle verification-key count is invalid")
 		}
-		if index > 0 && bytes.Compare(previousDevice[:], device[:]) >= 0 {
-			return CredentialBundleV1{}, errors.New("credential bundle device keys are duplicate or out of order")
+		bundle.VerificationKeys = make(map[[16]byte][ed25519.PublicKeySize]byte, verificationCount)
+		var previousDevice [16]byte
+		for index := 0; index < int(verificationCount); index++ {
+			var device [16]byte
+			if err := copyFixed(device[:], &reader); err != nil {
+				return CredentialBundleV1{}, err
+			}
+			if index > 0 && bytes.Compare(previousDevice[:], device[:]) >= 0 {
+				return CredentialBundleV1{}, errors.New("credential bundle device keys are duplicate or out of order")
+			}
+			previousDevice = device
+			var key [ed25519.PublicKeySize]byte
+			if err := copyFixed(key[:], &reader); err != nil {
+				return CredentialBundleV1{}, err
+			}
+			bundle.VerificationKeys[device] = key
 		}
-		previousDevice = device
-		var key [ed25519.PublicKeySize]byte
-		if err := copyFixed(key[:], &reader); err != nil {
-			return CredentialBundleV1{}, err
+		if xPublic, xErr := curve25519.X25519(bundle.X25519Private[:], curve25519.Basepoint); xErr == nil {
+			var x [32]byte
+			copy(x[:], xPublic)
+			bundle.X25519PublicKeys = map[[16]byte][32]byte{bundle.DeviceID: x}
 		}
-		bundle.VerificationKeys[device] = key
+	} else {
+		present, err := reader.take(1)
+		if err != nil || (present[0] != 0 && present[0] != 1) {
+			return CredentialBundleV1{}, errors.New("credential bundle trusted-roster marker is invalid")
+		}
+		if present[0] == 0 {
+			if err := populateBootstrapTrust(&bundle); err != nil {
+				return CredentialBundleV1{}, err
+			}
+		} else {
+			roster := protocol.PairingRoster{}
+			roster.Version, err = reader.uint64()
+			if err != nil {
+				return CredentialBundleV1{}, err
+			}
+			roster.AccountID, err = reader.take(16)
+			if err == nil {
+				roster.SignerDeviceID, err = reader.take(16)
+			}
+			var count uint16
+			if err == nil {
+				count, err = reader.uint16()
+			}
+			if err != nil || count < 2 || count > maxVerificationKeys {
+				return CredentialBundleV1{}, errors.New("credential bundle trusted-roster count is invalid")
+			}
+			roster.AccountID = append([]byte(nil), roster.AccountID...)
+			roster.SignerDeviceID = append([]byte(nil), roster.SignerDeviceID...)
+			roster.Devices = make([]protocol.PairingRosterDevice, count)
+			for index := range roster.Devices {
+				id, readErr := reader.take(16)
+				if readErr == nil {
+					roster.Devices[index].Ed25519PublicKey, readErr = reader.take(ed25519.PublicKeySize)
+				}
+				if readErr == nil {
+					roster.Devices[index].X25519PublicKey, readErr = reader.take(32)
+				}
+				if readErr != nil {
+					return CredentialBundleV1{}, readErr
+				}
+				roster.Devices[index].DeviceID = append([]byte(nil), id...)
+				roster.Devices[index].Ed25519PublicKey = append([]byte(nil), roster.Devices[index].Ed25519PublicKey...)
+				roster.Devices[index].X25519PublicKey = append([]byte(nil), roster.Devices[index].X25519PublicKey...)
+			}
+			roster.Signature, err = reader.take(ed25519.SignatureSize)
+			if err != nil {
+				return CredentialBundleV1{}, err
+			}
+			roster.Signature = append([]byte(nil), roster.Signature...)
+			if err := applyTrustedRoster(&bundle, roster); err != nil {
+				return CredentialBundleV1{}, err
+			}
+		}
 	}
 	if reader.offset != len(encoded) {
 		return CredentialBundleV1{}, errors.New("credential bundle has trailing bytes")
@@ -333,5 +541,20 @@ func (bundle *CredentialBundleV1) Zero() {
 		bundle.VerificationKeys[device] = key
 		delete(bundle.VerificationKeys, device)
 	}
+	for device := range bundle.X25519PublicKeys {
+		key := bundle.X25519PublicKeys[device]
+		clear(key[:])
+		bundle.X25519PublicKeys[device] = key
+		delete(bundle.X25519PublicKeys, device)
+	}
+	for index := range bundle.TrustedRoster.Devices {
+		zeroBytes(bundle.TrustedRoster.Devices[index].DeviceID)
+		zeroBytes(bundle.TrustedRoster.Devices[index].Ed25519PublicKey)
+		zeroBytes(bundle.TrustedRoster.Devices[index].X25519PublicKey)
+	}
+	zeroBytes(bundle.TrustedRoster.AccountID)
+	zeroBytes(bundle.TrustedRoster.SignerDeviceID)
+	zeroBytes(bundle.TrustedRoster.Signature)
+	bundle.TrustedRoster = protocol.PairingRoster{}
 	bundle.CurrentEpoch = 0
 }

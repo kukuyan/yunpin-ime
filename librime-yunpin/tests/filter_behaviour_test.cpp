@@ -14,6 +14,7 @@
 #undef NDEBUG
 
 #include "rime_yunpin_filter.hpp"
+#include "yunpin/native_selection_events.hpp"
 
 #include <rime/engine.h>
 #include <rime/key_event.h>
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -112,6 +114,7 @@ struct Harness {
     config.bools_["yunpin/short_input_guard"] = true;
     config.bools_["yunpin/long_correction_guard"] = true;
     config.bools_["yunpin/session_learning"] = true;
+    context.options_["yunpin_learning_allowed"] = true;
     config.ints_["yunpin/max_candidates"] = 2;
   }
 
@@ -194,6 +197,12 @@ void EmitComposition(Harness& harness, const std::string& input) {
 void EmitKey(Harness& harness, int keycode, int modifier = 0) {
   const KeyEvent key(keycode, modifier);
   harness.context.unhandled_key_notifier()(&harness.context, key);
+}
+
+void DrainNativeSelectionEvents() {
+  yunpin::NativeSelectionEvent event;
+  while (yunpin::NativeSelectionEventQueue::Instance().TryPop(&event)) {
+  }
 }
 
 // Drives the filter the way librime does: AppliesToSegment, then Apply, then
@@ -498,6 +507,82 @@ void TestSessionBridgeFailsClosedOnUnprovenDeletion() {
   }
 }
 
+void TestLearningCallbacksDoNotOutliveFilter() {
+  Harness harness;
+  auto filter = std::make_unique<YunPinFilter>(harness.ticket());
+  EmitCommit(harness, "richang", "日长");
+  filter.reset();
+
+  // Every notifier still exists on Context, but all YunPin slots must already
+  // be disconnected.  Calling them after filter destruction must be inert.
+  harness.context.commit_notifier()(&harness.context);
+  harness.context.update_notifier()(&harness.context);
+  harness.context.unhandled_key_notifier()(
+      &harness.context, KeyEvent(XK_BackSpace, 0));
+  harness.context.option_update_notifier()(&harness.context, "ascii_mode");
+  harness.context.delete_notifier()(&harness.context);
+}
+
+void TestNestedNotifierCanDestroyFilter() {
+  Harness harness;
+  std::unique_ptr<YunPinFilter> filter;
+  // This slot runs before YunPin's slot and simulates an IMK/TSF host tearing
+  // down the component from a nested callback.  The disconnected weak slot
+  // that follows must not dereference either the filter or its learning state.
+  harness.context.commit_notifier().connect(
+      [&filter](Context*) { filter.reset(); });
+  filter = std::make_unique<YunPinFilter>(harness.ticket());
+  EmitCommit(harness, "richang", "日长");
+  assert(!filter);
+}
+
+void TestRapidSessionLearningChurn() {
+  for (int iteration = 0; iteration < 256; ++iteration) {
+    Harness harness;
+    auto filter = std::make_unique<YunPinFilter>(harness.ticket());
+    EmitCommit(harness, "richang", "日长");
+    EmitKey(harness, XK_BackSpace);
+    harness.context.option_update_notifier()(&harness.context, "ascii_mode");
+    harness.context.delete_notifier()(&harness.context);
+    filter.reset();
+    harness.context.update_notifier()(&harness.context);
+  }
+}
+
+void TestProtectedContextsPublishNoNativeEvents() {
+  DrainNativeSelectionEvents();
+  {
+    Harness missing_host_capability;
+    missing_host_capability.context.options_.erase("yunpin_learning_allowed");
+    YunPinFilter filter(missing_host_capability.ticket());
+    EmitCommit(missing_host_capability, "weizhishuru", "未知输入");
+  }
+  {
+    Harness unknown_host_context;
+    unknown_host_context.context.options_["yunpin_learning_allowed"] = false;
+    YunPinFilter filter(unknown_host_context.ticket());
+    EmitCommit(unknown_host_context, "weizhishuru", "未知输入");
+  }
+  for (const std::string& option :
+       {std::string("password_mode"), std::string("yunpin_private_mode"),
+        std::string("yunpin_one_shot")}) {
+    Harness harness;
+    harness.context.options_[option] = true;
+    YunPinFilter filter(harness.ticket());
+    EmitCommit(harness, "yinsici", "隐私词");
+  }
+  yunpin::NativeSelectionEvent event;
+  assert(!yunpin::NativeSelectionEventQueue::Instance().TryPop(&event));
+
+  Harness normal;
+  YunPinFilter filter(normal.ticket());
+  EmitCommit(normal, "shujuku", "数据库");
+  assert(yunpin::NativeSelectionEventQueue::Instance().TryPop(&event));
+  assert(event.phrase == "数据库");
+  assert(event.pinyin == "shujuku");
+  DrainNativeSelectionEvents();
+}
+
 void TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable() {
   const auto empty = std::filesystem::temp_directory_path() /
                      "yunpin-filter-behaviour" / "no-snapshot";
@@ -591,6 +676,10 @@ int main() {
   TestLongCorrectionGuardIsConservativeAndPageBounded();
   TestSessionCorrectionReranksBoundedUpstreamWindow();
   TestSessionBridgeFailsClosedOnUnprovenDeletion();
+  TestLearningCallbacksDoNotOutliveFilter();
+  TestNestedNotifierCanDestroyFilter();
+  TestRapidSessionLearningChurn();
+  TestProtectedContextsPublishNoNativeEvents();
   TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable();
   TestPrivateSwitchDoesNotDisableShortGuard();
   TestBothFeatureSwitchesOffStayInactive();

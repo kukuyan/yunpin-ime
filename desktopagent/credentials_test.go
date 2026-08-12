@@ -7,6 +7,9 @@ import (
 	"encoding/binary"
 	"reflect"
 	"testing"
+
+	"github.com/kukuyan/yunpin-ime/protocol"
+	"golang.org/x/crypto/curve25519"
 )
 
 func filled16(value byte) [16]byte {
@@ -32,13 +35,17 @@ func testCredentials() CredentialBundleV1 {
 	public := ed25519.NewKeyFromSeed(seed[:]).Public().(ed25519.PublicKey)
 	var self [ed25519.PublicKeySize]byte
 	copy(self[:], public)
+	xPrivate := filled32(0x44)
+	xPublicBytes, _ := curve25519.X25519(xPrivate[:], curve25519.Basepoint)
+	var selfX [32]byte
+	copy(selfX[:], xPublicBytes)
 	return CredentialBundleV1{
 		Version:       CredentialBundleVersion,
 		AccountID:     account,
 		DeviceID:      device,
 		DeviceToken:   []byte("synthetic_device_token_123456789"),
 		SigningSeed:   seed,
-		X25519Private: filled32(0x44),
+		X25519Private: xPrivate,
 		LocalDataKey:  filled32(0x55),
 		ObjectIDKey:   filled32(0x66),
 		CurrentEpoch:  2,
@@ -47,6 +54,7 @@ func testCredentials() CredentialBundleV1 {
 			1: filled32(0x71),
 		},
 		VerificationKeys: map[[16]byte][ed25519.PublicKeySize]byte{device: self},
+		X25519PublicKeys: map[[16]byte][32]byte{device: selfX},
 	}
 }
 
@@ -133,11 +141,48 @@ func TestCredentialBundleValidatesSelfTrustAndToken(t *testing.T) {
 	}
 }
 
+func TestCredentialBundlePersistsCompleteSignedRosterAndDerivesTrustMaps(t *testing.T) {
+	bundle := testCredentials()
+	secondID := filled16(0x77)
+	secondEd := filled32(0x78)
+	secondX := filled32(0x79)
+	selfEd := bundle.VerificationKeys[bundle.DeviceID]
+	selfX := bundle.X25519PublicKeys[bundle.DeviceID]
+	roster, err := protocol.SignPairingRoster(bundle.AccountID[:], 1, []protocol.PairingRosterDevice{
+		{DeviceID: bundle.DeviceID[:], Ed25519PublicKey: selfEd[:], X25519PublicKey: selfX[:]},
+		{DeviceID: secondID[:], Ed25519PublicKey: secondEd[:], X25519PublicKey: secondX[:]},
+	}, bundle.DeviceID[:], ed25519.NewKeyFromSeed(bundle.SigningSeed[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyTrustedRoster(&bundle, roster); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeCredentialBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeCredentialBundle(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer decoded.Zero()
+	if !reflect.DeepEqual(decoded.TrustedRoster, roster) ||
+		!equalVerificationTrust(decoded.VerificationKeys, bundle.VerificationKeys) ||
+		!equalX25519Trust(decoded.X25519PublicKeys, bundle.X25519PublicKeys) {
+		t.Fatal("signed roster or roster-derived trust maps changed on round trip")
+	}
+	decoded.VerificationKeys[secondID] = filled32(0x80)
+	if _, err := EncodeCredentialBundle(decoded); err == nil {
+		t.Fatal("verification trust map differing from signed roster was accepted")
+	}
+}
+
 func TestCredentialBundleZeroClearsMutableSecrets(t *testing.T) {
 	bundle := testCredentials()
 	bundle.Zero()
 	if bundle.DeviceToken != nil || bundle.CurrentEpoch != 0 ||
-		len(bundle.EpochKeys) != 0 || len(bundle.VerificationKeys) != 0 ||
+		len(bundle.EpochKeys) != 0 || len(bundle.VerificationKeys) != 0 || len(bundle.X25519PublicKeys) != 0 ||
 		!allZero(bundle.SigningSeed[:]) || !allZero(bundle.LocalDataKey[:]) ||
 		!allZero(bundle.ObjectIDKey[:]) || !allZero(bundle.X25519Private[:]) {
 		t.Fatal("credential bundle retained mutable secret material")

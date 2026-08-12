@@ -34,8 +34,20 @@ Security gates:
   false until the Windows secure-input and IPC gates pass.
 * No cloud synchronization, Sogou migration, or private phrase import is run by
   these scripts. R0W is not contacted.
+* The package carries the public default-tag `yunpin-sync-agent.exe`. Its
+  private pairing subcommands are not registered and return exactly `unknown
+  command`. Installation copies it into the current user's protected sync
+  state and registers `YunPinSyncAgent` as a disabled, stopped scheduled task.
+  It does not read credentials, databases, dictionaries, or the network.
+* Private-tag pairing binaries are separate short-lived CI E2E artifacts. They
+  are not copied into this archive or any GitHub Release asset.
 
 The installer verifies every bundle file against MANIFEST.sha256, backs up
 overwritten Rime configuration files, and keeps existing user database files.
+After an authorized private E2E procedure has completed endpoint, account,
+two-device pairing and Rime bridge setup, run
+`support\sync-agent\Enable-SyncAgent.ps1`; its redacted `resident-ready` gate
+keeps the task disabled if setup is incomplete. `Verify-SyncAgent.ps1` checks
+the initial disabled state without contacting R0W.
 The source archive next to this package contains the exact pinned upstreams,
 patches, YunPin sources, build scripts, licenses, and verified Boost source.

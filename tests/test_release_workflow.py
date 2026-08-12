@@ -717,6 +717,25 @@ class ReleaseWorkflowStateMachineTests(unittest.TestCase):
 
 
 class ReleaseWorkflowStaticTests(unittest.TestCase):
+    def test_private_pairing_artifacts_are_ci_only(self) -> None:
+        ci = workflow.CI_WORKFLOW.read_text(encoding="utf-8")
+        release = workflow.RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        for name, path in (
+            (
+                "YunPin-Windows-private-pairing-E2E",
+                "build/windows/e2e-private/windows",
+            ),
+            (
+                "YunPin-macOS-private-pairing-E2E",
+                "build/macos/e2e-private/macos",
+            ),
+        ):
+            self.assertIn(name, ci)
+            self.assertIn(path, ci)
+            self.assertNotIn(name, release)
+            self.assertNotIn(path, release)
+        self.assertNotIn("yunpin_pairing_private", release)
+
     def test_post_create_path_never_resolves_or_uploads_by_tag(self) -> None:
         release = workflow.RELEASE_WORKFLOW.read_text(encoding="utf-8")
         after_create = release[release.index("gh release create") :]

@@ -39,7 +39,10 @@ class SessionLearning {
           std::chrono::milliseconds(5000),
       Clock clock = {}, DateBucketProvider date_bucket_provider = {});
 
-  void ObserveCommit(SessionCommit commit);
+  // Returns true only when this normal, bounded, monitorable selection was
+  // accepted.  Callers may use the result to publish a best-effort async
+  // native event without duplicating the privacy validation.
+  bool ObserveCommit(SessionCommit commit);
   void ObserveUnhandledKey(bool is_unmodified_backspace,
                            LearningContext context);
   void ObserveComposition(std::string_view input, LearningContext context);

@@ -60,7 +60,12 @@ func TestProtocolEnvelopeIsAcceptedAndReturnedBySyncHandler(t *testing.T) {
 	defer application.Close()
 
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
+	deviceToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, 32))
 	created := request(t, application, http.MethodPost, "/v1/accounts", "", map[string]any{
+		"account_id":              hex.EncodeToString(bytes.Repeat([]byte{0x65}, 16)),
+		"device_id":               hex.EncodeToString(bytes.Repeat([]byte{0x66}, 16)),
+		"device_token":            deviceToken,
+		"rollback_token":          base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x67}, 32)),
 		"recovery_authentication": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x61}, 32)),
 		"device_name_ciphertext":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x62}, 32)),
 		"ed25519_public_key":      base64.RawURLEncoding.EncodeToString(private.Public().(ed25519.PublicKey)),
@@ -76,6 +81,17 @@ func TestProtocolEnvelopeIsAcceptedAndReturnedBySyncHandler(t *testing.T) {
 	}
 	if err := json.Unmarshal(created.Body.Bytes(), &account); err != nil {
 		t.Fatal(err)
+	}
+	const sealedBoxWire = "WVBCWAEAAAAQERERERERERERERERERERERERERERERERIiIiIiIiIiIiIiIiIiIiIg"
+	keyring := request(t, application, http.MethodPut, "/v1/keyring", account.DeviceToken, map[string]any{
+		"epoch": 1, "ciphertext": sealedBoxWire,
+	})
+	if keyring.Code != http.StatusOK {
+		t.Fatalf("keyring status=%d body=%s", keyring.Code, keyring.Body.String())
+	}
+	sealed := request(t, application, http.MethodPost, "/v1/accounts/"+account.AccountID+"/seal", account.DeviceToken, map[string]any{})
+	if sealed.Code != http.StatusNoContent {
+		t.Fatalf("seal status=%d body=%s", sealed.Code, sealed.Body.String())
 	}
 	accountID, err := hex.DecodeString(account.AccountID)
 	if err != nil {

@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Wed, 12 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Defer reentrant input session destruction
+
+InputMethodKit client calls made from rimeUpdate can synchronously cause the
+controller to be released.  Keep the Rime session in an independent lifetime
+object and defer a deinit-requested destroy until the outermost update has
+returned, so Context notifier storage is never freed while it is being
+traversed.
+---
+ sources/SquirrelInputController.swift | 89 ++++++++++++++++++++++++++++++-----
+ 1 file changed, 79 insertions(+), 10 deletions(-)
+
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index bad53d9..46c5348 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -7,6 +7,71 @@
+ 
+ import InputMethodKit
+ 
++// Owns the Rime session independently from the IMK controller.  IMK may
++// release a controller re-entrantly from a client callback in rimeUpdate(); a
++// local operation lease then keeps this object alive and defers destruction
++// until the outermost Rime/UI update has returned.
++private final class RimeSessionLifetime {
++  private let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
++  private(set) var session: RimeSessionId = 0
++  private var operationDepth: UInt = 0
++  private var destroyRequested = false
++
++  func install(_ newSession: RimeSessionId) {
++    precondition(operationDepth == 0)
++    if session != 0, session != newSession {
++      _ = rimeAPI.destroy_session(session)
++    }
++    session = newSession
++    destroyRequested = false
++  }
++
++  func beginOperation() {
++    operationDepth += 1
++  }
++
++  func endOperation() {
++    precondition(operationDepth > 0)
++    operationDepth -= 1
++    if operationDepth == 0, destroyRequested {
++      destroyNow()
++    }
++  }
++
++  // Use one operation boundary from the first Rime access through the last
++  // access after an InputMethodKit client callback. requestDestroy() then
++  // defers teardown until every nested callback has returned.
++  func withSessionOperation<Result>(
++    _ operation: (RimeSessionId) -> Result
++  ) -> Result? {
++    beginOperation()
++    defer { endOperation() }
++    guard session != 0 else { return nil }
++    return operation(session)
++  }
++
++  func requestDestroy() {
++    if operationDepth == 0 {
++      destroyNow()
++    } else {
++      destroyRequested = true
++    }
++  }
++
++  private func destroyNow() {
++    let doomedSession = session
++    session = 0
++    destroyRequested = false
++    if doomedSession != 0 {
++      _ = rimeAPI.destroy_session(doomedSession)
++    }
++  }
++
++  deinit {
++    destroyNow()
++  }
++}
++
+ final class SquirrelInputController: IMKInputController {
+   private static let keyRollOver = 50
+   private static var unknownAppCnt: UInt = 0
+@@ -17,7 +82,8 @@ final class SquirrelInputController: IMKInputController {
+   private var selRange: NSRange = .empty
+   private var caretPos: Int = 0
+   private var lastModifiers: NSEvent.ModifierFlags = .init()
+-  private var session: RimeSessionId = 0
++  private let sessionLifetime = RimeSessionLifetime()
++  private var session: RimeSessionId { sessionLifetime.session }
+   private var schemaId: String = ""
+   private var inlinePreedit = false
+   private var inlineCandidate = false
+@@ -216,10 +282,12 @@ final class SquirrelInputController: IMKInputController {
+   override func commitComposition(_ sender: Any!) {
+     self.client ?= sender as? IMKTextInput
+     // print("[DEBUG] commitComposition: \(sender ?? "nil")")
+     //  commit raw input
+-    if session != 0 {
+-      if let input = rimeAPI.get_input(session) {
++    _ = sessionLifetime.withSessionOperation { session in
++      if let input = rimeAPI.get_input(session) {
+         commit(string: String(cString: input))
++        // insertText above may synchronously release this controller.  The
++        // operation lease keeps the same session valid for this final call.
+         rimeAPI.clear_composition(session)
+       }
+     }
+@@ -340,7 +408,7 @@ private extension SquirrelInputController {
+     }()
+     print("createSession: \(app)")
+     currentApp = app
+-    session = rimeAPI.create_session()
++    sessionLifetime.install(rimeAPI.create_session())
+     schemaId = ""
+ 
+     if session != 0 {
+@@ -362,10 +430,7 @@ private extension SquirrelInputController {
+ 
+   func destroySession() {
+     // print("[DEBUG] destroySession:")
+-    if session != 0 {
+-      _ = rimeAPI.destroy_session(session)
+-      session = 0
+-    }
++    sessionLifetime.requestDestroy()
+     clearChord()
+   }
+ 
+@@ -426,6 +491,14 @@ private extension SquirrelInputController {
+   // swiftlint:disable:next cyclomatic_complexity
+   func rimeUpdate() {
+     // print("[DEBUG] rimeUpdate")
++    // Client calls below can synchronously re-enter InputMethodKit and release
++    // this controller.  Hold the session lifetime independently and defer any
++    // deinit-requested destroy until all nested updates have unwound.
++    let lifetime = sessionLifetime
++    lifetime.beginOperation()
++    defer { lifetime.endOperation() }
++    guard session != 0 else { return }
++
+     rimeConsumeCommittedText()
+ 
+     var status = RimeStatus_stdbool.rimeStructInit()
+-- 
+2.50.1

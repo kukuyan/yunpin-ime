@@ -18,22 +18,46 @@ func TestPairingBoxRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionNonce := bytes.Repeat([]byte{0x77}, 24)
-	want := map[string][]byte{"epoch_key": bytes.Repeat([]byte{0x88}, 32)}
-	box, err := SealPairingPayload(alice.X25519Private, bob.X25519Public, sessionNonce, want, &fixedReader{next: 33})
+	transcript := PairingTranscript{
+		PairingID: bytes.Repeat([]byte{0x70}, 16), AccountID: bytes.Repeat([]byte{0x73}, 16), CreatorDeviceID: bytes.Repeat([]byte{0x71}, 16),
+		JoiningDeviceID: bytes.Repeat([]byte{0x72}, 16), CreatorEd25519PublicKey: alice.Ed25519Public,
+		JoiningEd25519PublicKey: bob.Ed25519Public, CreatorX25519PublicKey: alice.X25519Public,
+		JoiningX25519PublicKey: bob.X25519Public,
+	}
+	roster, err := SignPairingRoster(transcript.AccountID, 1, []PairingRosterDevice{
+		{DeviceID: transcript.JoiningDeviceID, Ed25519PublicKey: bob.Ed25519Public, X25519PublicKey: bob.X25519Public},
+		{DeviceID: transcript.CreatorDeviceID, Ed25519PublicKey: alice.Ed25519Public, X25519PublicKey: alice.X25519Public},
+	}, transcript.CreatorDeviceID, alice.Ed25519Private)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got map[string][]byte
-	if err := OpenPairingPayload(bob.X25519Private, alice.X25519Public, sessionNonce, box, &got); err != nil {
+	want := PairingPackage{
+		CurrentEpoch: 2, EpochKeys: []PairingEpochKey{
+			{Epoch: 1, Key: bytes.Repeat([]byte{0x81}, 32)}, {Epoch: 2, Key: bytes.Repeat([]byte{0x82}, 32)},
+		}, ObjectIDKey: bytes.Repeat([]byte{0x83}, 32), Roster: roster,
+	}
+	secret := bytes.Repeat([]byte{0x77}, PairingSecretSize)
+	box, err := SealPairingPackage(alice.X25519Private, bob.X25519Public, secret, transcript, want, &fixedReader{next: 33})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := OpenPairingPackage(bob.X25519Private, alice.X25519Public, secret, transcript, box)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pairing payload mismatch: got=%#v want=%#v", got, want)
 	}
 	box.Ciphertext[0] ^= 1
-	if err := OpenPairingPayload(bob.X25519Private, alice.X25519Public, sessionNonce, box, &got); err == nil {
+	if _, err := OpenPairingPackage(bob.X25519Private, alice.X25519Public, secret, transcript, box); err == nil {
 		t.Fatal("tampered pairing box was accepted")
+	}
+	attacker, err := NewDeviceKeys(&fixedReader{next: 204})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenPairingPackage(attacker.X25519Private, alice.X25519Public, secret, transcript, box); err == nil {
+		t.Fatal("relay-substituted private key opened the pairing package")
 	}
 }
 

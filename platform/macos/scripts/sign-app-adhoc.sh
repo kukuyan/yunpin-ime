@@ -55,6 +55,10 @@ while IFS= read -r helper; do
   sign_adhoc "$helper"
 done < <(find "$app/Contents/MacOS" -maxdepth 1 -type f -perm -111 -name 'rime*' | sort)
 
+sync_agent="$app/Contents/MacOS/yunpin-sync-agent"
+[[ -x "$sync_agent" ]] || die "bundled public sync agent is missing"
+sign_adhoc "$sync_agent"
+
 sign_adhoc "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 printf 'ad-hoc signed YunPin.app bottom-up: %s\n' "$app"

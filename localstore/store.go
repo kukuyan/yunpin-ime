@@ -22,7 +22,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const learningThreshold uint64 = 2
+const (
+	learningThreshold         uint64 = 2
+	maxConsumedNativeReceipts        = 16384
+)
 
 type Phrase struct {
 	Text        string               `json:"text"`
@@ -49,6 +52,19 @@ type LearnResult struct {
 	Recorded     bool
 	UseCount     uint64
 	SyncEligible bool
+}
+
+// NativeSelection is the durable hand-off from a bounded native event sink to
+// the background agent. EventID is opaque and only makes a crash between the
+// SQLite commit and removal of the spool file idempotent.
+type NativeSelection struct {
+	EventID string
+	Phrase  Phrase
+}
+
+type NativeSelectionResult struct {
+	LearnResult
+	Duplicate bool
 }
 
 type Snapshot struct {
@@ -130,6 +146,16 @@ CREATE TABLE IF NOT EXISTS encrypted_outbox (
 CREATE TABLE IF NOT EXISTS metadata (
   key TEXT PRIMARY KEY,
   value INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS consumed_native_events (
+  event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 128),
+  consumed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rime_userdb_high_water (
+  device_id TEXT NOT NULL CHECK(length(device_id) = 32),
+  object_id BLOB NOT NULL CHECK(length(object_id) = 16),
+  commits INTEGER NOT NULL CHECK(commits >= 0),
+  PRIMARY KEY(device_id, object_id)
 );
 INSERT OR IGNORE INTO metadata(key, value) VALUES('generation', 0);`
 	const clockMetadata = `
@@ -243,7 +269,21 @@ func bumpGeneration(ctx context.Context, transaction *sql.Tx) error {
 	return err
 }
 
+func pruneConsumedNativeReceipts(ctx context.Context, transaction *sql.Tx) error {
+	_, err := transaction.ExecContext(ctx, `DELETE FROM consumed_native_events
+WHERE event_id IN (
+  SELECT event_id FROM consumed_native_events
+  ORDER BY consumed_at DESC, event_id DESC
+  LIMIT -1 OFFSET ?
+)`, maxConsumedNativeReceipts)
+	return err
+}
+
 func (store *Store) upsert(ctx context.Context, phrase Phrase, enqueue bool) error {
+	return store.upsertWithNativeReceipt(ctx, phrase, enqueue, "")
+}
+
+func (store *Store) upsertWithNativeReceipt(ctx context.Context, phrase Phrase, enqueue bool, eventID string) error {
 	objectID, err := store.objectID(phrase)
 	if err != nil {
 		return err
@@ -277,6 +317,13 @@ VALUES(?, ?, ?, ?)
 ON CONFLICT(object_id) DO UPDATE SET nonce=excluded.nonce, ciphertext=excluded.ciphertext,
   version=encrypted_outbox.version + 1, created_at=excluded.created_at`,
 			objectID[:], eventNonce, eventCiphertext, time.Now().UnixMilli())
+	}
+	if err == nil && eventID != "" {
+		_, err = transaction.ExecContext(ctx, `INSERT INTO consumed_native_events(event_id, consumed_at) VALUES(?, ?)`,
+			eventID, store.now().UnixMilli())
+		if err == nil {
+			err = pruneConsumedNativeReceipts(ctx, transaction)
+		}
 	}
 	if err != nil {
 		return err
@@ -369,6 +416,83 @@ func (store *Store) RecordSelection(ctx context.Context, phrase Phrase, learning
 	}
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
+	return store.recordSelectionLocked(ctx, phrase, "")
+}
+
+// RecordNativeSelection records a background native event and its receipt in
+// the same SQLite transaction as the encrypted phrase and outbox mutation.
+// Retrying a spool file after a process crash therefore cannot increment the
+// phrase again. Protected contexts never produce an event and are not accepted
+// by this API.
+func (store *Store) RecordNativeSelection(ctx context.Context, selection NativeSelection) (NativeSelectionResult, error) {
+	if !validNativeEventID(selection.EventID) {
+		return NativeSelectionResult{}, errors.New("native selection event ID is invalid")
+	}
+	store.mutation.Lock()
+	defer store.mutation.Unlock()
+	var consumed int
+	err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM consumed_native_events WHERE event_id = ?", selection.EventID).Scan(&consumed)
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	if consumed != 0 {
+		return NativeSelectionResult{Duplicate: true}, nil
+	}
+	result, err := store.recordSelectionLocked(ctx, selection.Phrase, selection.EventID)
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	return NativeSelectionResult{LearnResult: result}, nil
+}
+
+// RecordNativeSelectionReceipt consumes a native spool event without storing
+// or enqueueing its phrase. The desktop agent uses this for exact identities
+// already present in the immutable personal baseline, so selecting a static
+// imported word can never turn that private baseline entry into sync traffic.
+func (store *Store) RecordNativeSelectionReceipt(ctx context.Context, eventID string) (NativeSelectionResult, error) {
+	if !validNativeEventID(eventID) {
+		return NativeSelectionResult{}, errors.New("native selection event ID is invalid")
+	}
+	store.mutation.Lock()
+	defer store.mutation.Unlock()
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	defer transaction.Rollback()
+	result, err := transaction.ExecContext(ctx, `INSERT OR IGNORE INTO consumed_native_events(event_id, consumed_at) VALUES(?, ?)`,
+		eventID, store.now().UnixMilli())
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	if err := pruneConsumedNativeReceipts(ctx, transaction); err != nil {
+		return NativeSelectionResult{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return NativeSelectionResult{}, err
+	}
+	return NativeSelectionResult{Duplicate: affected == 0}, nil
+}
+
+func validNativeEventID(eventID string) bool {
+	if len(eventID) < 1 || len(eventID) > 128 {
+		return false
+	}
+	for _, value := range []byte(eventID) {
+		if (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+			(value >= '0' && value <= '9') || value == '_' || value == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, eventID string) (LearnResult, error) {
 	objectID, err := store.objectID(phrase)
 	if err != nil {
 		return LearnResult{}, err
@@ -390,6 +514,23 @@ func (store *Store) RecordSelection(ctx context.Context, phrase Phrase, learning
 		return LearnResult{}, err
 	}
 	if !phrase.CRDT.Presence.Present {
+		if eventID != "" {
+			transaction, err := store.db.BeginTx(ctx, nil)
+			if err != nil {
+				return LearnResult{}, err
+			}
+			defer transaction.Rollback()
+			if _, err := transaction.ExecContext(ctx, `INSERT INTO consumed_native_events(event_id, consumed_at) VALUES(?, ?)`,
+				eventID, store.now().UnixMilli()); err != nil {
+				return LearnResult{}, err
+			}
+			if err := pruneConsumedNativeReceipts(ctx, transaction); err != nil {
+				return LearnResult{}, err
+			}
+			if err := transaction.Commit(); err != nil {
+				return LearnResult{}, err
+			}
+		}
 		return LearnResult{Recorded: false, UseCount: phrase.UseCount}, nil
 	}
 	if phrase.CRDT.Counts[store.deviceID] == ^uint64(0) {
@@ -398,7 +539,7 @@ func (store *Store) RecordSelection(ctx context.Context, phrase Phrase, learning
 	phrase.CRDT.Counts[store.deviceID]++
 	phrase.LastUsedDay = store.now().UTC().Unix() / 86400
 	materializePhrase(&phrase)
-	if err := store.upsert(ctx, phrase, phrase.UseCount >= learningThreshold); err != nil {
+	if err := store.upsertWithNativeReceipt(ctx, phrase, phrase.UseCount >= learningThreshold, eventID); err != nil {
 		return LearnResult{}, err
 	}
 	return LearnResult{Recorded: true, UseCount: phrase.UseCount, SyncEligible: phrase.UseCount >= learningThreshold}, nil

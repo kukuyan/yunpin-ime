@@ -4,14 +4,15 @@ package desktopagent
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestProcessLockRejectsConcurrentAgent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agent.lock")
+	path := privateTestPath(t, "agent.lock")
 	first, err := acquireProcessLock(path)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestRunLoopRetriesWithRedactedEvents(t *testing.T) {
 		cancel()
 		return SyncSummary{Rounds: 1}, nil
 	}, RunOptions{
-		LockPath: filepath.Join(t.TempDir(), "agent.lock"), Interval: time.Second,
+		LockPath: privateTestPath(t, "agent.lock"), Interval: time.Second,
 		MinBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond,
 		OnEvent: func(event RunEvent) { events <- event },
 	})
@@ -59,7 +60,7 @@ func TestRunLoopRetriesWithRedactedEvents(t *testing.T) {
 		}
 		return SyncSummary{Rounds: 1}, nil
 	}, RunOptions{
-		LockPath: filepath.Join(t.TempDir(), "agent.lock"), Interval: time.Second,
+		LockPath: privateTestPath(t, "agent.lock"), Interval: time.Second,
 		MinBackoff: time.Second, MaxBackoff: time.Second,
 		OnEvent: func(event RunEvent) { events <- event },
 	})
@@ -80,10 +81,52 @@ func TestRunLoopDoesNotSyncAfterCancellation(t *testing.T) {
 		calls.Add(1)
 		return SyncSummary{}, nil
 	}, RunOptions{
-		LockPath: filepath.Join(t.TempDir(), "agent.lock"), Interval: time.Second,
+		LockPath: privateTestPath(t, "agent.lock"), Interval: time.Second,
 		MinBackoff: time.Second, MaxBackoff: time.Second,
 	})
 	if err != nil || calls.Load() != 0 {
 		t.Fatalf("cancelled runner called sync: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+func TestRimeMaintenanceBusyIsDeferredWithoutGrowingFailureBackoff(t *testing.T) {
+	options := RunOptions{Interval: time.Minute, MinBackoff: time.Second, MaxBackoff: 16 * time.Second}
+	event, delay, nextBackoff := classifyRunResult(SyncSummary{},
+		fmt.Errorf("wrapped host response: %w", ErrRimeMaintenanceBusy), options, 8*time.Second)
+	if event.Code != "sync_deferred_busy" || event.Successful || delay != options.MinBackoff || nextBackoff != options.MinBackoff {
+		t.Fatalf("busy host response polluted failure backoff: event=%#v delay=%v next=%v", event, delay, nextBackoff)
+	}
+	failure, failureDelay, failureBackoff := classifyRunResult(SyncSummary{}, errors.New("synthetic failure"), options, 8*time.Second)
+	if failure.Code != "sync_failed" || failure.Successful || failureDelay != 8*time.Second || failureBackoff != options.MaxBackoff {
+		t.Fatalf("ordinary failure no longer uses exponential backoff: event=%#v delay=%v next=%v", failure, failureDelay, failureBackoff)
+	}
+}
+
+func TestRunLoopEmitsDeferredBusyEventWithoutReportingFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan RunEvent, 1)
+	err := runLoop(ctx, func(context.Context) (SyncSummary, error) {
+		cancel()
+		return SyncSummary{}, fmt.Errorf("refresh wrapper: %w", ErrRimeMaintenanceBusy)
+	}, RunOptions{
+		LockPath: privateTestPath(t, "agent.lock"), Interval: time.Minute,
+		MinBackoff: time.Second, MaxBackoff: 16 * time.Second,
+		OnEvent: func(event RunEvent) { events <- event },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := <-events
+	if event.Code != "sync_deferred_busy" || event.Successful {
+		t.Fatalf("busy maintenance was reported as a synchronization failure: %#v", event)
+	}
+}
+
+func TestResidentRimeUserDBRequiresFixedMaintenanceRefresher(t *testing.T) {
+	err := (Agent{RimeUserDBExportPath: privateTestPath(t, "rime-userdb.snapshot")}).Run(
+		context.Background(), RunOptions{LockPath: privateTestPath(t, "agent.lock")},
+	)
+	if err == nil || !strings.Contains(err.Error(), "fixed platform maintenance refresher") {
+		t.Fatalf("resident accepted a static cumulative snapshot: %v", err)
 	}
 }

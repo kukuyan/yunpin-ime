@@ -21,7 +21,22 @@ Developer ID 签名，也未经 Apple 公证；它不是正式稳定版。
    而应从源码自行构建，或等待正式签名并公证的发行版。
 3. 安装完成后，在“系统设置 → 键盘 → 输入法”中确认“云拼”已启用。
 
+可选同步代理（默认禁用）：
+
+安装包只携带不含私有配对命令的公开同步代理。macOS 的系统安装步骤不会读取
+钥匙串，也不会替任何用户创建或启动 LaunchAgent。若要在当前登录用户下先将
+后台任务注册为“禁用且停止”，请不要使用 sudo，并运行：
+
+   "/Library/Input Methods/YunPin.app/Contents/SharedSupport/SyncAgent/Install-LaunchAgent.sh" \
+     "/Library/Input Methods/YunPin.app/Contents/MacOS/yunpin-sync-agent"
+
+之后可运行同目录的 Verify-LaunchAgent.sh 核验禁用状态。只有在独立的私有 E2E
+流程完成端点、账户、两设备配对和 Rime bridge 配置后，才运行
+Enable-LaunchAgent.sh；未满足 resident-ready 条件时该脚本会保持禁用。
+
 隐私边界：
 
 本映像只包含安装包、对应源代码、本说明和校验清单，不包含个人词库、输入
-记录、用户配置或云端同步凭据。
+记录、用户配置或云端同步凭据。公开可执行文件按 default tag 构建，不注册私有
+配对子命令；相关审计源码仍保留在对应源代码归档中。私有 tagged E2E 二进制是
+CI 中的独立短期测试产物，不属于本公开发行包。
