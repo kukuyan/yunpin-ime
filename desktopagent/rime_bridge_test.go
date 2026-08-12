@@ -41,9 +41,7 @@ func testRimeBridgePaths(t *testing.T) RimeBridgePaths {
 
 func writeTestRimeInstallation(t *testing.T, paths RimeBridgePaths, contents string) {
 	t.Helper()
-	if err := os.WriteFile(paths.InstallationPath, []byte(contents), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, paths.InstallationPath, []byte(contents))
 }
 
 func TestConfigureRimeBridgeBacksUpThenAtomicallySetsDedicatedSyncDirectory(t *testing.T) {
@@ -259,13 +257,10 @@ func TestRefreshRimeUserDBRequiresMatchingPrivateHostAcknowledgement(t *testing.
 				return errors.New("invalid generated nonce")
 			}
 			device := filepath.Join(paths.SyncDirectory, testRimeInstallationID)
-			if err := os.Mkdir(device, 0700); err != nil {
-				return err
-			}
-			if err := os.WriteFile(filepath.Join(device, "rime_ice.userdb.txt"), snapshot, 0600); err != nil {
-				return err
-			}
-			return os.WriteFile(paths.AckPath, []byte(nonce+"\n"), 0600)
+			makePrivateTestDirectory(t, device)
+			writePrivateTestFile(t, filepath.Join(device, "rime_ice.userdb.txt"), snapshot)
+			writePrivateTestFile(t, paths.AckPath, []byte(nonce+"\n"))
+			return nil
 		},
 	})
 	if err != nil {
@@ -283,20 +278,17 @@ func TestMatchingHostAcknowledgementRejectsUnchangedStaleSnapshot(t *testing.T) 
 		t.Fatal(err)
 	}
 	device := filepath.Join(paths.SyncDirectory, testRimeInstallationID)
-	if err := os.Mkdir(device, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, device)
 	snapshot := []byte("# Rime user dictionary\n#@/db_name\trime_ice\n#@/db_type\tuserdb\n#@/user_id\t" +
 		testRimeInstallationID + "\nni hao \t你好\tc=2 d=1 t=1\n")
-	if err := os.WriteFile(filepath.Join(device, "rime_ice.userdb.txt"), snapshot, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(device, "rime_ice.userdb.txt"), snapshot)
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	err := refreshRimeUserDB(ctx, paths, fixedRimeMaintenanceInvoker{
 		RequiresAck: true,
 		Invoke: func(_ context.Context, nonce string) error {
-			return os.WriteFile(paths.AckPath, []byte(nonce+"\n"), 0600)
+			writePrivateTestFile(t, paths.AckPath, []byte(nonce+"\n"))
+			return nil
 		},
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -314,15 +306,11 @@ func TestMatchingHostAcknowledgementAcceptsSameContentActualRewrite(t *testing.T
 		t.Fatal(err)
 	}
 	device := filepath.Join(paths.SyncDirectory, testRimeInstallationID)
-	if err := os.Mkdir(device, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, device)
 	snapshot := []byte("# Rime user dictionary\n#@/db_name\trime_ice\n#@/db_type\tuserdb\n#@/user_id\t" +
 		testRimeInstallationID + "\nni hao \t你好\tc=2 d=1 t=1\n")
 	source := filepath.Join(device, "rime_ice.userdb.txt")
-	if err := os.WriteFile(source, snapshot, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, source, snapshot)
 	old := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(source, old, old); err != nil {
 		t.Fatal(err)
@@ -330,10 +318,9 @@ func TestMatchingHostAcknowledgementAcceptsSameContentActualRewrite(t *testing.T
 	err := refreshRimeUserDB(context.Background(), paths, fixedRimeMaintenanceInvoker{
 		RequiresAck: true,
 		Invoke: func(_ context.Context, nonce string) error {
-			if err := os.WriteFile(source, snapshot, 0600); err != nil {
-				return err
-			}
-			return os.WriteFile(paths.AckPath, []byte(nonce+"\n"), 0600)
+			writePrivateTestFile(t, source, snapshot)
+			writePrivateTestFile(t, paths.AckPath, []byte(nonce+"\n"))
+			return nil
 		},
 	})
 	if err != nil {
@@ -351,18 +338,12 @@ func TestStaleAcknowledgementIsRemovedBeforeNewNonceAndCannotReplay(t *testing.T
 	if err := ConfigureRimeBridge(paths); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.AckPath, []byte(strings.Repeat("a", 32)+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, paths.AckPath, []byte(strings.Repeat("a", 32)+"\n"))
 	device := filepath.Join(paths.SyncDirectory, testRimeInstallationID)
-	if err := os.Mkdir(device, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, device)
 	snapshot := []byte("# Rime user dictionary\n#@/db_name\trime_ice\n#@/db_type\tuserdb\n#@/user_id\t" +
 		testRimeInstallationID + "\nni hao \t你好\tc=2 d=1 t=1\n")
-	if err := os.WriteFile(filepath.Join(device, "rime_ice.userdb.txt"), snapshot, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(device, "rime_ice.userdb.txt"), snapshot)
 	source := filepath.Join(device, "rime_ice.userdb.txt")
 	old := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(source, old, old); err != nil {
@@ -374,10 +355,9 @@ func TestStaleAcknowledgementIsRemovedBeforeNewNonceAndCannotReplay(t *testing.T
 			if _, err := os.Lstat(paths.AckPath); !errors.Is(err, os.ErrNotExist) {
 				return errors.New("stale acknowledgement remained at host invocation")
 			}
-			if err := os.WriteFile(source, snapshot, 0600); err != nil {
-				return err
-			}
-			return os.WriteFile(paths.AckPath, []byte(nonce+"\n"), 0600)
+			writePrivateTestFile(t, source, snapshot)
+			writePrivateTestFile(t, paths.AckPath, []byte(nonce+"\n"))
+			return nil
 		},
 	})
 	if err != nil {
@@ -392,24 +372,19 @@ func TestMatchingBusyAcknowledgementIsConsumedAndDoesNotStageOldSnapshot(t *test
 		t.Fatal(err)
 	}
 	device := filepath.Join(paths.SyncDirectory, testRimeInstallationID)
-	if err := os.Mkdir(device, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, device)
 	snapshot := []byte("# Rime user dictionary\n#@/db_name\trime_ice\n#@/db_type\tuserdb\n#@/user_id\t" +
 		testRimeInstallationID + "\nni hao \t你好\tc=2 d=1 t=1\n")
-	if err := os.WriteFile(filepath.Join(device, "rime_ice.userdb.txt"), snapshot, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(paths.AckPath, []byte("busy:"+strings.Repeat("a", 32)+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(device, "rime_ice.userdb.txt"), snapshot)
+	writePrivateTestFile(t, paths.AckPath, []byte("busy:"+strings.Repeat("a", 32)+"\n"))
 	err := refreshRimeUserDB(context.Background(), paths, fixedRimeMaintenanceInvoker{
 		RequiresAck: true,
 		Invoke: func(_ context.Context, nonce string) error {
 			if _, err := os.Lstat(paths.AckPath); !errors.Is(err, os.ErrNotExist) {
 				return errors.New("stale busy acknowledgement remained at host invocation")
 			}
-			return os.WriteFile(paths.AckPath, []byte("busy:"+nonce+"\n"), 0600)
+			writePrivateTestFile(t, paths.AckPath, []byte("busy:"+nonce+"\n"))
+			return nil
 		},
 	})
 	if !errors.Is(err, ErrRimeMaintenanceBusy) {
@@ -426,9 +401,7 @@ func TestMatchingBusyAcknowledgementIsConsumedAndDoesNotStageOldSnapshot(t *test
 func TestMismatchedBusyAcknowledgementCannotReplay(t *testing.T) {
 	paths := testRimeBridgePaths(t)
 	nonce := strings.Repeat("a", 32)
-	if err := os.WriteFile(paths.AckPath, []byte("busy:"+strings.Repeat("b", 32)+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, paths.AckPath, []byte("busy:"+strings.Repeat("b", 32)+"\n"))
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	err := waitForMaintenanceAck(ctx, paths.AckPath, nonce)
@@ -443,9 +416,7 @@ func TestMismatchedBusyAcknowledgementCannotReplay(t *testing.T) {
 func TestBusyAcknowledgementRejectsOversizeAndSymlinkArtifacts(t *testing.T) {
 	paths := testRimeBridgePaths(t)
 	nonce := strings.Repeat("a", 32)
-	if err := os.WriteFile(paths.AckPath, []byte(strings.Repeat("x", 129)), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, paths.AckPath, []byte(strings.Repeat("x", 129)))
 	if err := waitForMaintenanceAck(context.Background(), paths.AckPath, nonce); err == nil ||
 		errors.Is(err, ErrRimeMaintenanceBusy) {
 		t.Fatalf("oversized acknowledgement crossed the private artifact gate: %v", err)
@@ -454,9 +425,7 @@ func TestBusyAcknowledgementRejectsOversizeAndSymlinkArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(filepath.Dir(paths.AckPath), "untrusted-maintenance.ack")
-	if err := os.WriteFile(target, []byte("busy:"+nonce+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, target, []byte("busy:"+nonce+"\n"))
 	if err := os.Symlink(target, paths.AckPath); err != nil {
 		t.Fatal(err)
 	}

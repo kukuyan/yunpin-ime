@@ -37,12 +37,30 @@ func openExclusiveWindowsLock(path string, disposition uint32, security *windows
 }
 
 func validateExclusiveWindowsLock(path string, handle windows.Handle) error {
-	_, err := validatePrivateWindowsHandle(handle, false)
-	if err != nil {
+	if _, err := validatePrivateWindowsHandle(handle, false); err != nil {
 		return err
 	}
+	parent := filepath.Dir(filepath.Clean(path))
+	before, err := inspectWindowsPathChain(parent, true)
+	if err != nil {
+		return errors.New("agent lock path and exclusive handle do not identify the same private file")
+	}
 	finalPath, err := finalWindowsPathForHandle(handle)
-	if err != nil || !filepath.IsAbs(finalPath) || !strings.EqualFold(filepath.Clean(path), finalPath) {
+	if err != nil || !filepath.IsAbs(finalPath) ||
+		!strings.EqualFold(filepath.Base(filepath.Clean(path)), filepath.Base(finalPath)) {
+		return errors.New("agent lock path and exclusive handle do not identify the same private file")
+	}
+	resolvedParent, err := inspectWindowsPathChain(filepath.Dir(finalPath), true)
+	if err != nil || len(before) != len(resolvedParent) {
+		return errors.New("agent lock path and exclusive handle do not identify the same private file")
+	}
+	for index := range before {
+		if before[index].identity != resolvedParent[index].identity {
+			return errors.New("agent lock path and exclusive handle do not identify the same private file")
+		}
+	}
+	after, err := inspectWindowsPathChain(parent, true)
+	if err != nil || !sameWindowsPathChain(before, after) {
 		return errors.New("agent lock path and exclusive handle do not identify the same private file")
 	}
 	return nil

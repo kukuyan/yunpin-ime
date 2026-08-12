@@ -1098,9 +1098,7 @@ func TestCleanupUncommittedDatabaseResumesAtEveryDeletionBoundary(t *testing.T) 
 		t.Run(label, func(t *testing.T) {
 			path := privateTestPath(t, "joining.db")
 			for _, candidate := range databaseSidecarPaths(path) {
-				if err := os.WriteFile(candidate, []byte("validated rollback test"), 0600); err != nil {
-					t.Fatal(err)
-				}
+				writePrivateTestFile(t, candidate, []byte("validated rollback test"))
 			}
 			removeCalls := 0
 			ops := joiningDatabaseRollbackOps{
@@ -1131,9 +1129,7 @@ func TestCleanupUncommittedDatabaseResumesAtEveryDeletionBoundary(t *testing.T) 
 	t.Run("after-main-before-final-fsync", func(t *testing.T) {
 		path := privateTestPath(t, "joining.db")
 		for _, candidate := range databaseSidecarPaths(path) {
-			if err := os.WriteFile(candidate, []byte("validated rollback test"), 0600); err != nil {
-				t.Fatal(err)
-			}
+			writePrivateTestFile(t, candidate, []byte("validated rollback test"))
 		}
 		syncCalls := 0
 		ops := joiningDatabaseRollbackOps{
@@ -1162,9 +1158,7 @@ func TestCleanupUncommittedDatabaseRejectsEverySidecarWithoutMain(t *testing.T) 
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		t.Run(suffix, func(t *testing.T) {
 			path := privateTestPath(t, "joining.db")
-			if err := os.WriteFile(path+suffix, nil, 0600); err != nil {
-				t.Fatal(err)
-			}
+			writePrivateTestFile(t, path+suffix, nil)
 			if err := cleanupUncommittedDatabase(context.Background(), path, bundle); err == nil || !strings.Contains(err.Error(), "sidecar remains") {
 				t.Fatalf("sidecar-only state was not rejected: %v", err)
 			}

@@ -30,9 +30,7 @@ func openBridgeStore(t *testing.T) *localstore.Store {
 func TestConsumeNativeEventsRecordsAndRemovesSpoolFile(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "native-events", "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	event := NativeSelectionEventV1{
 		Version: 1, EventID: "process_nonce-1", Phrase: "合成桌面事件", Pinyin: "he cheng zhuo mian shi jian",
 	}
@@ -41,9 +39,7 @@ func TestConsumeNativeEventsRecordsAndRemovesSpoolFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(directory, event.EventID+".json")
-	if err := os.WriteFile(path, encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, path, encoded)
 	summary, err := consumeNativeEvents(context.Background(), directory, store, nil, maxNativeBatch)
 	if err != nil || summary.Consumed != 1 || summary.Duplicate != 0 {
 		t.Fatalf("consume mismatch: summary=%#v err=%v", summary, err)
@@ -60,9 +56,7 @@ func TestConsumeNativeEventsRecordsAndRemovesSpoolFile(t *testing.T) {
 func TestConsumeNativeEventsRemovesCrashRetryWithoutDoubleCount(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	event := NativeSelectionEventV1{Version: 1, EventID: "process_nonce-2", Phrase: "合成重试", Pinyin: "he cheng chong shi"}
 	if _, err := store.RecordNativeSelection(context.Background(), localstore.NativeSelection{
 		EventID: event.EventID, Phrase: localstore.Phrase{Text: event.Phrase, Pinyin: event.Pinyin},
@@ -70,9 +64,7 @@ func TestConsumeNativeEventsRemovesCrashRetryWithoutDoubleCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := EncodeNativeSelectionEventV1(event)
-	if err := os.WriteFile(filepath.Join(directory, event.EventID+".json"), encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(directory, event.EventID+".json"), encoded)
 	summary, err := consumeNativeEvents(context.Background(), directory, store, nil, maxNativeBatch)
 	if err != nil || summary.Duplicate != 1 || summary.Consumed != 0 {
 		t.Fatalf("crash retry mismatch: summary=%#v err=%v", summary, err)
@@ -85,13 +77,9 @@ func TestConsumeNativeEventsRemovesCrashRetryWithoutDoubleCount(t *testing.T) {
 
 func TestNativeEventDecoderRejectsProtectedContextFields(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	path := filepath.Join(directory, "synthetic-1.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"event_id":"synthetic-1","phrase":"合成","pinyin":"he cheng","password":false}`), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, path, []byte(`{"version":1,"event_id":"synthetic-1","phrase":"合成","pinyin":"he cheng","password":false}`))
 	if _, err := consumeNativeEvents(context.Background(), directory, openBridgeStore(t), nil, maxNativeBatch); err == nil {
 		t.Fatal("native event containing a protected-context field was accepted")
 	}
@@ -100,17 +88,13 @@ func TestNativeEventDecoderRejectsProtectedContextFields(t *testing.T) {
 func TestConsumeBaselineIdentityCreatesReceiptButNeverOutbox(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	event := NativeSelectionEventV1{Version: 1, EventID: "baseline-1", Phrase: "个人静态词", Pinyin: "ge ren jing tai ci"}
 	encoded, err := EncodeNativeSelectionEventV1(event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, event.EventID+".json"), encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(directory, event.EventID+".json"), encoded)
 	localOnly := map[string]struct{}{protocol.CanonicalPhrase(event.Phrase): {}}
 	summary, err := consumeNativeEvents(context.Background(), directory, store, localOnly, maxNativeBatch)
 	if err != nil || summary.Consumed != 1 || summary.LocalOnly != 1 {
@@ -129,17 +113,13 @@ func TestConsumeBaselineIdentityCreatesReceiptButNeverOutbox(t *testing.T) {
 func TestConsumeBaselinePhraseBlocksDifferentPronunciationToo(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	event := NativeSelectionEventV1{Version: 1, EventID: "baseline-heteronym", Phrase: "个人静态词", Pinyin: "wan quan bu tong du yin"}
 	encoded, err := EncodeNativeSelectionEventV1(event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, event.EventID+".json"), encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(directory, event.EventID+".json"), encoded)
 	summary, err := consumeNativeEvents(context.Background(), directory, store, map[string]struct{}{protocol.CanonicalPhrase(event.Phrase): {}}, maxNativeBatch)
 	if err != nil || summary.LocalOnly != 1 {
 		t.Fatalf("heteronym baseline event crossed phrase-only deny set: summary=%#v err=%v", summary, err)
@@ -153,17 +133,13 @@ func TestConsumeBaselinePhraseBlocksDifferentPronunciationToo(t *testing.T) {
 func TestConsumeBaselinePhraseBlocksCanonicalUnicodeAndWhitespaceVariant(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	event := NativeSelectionEventV1{Version: 1, EventID: "baseline-canonical", Phrase: "Ａ B", Pinyin: "wan quan bu tong"}
 	encoded, err := EncodeNativeSelectionEventV1(event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, event.EventID+".json"), encoded, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(directory, event.EventID+".json"), encoded)
 	localOnly := map[string]struct{}{protocol.CanonicalPhrase("AB"): {}}
 	summary, err := consumeNativeEvents(context.Background(), directory, store, localOnly, maxNativeBatch)
 	if err != nil || summary.LocalOnly != 1 {
@@ -178,13 +154,9 @@ func TestConsumeBaselinePhraseBlocksCanonicalUnicodeAndWhitespaceVariant(t *test
 func TestConsumeRejectsNonPrivateOrOversizedSpool(t *testing.T) {
 	store := openBridgeStore(t)
 	private := filepath.Join(t.TempDir(), "private")
-	if err := os.MkdirAll(private, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, private)
 	for index := 0; index <= maxNativeSpoolFiles; index++ {
-		if err := os.WriteFile(filepath.Join(private, fmt.Sprintf("ignored-%04d.tmp", index)), nil, 0600); err != nil {
-			t.Fatal(err)
-		}
+		writePrivateTestFile(t, filepath.Join(private, fmt.Sprintf("ignored-%04d.tmp", index)), nil)
 	}
 	if _, err := consumeNativeEvents(context.Background(), private, store, nil, maxNativeBatch); err == nil {
 		t.Fatal("file-count oversized spool was accepted")
@@ -203,18 +175,12 @@ func TestConsumeRejectsNonPrivateOrOversizedSpool(t *testing.T) {
 func TestConsumeExcludesOnlyStrictSpoolLockFromQuota(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, ".spool.lock"), []byte("not empty"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
+	writePrivateTestFile(t, filepath.Join(directory, ".spool.lock"), []byte("not empty"))
 	if _, err := consumeNativeEvents(context.Background(), directory, store, nil, maxNativeBatch); err == nil {
 		t.Fatal("non-empty spool lock was accepted")
 	}
-	if err := os.WriteFile(filepath.Join(directory, ".spool.lock"), nil, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, filepath.Join(directory, ".spool.lock"), nil)
 	if _, err := consumeNativeEvents(context.Background(), directory, store, nil, maxNativeBatch); err != nil {
 		t.Fatalf("strict empty spool lock counted as payload: %v", err)
 	}
@@ -223,12 +189,8 @@ func TestConsumeExcludesOnlyStrictSpoolLockFromQuota(t *testing.T) {
 func TestConsumeDrainsOneLegacyOverflowEvent(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, ".spool.lock"), nil, 0600); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
+	writePrivateTestFile(t, filepath.Join(directory, ".spool.lock"), nil)
 	for index := 0; index <= maxNativeSpoolFiles; index++ {
 		eventID := fmt.Sprintf("legacy-%04d", index)
 		encoded, err := EncodeNativeSelectionEventV1(NativeSelectionEventV1{
@@ -237,9 +199,7 @@ func TestConsumeDrainsOneLegacyOverflowEvent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(directory, eventID+".json"), encoded, 0600); err != nil {
-			t.Fatal(err)
-		}
+		writePrivateTestFile(t, filepath.Join(directory, eventID+".json"), encoded)
 	}
 	summary, err := consumeNativeEvents(context.Background(), directory, store, nil, 1)
 	if err != nil || summary.Consumed != 1 {
