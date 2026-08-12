@@ -2,8 +2,10 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,197 +18,20 @@ import (
 	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
-type AccountRelay interface {
-	CreateAccount(context.Context, syncclient.AccountRegistration) (syncclient.Account, error)
-	PutKeyring(context.Context, string, uint64, protocol.SealedBox) error
-}
-
-type StoreInitializer func(context.Context, string, []byte, []byte, string) error
-
-type InitAccountOptions struct {
-	Secrets         SecretStore
-	Profile         string
-	DatabasePath    string
-	Random          io.Reader
-	InitializeStore StoreInitializer
-}
-
-type InitAccountResult struct {
-	AccountIDHex string
-	RecoveryKey  string
-}
-
-func initializeEncryptedStore(ctx context.Context, path string, dataKey, objectIDKey []byte, deviceID string) error {
-	if err := preflightDatabasePath(path); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return fmt.Errorf("create local database directory: %w", err)
-	}
-	store, err := localstore.OpenForDevice(ctx, path, dataKey, objectIDKey, deviceID)
-	if err != nil {
-		return err
-	}
-	return store.Close()
-}
-
-func preflightDatabasePath(path string) error {
-	if path == "" || !filepath.IsAbs(path) {
-		return errors.New("local database path must be absolute")
-	}
-	if _, err := os.Lstat(path); err == nil {
-		return errors.New("local database already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect local database path: %w", err)
-	}
-	return nil
-}
-
-func fillRandom(source io.Reader, destinations ...[]byte) error {
-	if source == nil {
-		return errors.New("cryptographic random source is required")
-	}
-	for _, destination := range destinations {
-		if _, err := io.ReadFull(source, destination); err != nil {
-			return fmt.Errorf("generate account secret: %w", err)
-		}
-	}
-	return nil
-}
-
-// InitAccount is intentionally fail-closed. The relay has no account-delete
-// rollback, so exposing a production switch for the non-atomic flow could
-// strand an unrecoverable account after a local Keychain/DPAPI or SQLite
-// failure. The synthetic protocol tests call the unexported helper below.
-func InitAccount(context.Context, AccountRelay, InitAccountOptions) (InitAccountResult, error) {
-	return InitAccountResult{}, errors.New("account creation is disabled until the relay supports rollback-safe provisioning")
-}
-
-// initAccountForSyntheticProtocolTest exercises the future provisioning order
-// against in-memory fakes. It is deliberately unexported so external library
-// callers cannot opt into a remote write that production cannot roll back.
-func initAccountForSyntheticProtocolTest(ctx context.Context, relay AccountRelay, options InitAccountOptions) (InitAccountResult, error) {
-	if relay == nil || options.Secrets == nil {
-		return InitAccountResult{}, errors.New("account relay and OS secret store are required")
-	}
-	if err := validateProfile(options.Profile); err != nil {
-		return InitAccountResult{}, err
-	}
-	if existing, err := options.Secrets.Load(ctx, options.Profile); err == nil {
-		zeroBytes(existing)
-		return InitAccountResult{}, errors.New("profile is already initialized")
-	} else if !errors.Is(err, ErrSecretNotFound) {
-		return InitAccountResult{}, fmt.Errorf("preflight OS credential store: %w", err)
-	}
-	if options.Random == nil {
-		return InitAccountResult{}, errors.New("cryptographic random source is required")
-	}
-	initializer := options.InitializeStore
-	if initializer == nil {
-		// Reject an unsafe or pre-existing path before the first relay write. The
-		// initializer repeats this check immediately before opening SQLite.
-		if err := preflightDatabasePath(options.DatabasePath); err != nil {
-			return InitAccountResult{}, err
-		}
-		initializer = initializeEncryptedStore
-	}
-
-	keys, err := protocol.NewDeviceKeys(options.Random)
-	if err != nil {
-		return InitAccountResult{}, fmt.Errorf("generate device keys: %w", err)
-	}
-	defer zeroBytes(keys.X25519Private)
-	defer zeroBytes(keys.Ed25519Private)
-
-	recoveryKey := make([]byte, 32)
-	epochKey := make([]byte, 32)
-	objectIDKey := make([]byte, 32)
-	localDataKey := make([]byte, 32)
-	deviceNameCiphertext := make([]byte, 32)
-	defer zeroBytes(recoveryKey)
-	defer zeroBytes(epochKey)
-	defer zeroBytes(objectIDKey)
-	defer zeroBytes(localDataKey)
-	defer zeroBytes(deviceNameCiphertext)
-	if err := fillRandom(options.Random, recoveryKey, epochKey, objectIDKey, localDataKey, deviceNameCiphertext); err != nil {
-		return InitAccountResult{}, err
-	}
-	_, recoveryAuthentication, err := protocol.DeriveRecoveryKeys(recoveryKey)
-	if err != nil {
-		return InitAccountResult{}, err
-	}
-	defer zeroBytes(recoveryAuthentication)
-	account, err := relay.CreateAccount(ctx, syncclient.AccountRegistration{
-		RecoveryAuthentication: recoveryAuthentication,
-		DeviceRegistration: syncclient.DeviceRegistration{
-			// The minimum preview uses an opaque random label. A domain-separated
-			// encrypted human device name belongs with the future trust roster.
-			DeviceNameCiphertext: deviceNameCiphertext,
-			Ed25519PublicKey:     keys.Ed25519Public,
-			X25519PublicKey:      keys.X25519Public,
-		},
-	})
-	if err != nil {
-		return InitAccountResult{}, fmt.Errorf("create sync account: %w", err)
-	}
-	keyring, err := protocol.SealRecoveryPackage(recoveryKey, protocol.RecoveryPackage{
-		AccountID: account.AccountID, CurrentEpoch: 1, EpochKey: epochKey, ObjectIDKey: objectIDKey,
-	}, options.Random)
-	if err != nil {
-		return InitAccountResult{}, err
-	}
-	if err := relay.PutKeyring(ctx, account.DeviceToken, 1, keyring); err != nil {
-		return InitAccountResult{}, fmt.Errorf("store recovery keyring: %w", err)
-	}
-	if err := initializer(ctx, options.DatabasePath, localDataKey, objectIDKey, hex.EncodeToString(account.DeviceID)); err != nil {
-		return InitAccountResult{}, fmt.Errorf("initialize encrypted local database: %w", err)
-	}
-
-	bundle := CredentialBundleV1{
-		Version:          CredentialBundleVersion,
-		DeviceToken:      append([]byte(nil), account.DeviceToken...),
-		CurrentEpoch:     1,
-		EpochKeys:        map[uint64][32]byte{1: {}},
-		VerificationKeys: make(map[[16]byte][ed25519.PublicKeySize]byte, 1),
-	}
-	defer bundle.Zero()
-	if len(account.AccountID) == len(bundle.AccountID) {
-		copy(bundle.AccountID[:], account.AccountID)
-	}
-	if len(account.DeviceID) == len(bundle.DeviceID) {
-		copy(bundle.DeviceID[:], account.DeviceID)
-	}
-	copy(bundle.SigningSeed[:], keys.Ed25519Private.Seed())
-	copy(bundle.X25519Private[:], keys.X25519Private)
-	copy(bundle.LocalDataKey[:], localDataKey)
-	copy(bundle.ObjectIDKey[:], objectIDKey)
-	epochOne := bundle.EpochKeys[1]
-	copy(epochOne[:], epochKey)
-	bundle.EpochKeys[1] = epochOne
-	var self [ed25519.PublicKeySize]byte
-	copy(self[:], keys.Ed25519Public)
-	bundle.VerificationKeys[bundle.DeviceID] = self
-	encoded, err := EncodeCredentialBundle(bundle)
-	if err != nil {
-		return InitAccountResult{}, fmt.Errorf("assemble device credential: %w", err)
-	}
-	defer zeroBytes(encoded)
-	if err := options.Secrets.Save(ctx, options.Profile, encoded); err != nil {
-		return InitAccountResult{}, fmt.Errorf("commit device credential: %w", err)
-	}
-	recoveryText, err := protocol.EncodeRecoveryKey(recoveryKey)
-	if err != nil {
-		return InitAccountResult{}, err
-	}
-	return InitAccountResult{AccountIDHex: hex.EncodeToString(account.AccountID), RecoveryKey: recoveryText}, nil
-}
-
 type Agent struct {
-	Secrets            SecretStore
-	Profile            string
-	EndpointConfigPath string
-	DatabasePath       string
-	MaxRounds          int
+	Secrets              SecretStore
+	Profile              string
+	StateDirectory       string
+	EndpointConfigPath   string
+	DatabasePath         string
+	MaxRounds            int
+	NativeEventsPath     string
+	RimeUserDBExportPath string
+	RimeUserDBRefresh    func(context.Context) error
+	BaselinePath         string
+	SnapshotPath         string
+	SnapshotStatePath    string
+	Reload               func(context.Context) error
 }
 
 type Status struct {
@@ -214,6 +39,21 @@ type Status struct {
 	CredentialVersion  int  `json:"credential_version"`
 	EndpointConfigured bool `json:"endpoint_configured"`
 	DatabasePresent    bool `json:"database_present"`
+}
+
+// ResidentReadiness is deliberately identifier-free. It is the only result
+// emitted by the resident activation gate.
+type ResidentReadiness struct {
+	Ready bool `json:"ready"`
+}
+
+func rosterContainsDevice(roster protocol.PairingRoster, deviceID []byte) bool {
+	for _, device := range roster.Devices {
+		if bytes.Equal(device.DeviceID, deviceID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (agent Agent) loadBundle(ctx context.Context) (CredentialBundleV1, error) {
@@ -231,6 +71,163 @@ func (agent Agent) loadBundle(ctx context.Context) (CredentialBundleV1, error) {
 	return DecodeCredentialBundle(encoded)
 }
 
+func (agent Agent) validateLocalState() error {
+	if _, err := syncclient.LoadEndpointConfig(agent.EndpointConfigPath); err != nil {
+		return err
+	}
+	if agent.DatabasePath == "" || !filepath.IsAbs(agent.DatabasePath) {
+		return errors.New("encrypted local database path must be absolute")
+	}
+	info, err := os.Lstat(agent.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("inspect encrypted local database: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		!privateFilePermissionsOK(agent.DatabasePath, info) {
+		return errors.New("encrypted local database must be a private regular file")
+	}
+	if err := verifyPrivateDatabaseFiles(agent.DatabasePath); err != nil {
+		return fmt.Errorf("verify encrypted local database files: %w", err)
+	}
+	return nil
+}
+
+// validateResidentDatabaseHeader rejects a merely permission-correct opaque
+// file without opening SQLite, creating a WAL/SHM sidecar, or reading encrypted
+// phrase rows. Full database access remains inside the locked resident run.
+func (agent Agent) validateResidentDatabaseHeader() error {
+	info, err := os.Lstat(agent.DatabasePath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 512 {
+		return errors.New("encrypted local database is not a SQLite database file")
+	}
+	file, err := os.Open(agent.DatabasePath)
+	if err != nil {
+		return errors.New("open encrypted local database header")
+	}
+	defer file.Close()
+	if !openedPrivateFilePermissionsOK(agent.DatabasePath, file, false) {
+		return errors.New("encrypted local database path and private handle differ")
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || opened.Size() != info.Size() {
+		return errors.New("encrypted local database changed during validated header read")
+	}
+	header := make([]byte, 100)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return errors.New("read encrypted local database header")
+	}
+	defer zeroBytes(header)
+	if !bytes.Equal(header[:16], []byte("SQLite format 3\x00")) ||
+		(header[18] != 1 && header[18] != 2) || (header[19] != 1 && header[19] != 2) ||
+		header[20] != 0 || header[21] != 64 || header[22] != 32 || header[23] != 32 {
+		return errors.New("encrypted local database header is invalid")
+	}
+	pageSize := int64(binary.BigEndian.Uint16(header[16:18]))
+	if pageSize == 1 {
+		pageSize = 65536
+	}
+	if pageSize < 512 || pageSize > 65536 || pageSize&(pageSize-1) != 0 || info.Size()%pageSize != 0 {
+		return errors.New("encrypted local database page geometry is invalid")
+	}
+	schemaFormat := binary.BigEndian.Uint32(header[44:48])
+	if schemaFormat < 1 || schemaFormat > 4 {
+		return errors.New("encrypted local database schema header is invalid")
+	}
+	after, err := os.Lstat(agent.DatabasePath)
+	if err != nil || !os.SameFile(opened, after) || after.Size() != opened.Size() ||
+		!after.ModTime().Equal(opened.ModTime()) {
+		return errors.New("encrypted local database changed during validated header read")
+	}
+	return nil
+}
+
+// validateResidentRimeState checks only fixed bridge metadata and filesystem
+// identities. It does not invoke host maintenance or read vocabulary rows.
+func (agent Agent) validateResidentRimeState() error {
+	paths, err := DefaultRimeBridgePaths(Paths{
+		StateDirectory: agent.StateDirectory,
+		BaselinePath:   agent.BaselinePath,
+	})
+	if err != nil {
+		return err
+	}
+	installationBytes, err := readBoundedRegular(paths.InstallationPath, maxRimeInstallationBytes)
+	if err != nil {
+		return err
+	}
+	installation, err := parseRimeInstallation(installationBytes)
+	zeroBytes(installationBytes)
+	if err != nil || !filepath.IsAbs(installation.SyncDir) ||
+		filepath.Clean(installation.SyncDir) != paths.SyncDirectory {
+		return errors.New("Rime maintenance output is not configured to the fixed directory")
+	}
+	backupBytes, err := readBoundedRegular(paths.BackupPath, maxRimeInstallationBytes)
+	if err != nil {
+		return err
+	}
+	backup, err := parseRimeInstallation(backupBytes)
+	zeroBytes(backupBytes)
+	if err != nil || backup.ID != installation.ID {
+		return errors.New("Rime bridge backup does not match the active installation")
+	}
+	directory, err := os.Lstat(paths.SyncDirectory)
+	if err != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 ||
+		!privateDirectoryPermissionsOK(paths.SyncDirectory, directory) ||
+		!bridgePathComponentsOK(paths.SyncDirectory, true) {
+		return errors.New("Rime maintenance output is not a fixed private directory")
+	}
+	rootEntries, err := os.ReadDir(paths.SyncDirectory)
+	if err != nil || len(rootEntries) > 1 {
+		return errors.New("Rime maintenance output has unexpected device metadata")
+	}
+	if len(rootEntries) == 1 {
+		entry := rootEntries[0]
+		if entry.Name() != installation.ID || entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			return errors.New("Rime maintenance output has unexpected device metadata")
+		}
+		deviceDirectory := filepath.Join(paths.SyncDirectory, installation.ID)
+		deviceInfo, statErr := os.Lstat(deviceDirectory)
+		if statErr != nil || !deviceInfo.IsDir() || deviceInfo.Mode()&os.ModeSymlink != 0 ||
+			!privateDirectoryPermissionsOK(deviceDirectory, deviceInfo) ||
+			!bridgePathComponentsOK(deviceDirectory, true) {
+			return errors.New("Rime maintenance device metadata is not private")
+		}
+		deviceEntries, readErr := os.ReadDir(deviceDirectory)
+		if readErr != nil || len(deviceEntries) > maxRimeSyncEntries {
+			return errors.New("Rime maintenance device metadata is invalid")
+		}
+		for _, deviceEntry := range deviceEntries {
+			path := filepath.Join(deviceDirectory, deviceEntry.Name())
+			info, statErr := os.Lstat(path)
+			if statErr != nil || deviceEntry.Type()&os.ModeSymlink != 0 || deviceEntry.IsDir() ||
+				!info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+				!privateFilePermissionsOK(path, info) || !bridgePathComponentsOK(path, false) {
+				return errors.New("Rime maintenance snapshot metadata is not private")
+			}
+		}
+	}
+
+	// SyncOnce can preserve an existing reviewed snapshot as its immutable
+	// baseline, but it fails closed when both are absent. Inspect only metadata
+	// here; phrase contents remain unread until the normal locked sync run.
+	learningPath := agent.BaselinePath
+	if _, statErr := os.Lstat(learningPath); errors.Is(statErr, os.ErrNotExist) {
+		learningPath = agent.SnapshotPath
+	} else if statErr != nil {
+		return statErr
+	}
+	if learningPath == "" || !filepath.IsAbs(learningPath) || filepath.Clean(learningPath) != learningPath {
+		return errors.New("Rime learning baseline path is invalid")
+	}
+	learning, err := os.Lstat(learningPath)
+	if err != nil || !learning.Mode().IsRegular() || learning.Mode()&os.ModeSymlink != 0 ||
+		!privateFilePermissionsOK(learningPath, learning) || learning.Size() < 1 ||
+		learning.Size() > maxBaselineBytes || !bridgePathComponentsOK(learningPath, false) {
+		return errors.New("Rime learning baseline metadata is not private and bounded")
+	}
+	return nil
+}
+
 // Status validates local configuration and credential material without making
 // a network request or exposing identifiers, tokens, or key bytes.
 func (agent Agent) Status(ctx context.Context) (Status, error) {
@@ -239,29 +236,86 @@ func (agent Agent) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	defer bundle.Zero()
-	if _, err := syncclient.LoadEndpointConfig(agent.EndpointConfigPath); err != nil {
+	if err := agent.validateLocalState(); err != nil {
 		return Status{}, err
-	}
-	if agent.DatabasePath == "" || !filepath.IsAbs(agent.DatabasePath) {
-		return Status{}, errors.New("encrypted local database path must be absolute")
-	}
-	info, err := os.Lstat(agent.DatabasePath)
-	if err != nil {
-		return Status{}, fmt.Errorf("inspect encrypted local database: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return Status{}, errors.New("encrypted local database must be a regular file")
 	}
 	return Status{
 		Ready: true, CredentialVersion: int(bundle.Version), EndpointConfigured: true, DatabasePresent: true,
 	}, nil
 }
 
+// ResidentReady is a local, redacted, fail-closed activation gate. Unlike
+// Status, it requires finalized two-device trust and proves that no protected
+// provisioning or pairing journal is present. No network request is made.
+func (agent Agent) ResidentReady(ctx context.Context) (ResidentReadiness, error) {
+	bundle, err := agent.loadBundle(ctx)
+	if err != nil {
+		return ResidentReadiness{}, errors.New("resident activation credential is unavailable or invalid")
+	}
+	defer bundle.Zero()
+	if bundle.Version != CredentialBundleVersion || rosterIsEmpty(bundle.TrustedRoster) ||
+		len(bundle.TrustedRoster.Devices) != 2 {
+		return ResidentReadiness{}, errors.New("resident activation requires finalized two-device trust")
+	}
+	verification, x25519, err := trustFromRoster(bundle.TrustedRoster)
+	if err != nil || !equalVerificationTrust(bundle.VerificationKeys, verification) ||
+		!equalX25519Trust(bundle.X25519PublicKeys, x25519) {
+		return ResidentReadiness{}, errors.New("resident activation requires valid signed trust")
+	}
+	if !rosterContainsDevice(bundle.TrustedRoster, bundle.DeviceID[:]) {
+		return ResidentReadiness{}, errors.New("resident activation credential is not in its signed trust roster")
+	}
+
+	provisioning, err := provisioningProfile(agent.Profile)
+	if err != nil {
+		return ResidentReadiness{}, errors.New("resident activation profile cannot safely represent protected journals")
+	}
+	creator, err := pairingProfile(agent.Profile, creatorPairingSuffix)
+	if err != nil {
+		return ResidentReadiness{}, errors.New("resident activation profile cannot safely represent protected journals")
+	}
+	joining, err := pairingProfile(agent.Profile, joiningPairingSuffix)
+	if err != nil {
+		return ResidentReadiness{}, errors.New("resident activation profile cannot safely represent protected journals")
+	}
+	for _, profile := range []string{provisioning, creator, joining} {
+		value, loadErr := agent.Secrets.Load(ctx, profile)
+		if loadErr == nil {
+			zeroBytes(value)
+			return ResidentReadiness{}, errors.New("resident activation is blocked by pending protected setup state")
+		}
+		if !errors.Is(loadErr, ErrSecretNotFound) {
+			return ResidentReadiness{}, errors.New("resident activation could not exclude pending protected setup state")
+		}
+	}
+	if err := agent.validateLocalState(); err != nil {
+		return ResidentReadiness{}, errors.New("resident activation requires complete private local state")
+	}
+	if err := agent.validateResidentDatabaseHeader(); err != nil {
+		return ResidentReadiness{}, errors.New("resident activation requires a valid private local database")
+	}
+	if err := agent.validateResidentRimeState(); err != nil {
+		return ResidentReadiness{}, errors.New("resident activation requires complete private Rime bridge state")
+	}
+	return ResidentReadiness{Ready: true}, nil
+}
+
 type SyncSummary struct {
-	Rounds     int
-	Uploaded   int
-	Downloaded int
-	Cursor     int64
+	Rounds              int
+	Uploaded            int
+	Downloaded          int
+	Cursor              int64
+	NativeEvents        int
+	NativeDuplicates    int
+	NativeLocalOnly     int
+	RimeUserDBRows      int
+	RimeUserDBAdvanced  int
+	RimeUserDBResets    int
+	RimeUserDBLocalOnly int
+	RimeUserDBIgnored   int
+	SnapshotRows        int
+	SnapshotChanged     bool
+	SnapshotReloaded    bool
 }
 
 func sessionFromBundle(bundle CredentialBundleV1) syncclient.Session {
@@ -298,9 +352,21 @@ func zeroSession(session *syncclient.Session) {
 	session.DeviceToken = ""
 }
 
+func (agent Agent) nativeEventIngestionEnabled() bool {
+	return agent.NativeEventsPath != "" && agent.RimeUserDBExportPath == ""
+}
+
 // SyncOnce is the only network-bearing desktop operation. Native input event
 // handlers never call it; they continue using their current memory snapshot.
-func (agent Agent) SyncOnce(ctx context.Context) (SyncSummary, error) {
+func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr error) {
+	if agent.RimeUserDBRefresh != nil {
+		if agent.RimeUserDBExportPath == "" {
+			return SyncSummary{}, errors.New("Rime userdb refresh requires a fixed private staging path")
+		}
+		if err := agent.RimeUserDBRefresh(ctx); err != nil {
+			return SyncSummary{}, fmt.Errorf("refresh Rime userdb snapshot: %w", err)
+		}
+	}
 	bundle, err := agent.loadBundle(ctx)
 	if err != nil {
 		return SyncSummary{}, err
@@ -314,8 +380,12 @@ func (agent Agent) SyncOnce(ctx context.Context) (SyncSummary, error) {
 		return SyncSummary{}, errors.New("encrypted local database path must be absolute")
 	}
 	info, err := os.Lstat(agent.DatabasePath)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		!privateFilePermissionsOK(agent.DatabasePath, info) {
 		return SyncSummary{}, errors.New("encrypted local database must be an existing regular file")
+	}
+	if err := verifyPrivateDatabaseFiles(agent.DatabasePath); err != nil {
+		return SyncSummary{}, fmt.Errorf("verify encrypted local database files: %w", err)
 	}
 	store, err := localstore.OpenForDevice(
 		ctx, agent.DatabasePath, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
@@ -323,25 +393,109 @@ func (agent Agent) SyncOnce(ctx context.Context) (SyncSummary, error) {
 	if err != nil {
 		return SyncSummary{}, err
 	}
-	defer store.Close()
+	defer func() {
+		closeErr := store.Close()
+		permissionErr := protectPrivateDatabaseFiles(agent.DatabasePath)
+		if returnErr == nil && closeErr != nil {
+			returnErr = closeErr
+		}
+		if returnErr == nil && permissionErr != nil {
+			returnErr = fmt.Errorf("protect encrypted local database and sidecar permissions: %w", permissionErr)
+		}
+	}()
+	if err := protectPrivateDatabaseFiles(agent.DatabasePath); err != nil {
+		return SyncSummary{}, fmt.Errorf("protect opened encrypted local database and sidecars: %w", err)
+	}
+	var nativeSummary NativeEventSummary
+	var rimeSummary localstore.RimeUserDBImportResult
+	if agent.NativeEventsPath != "" || agent.RimeUserDBExportPath != "" {
+		if agent.BaselinePath == "" || agent.SnapshotPath == "" {
+			return SyncSummary{}, errors.New("local learning ingestion requires static baseline and snapshot paths")
+		}
+		if _, err := ensureBaseline(agent.BaselinePath, agent.SnapshotPath); err != nil {
+			return SyncSummary{}, err
+		}
+		if _, err := os.Lstat(agent.BaselinePath); errors.Is(err, os.ErrNotExist) {
+			return SyncSummary{}, errors.New("local learning ingestion is blocked because both baseline and private snapshot are missing")
+		} else if err != nil {
+			return SyncSummary{}, fmt.Errorf("inspect required static baseline: %w", err)
+		}
+		baselineRows, err := parseBaseline(agent.BaselinePath)
+		if err != nil {
+			return SyncSummary{}, err
+		}
+		localOnly := make(map[string]struct{}, len(baselineRows))
+		for _, row := range baselineRows {
+			localOnly[protocol.CanonicalPhrase(row.Phrase)] = struct{}{}
+		}
+		// A cumulative Rime userdb snapshot and per-selection native events
+		// represent the same user actions. Selecting the Rime bridge therefore
+		// disables native spool consumption for this run to prevent double count.
+		if agent.nativeEventIngestionEnabled() {
+			nativeSummary, err = consumeNativeEvents(ctx, agent.NativeEventsPath, store, localOnly, maxNativeBatch)
+			if err != nil {
+				return SyncSummary{}, err
+			}
+		}
+		if agent.RimeUserDBExportPath != "" {
+			rimeSummary, err = ingestRimeUserDBExport(ctx, agent.RimeUserDBExportPath, store, localOnly)
+			if err != nil {
+				return SyncSummary{}, err
+			}
+		}
+	}
 	session := sessionFromBundle(bundle)
 	defer zeroSession(&session)
 	maxRounds := agent.MaxRounds
 	if maxRounds == 0 {
 		maxRounds = 32
 	}
-	worker := syncclient.Worker{Client: syncclient.New(endpoint), Store: store, Session: session}
+	client := syncclient.New(endpoint)
+	if err := client.SealAccount(ctx, bundle.AccountID[:], string(bundle.DeviceToken)); err != nil {
+		return SyncSummary{}, fmt.Errorf("ensure sync account is sealed: %w", err)
+	}
+	worker := syncclient.Worker{Client: client, Store: store, Session: session}
 	results, err := worker.SyncUntilIdle(ctx, maxRounds)
 	if err != nil {
 		return SyncSummary{}, err
 	}
-	summary := SyncSummary{Rounds: len(results)}
+	summary = SyncSummary{
+		Rounds: len(results), NativeEvents: nativeSummary.Consumed,
+		NativeDuplicates: nativeSummary.Duplicate, NativeLocalOnly: nativeSummary.LocalOnly,
+		RimeUserDBRows: rimeSummary.Rows, RimeUserDBAdvanced: rimeSummary.Advanced,
+		RimeUserDBResets: rimeSummary.Resets, RimeUserDBLocalOnly: rimeSummary.LocalOnly,
+		RimeUserDBIgnored: rimeSummary.Ignored,
+	}
 	for _, result := range results {
 		if result.Uploaded {
 			summary.Uploaded++
 		}
 		summary.Downloaded += result.Downloaded
 		summary.Cursor = result.Cursor
+	}
+	if agent.SnapshotPath != "" {
+		rebuilt, err := rebuildPrivateSnapshot(ctx, store, agent.BaselinePath, agent.SnapshotPath)
+		if err != nil {
+			return SyncSummary{}, err
+		}
+		summary.SnapshotRows = rebuilt.TotalRows
+		summary.SnapshotChanged = rebuilt.Changed
+		reloadPending, err := snapshotReloadPending(agent.SnapshotStatePath, rebuilt.digest)
+		if err != nil {
+			return SyncSummary{}, err
+		}
+		if reloadPending {
+			if agent.Reload == nil {
+				return SyncSummary{}, errors.New("private snapshot is pending reload but no platform reload hook is available")
+			}
+			if err := agent.Reload(ctx); err != nil {
+				return SyncSummary{}, fmt.Errorf("reload Rime after atomic snapshot replacement: %w", err)
+			}
+			if err := markSnapshotReloaded(agent.SnapshotStatePath, rebuilt.digest); err != nil {
+				return SyncSummary{}, fmt.Errorf("commit Rime snapshot reload state: %w", err)
+			}
+			summary.SnapshotReloaded = true
+		}
 	}
 	return summary, nil
 }

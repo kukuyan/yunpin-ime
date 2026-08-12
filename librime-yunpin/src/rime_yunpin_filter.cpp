@@ -20,6 +20,8 @@
 #include <rime/service.h>
 #include <rime/translation.h>
 
+#include "yunpin/native_selection_events.hpp"
+
 namespace rime {
 namespace {
 
@@ -90,6 +92,13 @@ bool IsShortNormalizedPinyin(std::string_view input) {
 
 yunpin::LearningContext LearningContextFor(const Context* context) {
   if (!context) {
+    return yunpin::LearningContext::kPrivate;
+  }
+  // Learning is an explicit host capability, never an inference from the
+  // absence of a password/private flag.  Until Squirrel/Weasel bridge a
+  // trustworthy secure-field signal, this option remains false and both
+  // learning and event publication fail closed.
+  if (!context->get_option("yunpin_learning_allowed")) {
     return yunpin::LearningContext::kPrivate;
   }
   if (context->get_option("password_mode")) {
@@ -345,6 +354,94 @@ bool IsSafeRelativePath(const std::string& path) {
 
 }  // namespace
 
+// Session-owned callback target.  Notifier slots carry only weak references,
+// so neither a stale signal nor a filtered translation can call through a
+// destroyed YunPinFilter.  The state itself stays alive for an already-running
+// callback and is released immediately afterwards.
+class YunPinSessionLearningBridge {
+ public:
+  YunPinSessionLearningBridge() = default;
+
+  void OnCommit(Context* context) {
+    if (!context ||
+        LearningContextFor(context) != yunpin::LearningContext::kNormal) {
+      learning_.BreakAdjacency();
+      return;
+    }
+
+    const auto& composition = context->composition();
+    const std::string& input = context->input();
+    if (composition.empty() || composition.size() > 2) {
+      learning_.BreakAdjacency();
+      return;
+    }
+    const Segment& segment = composition.front();
+    if (composition.size() == 2) {
+      const Segment& placeholder = composition.back();
+      if (placeholder.start != input.size() ||
+          placeholder.end != input.size() ||
+          placeholder.GetSelectedCandidate()) {
+        learning_.BreakAdjacency();
+        return;
+      }
+    }
+    const auto candidate = segment.GetSelectedCandidate();
+    const auto genuine = candidate ? Candidate::GetGenuineCandidate(candidate)
+                                   : an<Candidate>();
+    if (!candidate || segment.status < Segment::kSelected ||
+        segment.start != 0 || segment.end != input.size() ||
+        candidate->start() != 0 || candidate->end() != input.size() ||
+        !genuine || !IsWordCandidateType(genuine->type()) ||
+        context->GetCommitText() != candidate->text()) {
+      learning_.BreakAdjacency();
+      return;
+    }
+
+    const std::string normalized = yunpin::NormalizePinyin(input);
+    if (learning_.ObserveCommit(yunpin::SessionCommit{
+            candidate->text(), normalized,
+            yunpin::LearningContext::kNormal})) {
+      // Best effort only.  A full/busy queue never delays or rolls back local
+      // in-process learning.
+      try {
+        (void)yunpin::NativeSelectionEventQueue::Instance().TryPublish(
+            candidate->text(), normalized);
+      } catch (...) {
+        // Constructing the process-local queue may allocate on its first use.
+        // A resource failure must drop the sync event, never terminate the IME.
+      }
+    }
+  }
+
+  void OnContextUpdate(Context* context) {
+    learning_.ObserveComposition(
+        context ? std::string_view(context->input()) : std::string_view(),
+        LearningContextFor(context));
+  }
+
+  void OnUnhandledKey(Context* context, const KeyEvent& key_event) {
+    const bool unmodified_backspace =
+        key_event.modifier() == 0 && key_event.keycode() == XK_BackSpace;
+    learning_.ObserveUnhandledKey(unmodified_backspace,
+                                  LearningContextFor(context));
+  }
+
+  void BreakAdjacency() { learning_.BreakAdjacency(); }
+
+  [[nodiscard]] std::int32_t CorrectionScore(
+      std::string_view pinyin, std::string_view phrase) const {
+    return learning_.CorrectionScore(pinyin, phrase);
+  }
+
+  [[nodiscard]] std::vector<yunpin::HabitStat> QueryHabits(
+      const yunpin::HabitQuery& query) const {
+    return learning_.QueryHabits(query);
+  }
+
+ private:
+  yunpin::SessionLearning learning_;
+};
+
 YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
   if (ticket.schema) {
     Config* config = ticket.schema->config();
@@ -373,32 +470,49 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
     private_ready_ = LoadSnapshot(snapshot_path_);
   }
   if (session_learning_enabled_ && engine_ && engine_->context()) {
-    session_learning_ = std::make_unique<yunpin::SessionLearning>();
+    session_learning_ = std::make_shared<YunPinSessionLearningBridge>();
+    const std::weak_ptr<YunPinSessionLearningBridge> weak_learning =
+        session_learning_;
     Context* context = engine_->context();
     commit_connection_ = context->commit_notifier().connect(
-        [this](Context* ctx) { OnCommit(ctx); });
+        [weak_learning](Context* ctx) {
+          if (const auto learning = weak_learning.lock()) {
+            learning->OnCommit(ctx);
+          }
+        });
     update_connection_ = context->update_notifier().connect(
-        [this](Context* ctx) { OnContextUpdate(ctx); });
+        [weak_learning](Context* ctx) {
+          if (const auto learning = weak_learning.lock()) {
+            learning->OnContextUpdate(ctx);
+          }
+        });
     unhandled_key_connection_ = context->unhandled_key_notifier().connect(
-        [this](Context* ctx, const KeyEvent& key) {
-          OnUnhandledKey(ctx, key);
+        [weak_learning](Context* ctx, const KeyEvent& key) {
+          if (const auto learning = weak_learning.lock()) {
+            learning->OnUnhandledKey(ctx, key);
+          }
         });
     option_update_connection_ = context->option_update_notifier().connect(
-        [this](Context*, const string&) {
-          if (session_learning_) {
-            session_learning_->BreakAdjacency();
+        [weak_learning](Context*, const string&) {
+          if (const auto learning = weak_learning.lock()) {
+            learning->BreakAdjacency();
           }
         });
     delete_connection_ = context->delete_notifier().connect(
-        [this](Context*) {
-          if (session_learning_) {
-            session_learning_->BreakAdjacency();
+        [weak_learning](Context*) {
+          if (const auto learning = weak_learning.lock()) {
+            learning->BreakAdjacency();
           }
         });
   }
 }
 
 YunPinFilter::~YunPinFilter() {
+  DisconnectLearningNotifiers();
+  session_learning_.reset();
+}
+
+void YunPinFilter::DisconnectLearningNotifiers() noexcept {
   commit_connection_.disconnect();
   update_connection_.disconnect();
   unhandled_key_connection_.disconnect();
@@ -438,65 +552,6 @@ bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
 bool YunPinFilter::PrivateModeEnabled() const {
   const Context* context = engine_ ? engine_->context() : nullptr;
   return LearningContextFor(context) != yunpin::LearningContext::kNormal;
-}
-
-void YunPinFilter::OnCommit(Context* context) {
-  if (!session_learning_ || !context ||
-      LearningContextFor(context) != yunpin::LearningContext::kNormal) {
-    if (session_learning_) {
-      session_learning_->BreakAdjacency();
-    }
-    return;
-  }
-
-  const auto& composition = context->composition();
-  const std::string& input = context->input();
-  if (composition.empty() || composition.size() > 2) {
-    session_learning_->BreakAdjacency();
-    return;
-  }
-  const Segment& segment = composition.front();
-  if (composition.size() == 2) {
-    const Segment& placeholder = composition.back();
-    if (placeholder.start != input.size() || placeholder.end != input.size() ||
-        placeholder.GetSelectedCandidate()) {
-      session_learning_->BreakAdjacency();
-      return;
-    }
-  }
-  const auto candidate = segment.GetSelectedCandidate();
-  const auto genuine = candidate ? Candidate::GetGenuineCandidate(candidate)
-                                 : an<Candidate>();
-  if (!candidate || segment.status < Segment::kSelected || segment.start != 0 ||
-      segment.end != input.size() || candidate->start() != 0 ||
-      candidate->end() != input.size() ||
-      !genuine || !IsWordCandidateType(genuine->type()) ||
-      context->GetCommitText() != candidate->text()) {
-    session_learning_->BreakAdjacency();
-    return;
-  }
-  session_learning_->ObserveCommit(yunpin::SessionCommit{
-      candidate->text(), input, yunpin::LearningContext::kNormal});
-}
-
-void YunPinFilter::OnContextUpdate(Context* context) {
-  if (!session_learning_) {
-    return;
-  }
-  session_learning_->ObserveComposition(
-      context ? std::string_view(context->input()) : std::string_view(),
-      LearningContextFor(context));
-}
-
-void YunPinFilter::OnUnhandledKey(Context* context,
-                                  const KeyEvent& key_event) {
-  if (!session_learning_) {
-    return;
-  }
-  const bool unmodified_backspace =
-      key_event.modifier() == 0 && key_event.keycode() == XK_BackSpace;
-  session_learning_->ObserveUnhandledKey(unmodified_backspace,
-                                         LearningContextFor(context));
 }
 
 std::vector<yunpin::HabitStat> YunPinFilter::QueryHabits(
@@ -556,9 +611,12 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
     }
   }
   const auto correction_score =
-      [session = session_learning_.get(), normalized](std::string_view text) {
-        return session && !normalized.empty()
-                   ? session->CorrectionScore(normalized, text)
+      [weak_learning =
+           std::weak_ptr<YunPinSessionLearningBridge>(session_learning_),
+       normalized](std::string_view text) {
+        const auto learning = weak_learning.lock();
+        return learning && !normalized.empty()
+                   ? learning->CorrectionScore(normalized, text)
                    : std::int32_t{0};
       };
   return New<YunPinMergedTranslation>(std::move(translation), std::move(front),

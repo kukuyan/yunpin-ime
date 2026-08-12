@@ -67,6 +67,34 @@ function Get-PeMachine {
     }
 }
 
+function Invoke-AgentCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Executable
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = $Arguments -join " "
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw "Failed to start sync agent: $Executable" }
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return [pscustomobject]@{
+            Output = (($stdout + $stderr).Trim())
+            ExitCode = $process.ExitCode
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 $BundleRoot = [IO.Path]::GetFullPath($BundleRoot)
 Assert-BundleManifest -Root $BundleRoot
 $runtime = Join-Path $BundleRoot "runtime"
@@ -87,6 +115,39 @@ foreach ($entry in $expectedMachines.GetEnumerator()) {
     if ($machine -ne $entry.Value) {
         throw ("Wrong PE machine for {0}: expected 0x{1:x4}, observed 0x{2:x4}" -f $entry.Key, $entry.Value, $machine)
     }
+}
+
+$syncAgentRoot = Join-Path $BundleRoot "sync-agent"
+$syncAgent = Join-Path $syncAgentRoot "yunpin-sync-agent.exe"
+if (-not (Test-Path $syncAgent -PathType Leaf)) {
+    throw "Public sync agent is missing"
+}
+if ((Get-PeMachine -Path $syncAgent) -ne 0x8664) {
+    throw "Public sync agent is not an x64 PE executable"
+}
+foreach ($supportFile in @(
+    "Install-SyncAgent.ps1", "Verify-SyncAgent.ps1",
+    "Enable-SyncAgent.ps1", "Uninstall-SyncAgent.ps1", "README.md"
+)) {
+    if (-not (Test-Path (Join-Path $syncAgentRoot $supportFile) -PathType Leaf)) {
+        throw "Public sync-agent support file is missing: $supportFile"
+    }
+}
+foreach ($privateArtifactFile in @("BUILD-METADATA.json", "SHA256SUMS")) {
+    if (Test-Path (Join-Path $syncAgentRoot $privateArtifactFile)) {
+        throw "Private E2E artifact metadata entered the public package: $privateArtifactFile"
+    }
+}
+if (-not (Test-Path (Join-Path $BundleRoot "licenses\YunPin-Sync-Agent-Go\LICENSES.json") -PathType Leaf)) {
+    throw "Public sync-agent license-text bundle is missing"
+}
+$probe = Invoke-AgentCapture -Executable $syncAgent -Arguments @("install-probe")
+if ($probe.ExitCode -ne 0) {
+    throw "Public sync agent install-probe failed"
+}
+$privateCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")
+if ($privateCommand.ExitCode -eq 0 -or $privateCommand.Output -cne "yunpin-sync-agent: unknown command") {
+    throw "Public Windows package exposes a private pairing command"
 }
 
 $setupBinaryText = [Text.Encoding]::Unicode.GetString(
@@ -149,7 +210,11 @@ if ($installer -notmatch 'AcceptUnsignedDevelopmentBuild' -or $installer -notmat
     throw "Development installer lacks explicit unsigned-build acceptance or manifest verification"
 }
 $metadata = Get-Content -LiteralPath (Join-Path $BundleRoot "BUILD-METADATA.json") -Raw | ConvertFrom-Json
-if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or $metadata.mergedPlugin -ne "librime-yunpin") {
+if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or
+    $metadata.mergedPlugin -ne "librime-yunpin" -or
+    $metadata.syncAgent.build -cne "public-default-tag" -or
+    $metadata.syncAgent.privatePairingCommands -ne $false -or
+    $metadata.syncAgent.residentDefault -cne "disabled") {
     throw "Unexpected package metadata"
 }
 

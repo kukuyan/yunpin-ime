@@ -37,6 +37,10 @@
     {
       "path": "platform/patches/librime-1.16/0001-configurable-corrector-component.patch",
       "sha256": "79b0e7629b5eee454855187ddfcfc4f3014f4b24425bd0aa45f104593994d51b"
+    },
+    {
+      "path": "platform/patches/librime-1.16/0002-disconnect-engine-notifiers-before-context-destruction.patch",
+      "sha256": "3f0bd74f2b5b05f0b0d049474ea73d70d51a4507a909e6615b56fac81bce23a4"
     }
   ],
   "squirrel_patches": [
@@ -67,6 +71,18 @@
     {
       "path": "platform/patches/squirrel/0007-yunpin-reconcile-input-source-persistence.patch",
       "sha256": "45b6c515f5c30fcaf642f2a34bbf61bc4978c906ae94d70d9781e35db91da611"
+    },
+    {
+      "path": "platform/patches/squirrel/0008-yunpin-defer-reentrant-session-destruction.patch",
+      "sha256": "81d4e961c691d94cdbad1c72d9db4862fe41a7f7be39d17e84a467f7ff26390b"
+    },
+    {
+      "path": "platform/patches/squirrel/0009-yunpin-start-native-event-spooler.patch",
+      "sha256": "4d155d89747f4011b9a13f2ffcf436404b4b9b427134a77d8407bb9529569362"
+    },
+    {
+      "path": "platform/patches/squirrel/0010-yunpin-refresh-rime-userdb-snapshot.patch",
+      "sha256": "3160387f28a875a2062ecd5a732c3cf909a65b0e8719c21ef0c37347d2a994c8"
     }
   ],
   "archives": [

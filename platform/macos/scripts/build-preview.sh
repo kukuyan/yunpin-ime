@@ -17,6 +17,7 @@ if [[ ! -f "$source_dir/.yunpin-dependencies-ready" ]]; then
   "${MACOS_DIR}/scripts/fetch-dependencies.sh" "$source_dir"
 fi
 "${MACOS_DIR}/scripts/build-librime-yunpin.sh" "$source_dir"
+"${MACOS_DIR}/scripts/build-sync-agents.sh"
 
 mkdir -p "$source_dir/data/plum"
 cp "${REPO_ROOT}/platform/rime/squirrel/default.custom.yaml" "$source_dir/data/default.custom.yaml"
@@ -53,6 +54,21 @@ app="$derived_data/Build/Products/Release/YunPin.app"
 [[ -d "$app" ]] || die "xcodebuild did not produce $app"
 shared_support="$app/Contents/SharedSupport"
 mkdir -p "$shared_support" "$shared_support/licenses"
+
+sync_agent="$build_root/sync-agent/public/yunpin-sync-agent"
+[[ -x "$sync_agent" ]] || die "public sync agent build output is missing: $sync_agent"
+install -m 755 "$sync_agent" "$app/Contents/MacOS/yunpin-sync-agent"
+sync_support="$shared_support/SyncAgent"
+mkdir -p "$sync_support"
+for script in \
+  Install-LaunchAgent.sh \
+  Verify-LaunchAgent.sh \
+  Enable-LaunchAgent.sh \
+  Uninstall-LaunchAgent.sh; do
+  install -m 755 "${REPO_ROOT}/desktopagent/install/macos/$script" "$sync_support/$script"
+done
+install -m 644 "${REPO_ROOT}/desktopagent/install/README.md" "$sync_support/README.md"
+ditto "$build_root/sync-agent/licenses" "$shared_support/licenses/YunPin-Sync-Agent-Go"
 
 find "${REPO_ROOT}/third_party/rime-ice" -maxdepth 1 -type f \
   \( -name '*.yaml' -o -name '*.txt' \) \

@@ -28,6 +28,7 @@ type testDevice struct {
 	accountID              string
 	deviceID               string
 	token                  string
+	rollbackToken          string
 	recoveryAuthentication string
 	publicKey              ed25519.PublicKey
 	privateKey             ed25519.PrivateKey
@@ -363,31 +364,52 @@ func signedTestEnvelope(t *testing.T, device testDevice, sequence uint64, object
 }
 
 func TestPairingAndRevocation(t *testing.T) {
+	twoDeviceRevocationEnabled = true
+	t.Cleanup(func() { twoDeviceRevocationEnabled = false })
 	first := newTestAccount(t)
 	defer first.server.Close()
 
-	created := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{})
+	pairingID := strings.Repeat("a", 32)
+	pairingVerifier := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x21}, 32))
+	created := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id": pairingID, "pairing_verifier": pairingVerifier,
+	})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create pairing status=%d body=%s", created.Code, created.Body.String())
 	}
 	var pairing struct {
-		ID                     string `json:"pairing_id"`
-		Secret                 string `json:"pairing_secret"`
-		CreatorX25519PublicKey string `json:"creator_x25519_public_key"`
+		ID string `json:"pairing_id"`
 	}
 	decodeResponse(t, created, &pairing)
-	if pairing.CreatorX25519PublicKey != base64.RawURLEncoding.EncodeToString(first.x25519Key) {
-		t.Fatalf("pairing QR material omitted creator X25519 key: %+v", pairing)
+	if pairing.ID != pairingID {
+		t.Fatalf("pairing relay changed client invitation identity: %+v", pairing)
+	}
+	parallel := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id": strings.Repeat("f", 32), "pairing_verifier": pairingVerifier,
+	})
+	if parallel.Code != http.StatusConflict {
+		t.Fatalf("parallel live pairing status=%d body=%s", parallel.Code, parallel.Body.String())
+	}
+	replayedCreate := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id": pairingID, "pairing_verifier": pairingVerifier,
+	})
+	if replayedCreate.Code != http.StatusCreated {
+		t.Fatalf("idempotent create replay status=%d body=%s", replayedCreate.Code, replayedCreate.Body.String())
 	}
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = privateKey
 	xKey := bytes.Repeat([]byte{0x77}, 32)
+	joinedDeviceID := strings.Repeat("b", 32)
+	joinProof := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, 32))
+	rollbackToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x23}, 32))
 	join := apiRequest(t, first.server, http.MethodPut, "/v1/pairings/"+pairing.ID, "", map[string]any{
-		"pairing_secret":         pairing.Secret,
+		"pairing_verifier":       pairingVerifier,
+		"device_id":              joinedDeviceID,
+		"join_proof":             joinProof,
+		"rollback_token":         rollbackToken,
 		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)),
 		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(publicKey),
 		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(xKey),
@@ -395,15 +417,36 @@ func TestPairingAndRevocation(t *testing.T) {
 	if join.Code != http.StatusOK {
 		t.Fatalf("join pairing status=%d body=%s", join.Code, join.Body.String())
 	}
+	replayedJoin := apiRequest(t, first.server, http.MethodPut, "/v1/pairings/"+pairing.ID, "", map[string]any{
+		"pairing_verifier": pairingVerifier, "device_id": joinedDeviceID, "join_proof": joinProof, "rollback_token": rollbackToken,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(publicKey),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(xKey),
+	})
+	if replayedJoin.Code != http.StatusOK {
+		t.Fatalf("idempotent join replay status=%d body=%s", replayedJoin.Code, replayedJoin.Body.String())
+	}
+	conflictingJoin := apiRequest(t, first.server, http.MethodPut, "/v1/pairings/"+pairing.ID, "", map[string]any{
+		"pairing_verifier": pairingVerifier, "device_id": strings.Repeat("c", 32), "join_proof": joinProof, "rollback_token": rollbackToken,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(publicKey),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(xKey),
+	})
+	if conflictingJoin.Code != http.StatusConflict {
+		t.Fatalf("conflicting join replay status=%d body=%s", conflictingJoin.Code, conflictingJoin.Body.String())
+	}
 	status := apiRequest(t, first.server, http.MethodGet, "/v1/pairings/"+pairing.ID, first.token, nil)
 	var pairingStatus struct {
 		State                string `json:"state"`
+		DeviceID             string `json:"device_id"`
+		JoinProof            string `json:"join_proof"`
 		DeviceNameCiphertext string `json:"device_name_ciphertext"`
 		Ed25519PublicKey     string `json:"ed25519_public_key"`
 		X25519PublicKey      string `json:"x25519_public_key"`
 	}
 	decodeResponse(t, status, &pairingStatus)
 	if status.Code != http.StatusOK || pairingStatus.State != "joined" ||
+		pairingStatus.DeviceID != joinedDeviceID || pairingStatus.JoinProof != joinProof ||
 		pairingStatus.DeviceNameCiphertext != base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)) ||
 		pairingStatus.Ed25519PublicKey != base64.RawURLEncoding.EncodeToString(publicKey) ||
 		pairingStatus.X25519PublicKey != base64.RawURLEncoding.EncodeToString(xKey) {
@@ -419,7 +462,36 @@ func TestPairingAndRevocation(t *testing.T) {
 	if approve.Code != http.StatusOK {
 		t.Fatalf("approve pairing status=%d body=%s", approve.Code, approve.Body.String())
 	}
-	claim := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/claim", "", map[string]any{"pairing_secret": pairing.Secret})
+	replayedApprove := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/approve", first.token, map[string]any{
+		"encrypted_keyring": sealedBoxWireGolden,
+	})
+	if replayedApprove.Code != http.StatusOK {
+		t.Fatalf("idempotent approve replay status=%d body=%s", replayedApprove.Code, replayedApprove.Body.String())
+	}
+	joinedToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x78}, 32))
+	claimMessage, err := canonicalPairingClaimMessage(pairing.ID, first.accountID, first.deviceID,
+		joinedDeviceID, first.publicKey, publicKey, first.x25519Key, xKey, joinedToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimProof := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, claimMessage))
+	if _, err := first.server.db.Exec(`UPDATE pairings SET claim_expires_at = ? WHERE id = ?`,
+		time.Now().Add(-time.Second).UnixMilli(), pairing.ID); err != nil {
+		t.Fatal(err)
+	}
+	expiredClaim := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/claim", "", map[string]any{
+		"pairing_verifier": pairingVerifier, "device_token": joinedToken, "claim_proof": claimProof,
+	})
+	if expiredClaim.Code != http.StatusUnauthorized || !strings.Contains(expiredClaim.Body.String(), "invalid_or_expired_pairing") {
+		t.Fatalf("expired approved claim status=%d body=%s", expiredClaim.Code, expiredClaim.Body.String())
+	}
+	if _, err := first.server.db.Exec(`UPDATE pairings SET claim_expires_at = ? WHERE id = ?`,
+		time.Now().Add(pairingClaimLifetime).UnixMilli(), pairing.ID); err != nil {
+		t.Fatal(err)
+	}
+	claim := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/claim", "", map[string]any{
+		"pairing_verifier": pairingVerifier, "device_token": joinedToken, "claim_proof": claimProof,
+	})
 	if claim.Code != http.StatusCreated {
 		t.Fatalf("claim pairing status=%d body=%s", claim.Code, claim.Body.String())
 	}
@@ -429,8 +501,63 @@ func TestPairingAndRevocation(t *testing.T) {
 		EncryptedKeyring string `json:"encrypted_keyring"`
 	}
 	decodeResponse(t, claim, &second)
-	if second.DeviceToken == "" || second.EncryptedKeyring != sealedBoxWireGolden || second.EncryptedKeyring != base64.RawURLEncoding.EncodeToString(keyring) {
+	if second.DeviceID != joinedDeviceID || second.DeviceToken != joinedToken || second.EncryptedKeyring != sealedBoxWireGolden || second.EncryptedKeyring != base64.RawURLEncoding.EncodeToString(keyring) {
 		t.Fatalf("unexpected claim response: %+v", second)
+	}
+	replayedClaim := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/claim", "", map[string]any{
+		"pairing_verifier": pairingVerifier, "device_token": joinedToken, "claim_proof": claimProof,
+	})
+	if replayedClaim.Code != http.StatusCreated {
+		t.Fatalf("idempotent claim replay status=%d body=%s", replayedClaim.Code, replayedClaim.Body.String())
+	}
+	pendingList := apiRequest(t, first.server, http.MethodGet, "/v1/devices", second.DeviceToken, nil)
+	if pendingList.Code != http.StatusConflict || !strings.Contains(pendingList.Body.String(), "pairing_finalization_pending") {
+		t.Fatalf("unfinalized paired device accessed account: status=%d body=%s", pendingList.Code, pendingList.Body.String())
+	}
+	ready := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/ready", second.DeviceToken, nil)
+	if ready.Code != http.StatusOK || !strings.Contains(ready.Body.String(), `"state":"ready"`) {
+		t.Fatalf("paired device ready status=%d body=%s", ready.Code, ready.Body.String())
+	}
+	stillPending := apiRequest(t, first.server, http.MethodGet, "/v1/devices", second.DeviceToken, nil)
+	if stillPending.Code != http.StatusConflict {
+		t.Fatalf("ready but unfinalized device accessed account: status=%d body=%s", stillPending.Code, stillPending.Body.String())
+	}
+	finalize := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/finalize", first.token, nil)
+	if finalize.Code != http.StatusOK || !strings.Contains(finalize.Body.String(), `"state":"finalized"`) {
+		t.Fatalf("pairing finalize status=%d body=%s", finalize.Code, finalize.Body.String())
+	}
+	readyReplay := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/ready", second.DeviceToken, nil)
+	if readyReplay.Code != http.StatusOK || !strings.Contains(readyReplay.Body.String(), `"state":"finalized"`) {
+		t.Fatalf("finalized ready replay status=%d body=%s", readyReplay.Code, readyReplay.Body.String())
+	}
+	conflictingClaim := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/claim", "", map[string]any{
+		"pairing_verifier": pairingVerifier,
+		"device_token":     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x79}, 32)),
+		"claim_proof":      claimProof,
+	})
+	if conflictingClaim.Code != http.StatusUnauthorized || !strings.Contains(conflictingClaim.Body.String(), "invalid_pairing_claim_proof") {
+		t.Fatalf("conflicting claim replay status=%d body=%s", conflictingClaim.Code, conflictingClaim.Body.String())
+	}
+	advancedJoin := apiRequest(t, first.server, http.MethodPut, "/v1/pairings/"+pairing.ID, "", map[string]any{
+		"pairing_verifier": pairingVerifier, "device_id": joinedDeviceID, "join_proof": joinProof, "rollback_token": rollbackToken,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(publicKey),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(xKey),
+	})
+	if advancedJoin.Code != http.StatusOK {
+		t.Fatalf("join replay after claim status=%d body=%s", advancedJoin.Code, advancedJoin.Body.String())
+	}
+	advancedApprove := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairing.ID+"/approve", first.token, map[string]any{
+		"encrypted_keyring": sealedBoxWireGolden,
+	})
+	if advancedApprove.Code != http.StatusOK {
+		t.Fatalf("approve replay after claim status=%d body=%s", advancedApprove.Code, advancedApprove.Body.String())
+	}
+	thirdPairing := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id": strings.Repeat("f", 32), "pairing_verifier": pairingVerifier,
+	})
+	if thirdPairing.Code != http.StatusConflict {
+		t.Fatalf("third-device pairing status=%d body=%s", thirdPairing.Code, thirdPairing.Body.String())
 	}
 	deviceList := apiRequest(t, first.server, http.MethodGet, "/v1/devices", first.token, nil)
 	var listed struct {
@@ -460,7 +587,454 @@ func TestPairingAndRevocation(t *testing.T) {
 	}
 }
 
+func TestClaimedPairingCanBeCancelledBeforeReady(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	pairingID, joinedDeviceID, joinedToken, rollbackToken := insertClaimedPairingForTest(t, first, 0x61)
+
+	cancel := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+pairingID, first.token, nil)
+	if cancel.Code != http.StatusNoContent || cancel.Body.Len() != 0 {
+		t.Fatalf("cancel claimed pairing status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	var devices, pairings, tombstones int
+	if err := first.server.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL),
+		(SELECT COUNT(*) FROM pairings WHERE account_id = ?),
+		(SELECT COUNT(*) FROM device_rollback_tombstones
+		 WHERE account_id = ? AND device_id = ? AND pairing_id = ?)`,
+		first.accountID, first.accountID, first.accountID, joinedDeviceID, pairingID).
+		Scan(&devices, &pairings, &tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if devices != 1 || pairings != 0 || tombstones != 1 {
+		t.Fatalf("cancelled state devices=%d pairings=%d tombstones=%d", devices, pairings, tombstones)
+	}
+
+	rollbackPath := "/v1/devices/current?account_id=" + first.accountID +
+		"&device_id=" + joinedDeviceID + "&pairing_id=" + pairingID
+	rollbackReplay := apiRequest(t, first.server, http.MethodDelete, rollbackPath, rollbackToken, nil)
+	if rollbackReplay.Code != http.StatusNoContent {
+		t.Fatalf("cancel tombstone did not make joining rollback idempotent: status=%d body=%s",
+			rollbackReplay.Code, rollbackReplay.Body.String())
+	}
+	if rejected := apiRequest(t, first.server, http.MethodGet, "/v1/devices", joinedToken, nil); rejected.Code != http.StatusUnauthorized {
+		t.Fatalf("cancelled joining token remained valid: status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+	if replay := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+pairingID, first.token, nil); replay.Code != http.StatusNoContent {
+		t.Fatalf("cancel replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+
+	newPairing := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id":       strings.Repeat("e", 32),
+		"pairing_verifier": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe1}, 32)),
+	})
+	if newPairing.Code != http.StatusCreated {
+		t.Fatalf("creator could not start a replacement pairing: status=%d body=%s", newPairing.Code, newPairing.Body.String())
+	}
+}
+
+func TestCancelledPairingRetiresInvitationAndDeviceIdentity(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	retiredPairingID, retiredDeviceID, _, rollbackToken := insertClaimedPairingForTest(t, first, 0x62)
+
+	cancel := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+retiredPairingID, first.token, nil)
+	if cancel.Code != http.StatusNoContent {
+		t.Fatalf("cancel claimed pairing status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+
+	retiredCreate := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id":       retiredPairingID,
+		"pairing_verifier": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x70}, 32)),
+	})
+	if retiredCreate.Code != http.StatusConflict || !strings.Contains(retiredCreate.Body.String(), "pairing_invitation_conflict") {
+		t.Fatalf("retired pairing identity was reusable: status=%d body=%s", retiredCreate.Code, retiredCreate.Body.String())
+	}
+
+	replacementPairingID := strings.Repeat("d", 32)
+	replacementVerifier := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 32))
+	created := apiRequest(t, first.server, http.MethodPost, "/v1/pairings", first.token, map[string]any{
+		"pairing_id": replacementPairingID, "pairing_verifier": replacementVerifier,
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("replacement pairing create status=%d body=%s", created.Code, created.Body.String())
+	}
+
+	rollbackToken2 := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 32))
+	joinProof := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 32))
+	retiredJoin := apiRequest(t, first.server, http.MethodPut, "/v1/pairings/"+replacementPairingID, "", map[string]any{
+		"pairing_verifier":       replacementVerifier,
+		"device_id":              retiredDeviceID,
+		"join_proof":             joinProof,
+		"rollback_token":         rollbackToken2,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x75}, 32)),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x76}, 32)),
+	})
+	if retiredJoin.Code != http.StatusConflict || !strings.Contains(retiredJoin.Body.String(), "pairing_join_conflict") {
+		t.Fatalf("retired device identity was reusable: status=%d body=%s", retiredJoin.Code, retiredJoin.Body.String())
+	}
+
+	rollbackPath := "/v1/devices/current?account_id=" + first.accountID +
+		"&device_id=" + retiredDeviceID + "&pairing_id=" + retiredPairingID
+	if replay := apiRequest(t, first.server, http.MethodDelete, rollbackPath, rollbackToken, nil); replay.Code != http.StatusNoContent {
+		t.Fatalf("original rollback capability lost idempotency: status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	if conflict := apiRequest(t, first.server, http.MethodDelete, rollbackPath, rollbackToken2, nil); conflict.Code != http.StatusConflict ||
+		!strings.Contains(conflict.Body.String(), "device_rollback_not_safe") {
+		t.Fatalf("replacement rollback capability status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+
+	freshDeviceID := strings.Repeat("e", 32)
+	freshJoin := apiRequest(t, first.server, http.MethodPut, "/v1/pairings/"+replacementPairingID, "", map[string]any{
+		"pairing_verifier":       replacementVerifier,
+		"device_id":              freshDeviceID,
+		"join_proof":             joinProof,
+		"rollback_token":         rollbackToken2,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x75}, 32)),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x76}, 32)),
+	})
+	if freshJoin.Code != http.StatusOK {
+		t.Fatalf("fresh replacement tuple did not join: status=%d body=%s", freshJoin.Code, freshJoin.Body.String())
+	}
+}
+
+func TestClaimedPairingCancellationValidatesExistingTombstoneHash(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		tombstoneToken func(string) string
+		wantStatus     int
+		wantRemaining  int
+	}{
+		{
+			name:           "exact tuple",
+			tombstoneToken: func(token string) string { return token },
+			wantStatus:     http.StatusNoContent,
+			wantRemaining:  0,
+		},
+		{
+			name: "conflicting rollback hash",
+			tombstoneToken: func(string) string {
+				return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xf1}, 32))
+			},
+			wantStatus:    http.StatusConflict,
+			wantRemaining: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first := newTestAccount(t)
+			defer first.server.Close()
+			pairingID, deviceID, _, rollbackToken := insertClaimedPairingForTest(t, first, 0x82)
+			if _, err := first.server.db.Exec(`INSERT INTO device_rollback_tombstones(
+				account_id, device_id, pairing_id, rollback_hash) VALUES(?, ?, ?, ?)`,
+				first.accountID, deviceID, pairingID, digest(test.tombstoneToken(rollbackToken))); err != nil {
+				t.Fatal(err)
+			}
+
+			response := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+pairingID, first.token, nil)
+			if response.Code != test.wantStatus {
+				t.Fatalf("cancel status=%d body=%s", response.Code, response.Body.String())
+			}
+			if test.wantStatus == http.StatusConflict && !strings.Contains(response.Body.String(), "pairing_cancel_not_safe") {
+				t.Fatalf("conflicting tuple error=%s", response.Body.String())
+			}
+			var pairings, devices int
+			if err := first.server.db.QueryRow(`SELECT
+				(SELECT COUNT(*) FROM pairings WHERE id = ?),
+				(SELECT COUNT(*) FROM devices WHERE id = ? AND account_id = ?)`,
+				pairingID, deviceID, first.accountID).Scan(&pairings, &devices); err != nil {
+				t.Fatal(err)
+			}
+			if pairings != test.wantRemaining || devices != test.wantRemaining {
+				t.Fatalf("cancelled state pairings=%d devices=%d want=%d", pairings, devices, test.wantRemaining)
+			}
+		})
+	}
+}
+
+func TestPairingReadyAndFinalizeGatesAreFailClosedAndIdempotent(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	pairingID, _, joinedToken, _ := insertClaimedPairingForTest(t, first, 0x71)
+
+	premature := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairingID+"/finalize", first.token, nil)
+	if premature.Code != http.StatusConflict || !strings.Contains(premature.Body.String(), "pairing_not_ready_to_finalize") {
+		t.Fatalf("premature finalize status=%d body=%s", premature.Code, premature.Body.String())
+	}
+	ready := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairingID+"/ready", joinedToken, nil)
+	if ready.Code != http.StatusOK || !strings.Contains(ready.Body.String(), `"state":"ready"`) {
+		t.Fatalf("ready status=%d body=%s", ready.Code, ready.Body.String())
+	}
+	cancel := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+pairingID, first.token, nil)
+	if cancel.Code != http.StatusConflict || !strings.Contains(cancel.Body.String(), "pairing_cancel_not_safe") {
+		t.Fatalf("ready pairing was cancellable: status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	finalize := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairingID+"/finalize", first.token, nil)
+	if finalize.Code != http.StatusOK || !strings.Contains(finalize.Body.String(), `"state":"finalized"`) {
+		t.Fatalf("finalize status=%d body=%s", finalize.Code, finalize.Body.String())
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		replayedFinalize := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairingID+"/finalize", first.token, nil)
+		if replayedFinalize.Code != http.StatusOK || !strings.Contains(replayedFinalize.Body.String(), `"state":"finalized"`) {
+			t.Fatalf("finalize replay %d status=%d body=%s", attempt, replayedFinalize.Code, replayedFinalize.Body.String())
+		}
+		replayedReady := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairingID+"/ready", joinedToken, nil)
+		if replayedReady.Code != http.StatusOK || !strings.Contains(replayedReady.Body.String(), `"state":"finalized"`) {
+			t.Fatalf("ready replay %d status=%d body=%s", attempt, replayedReady.Code, replayedReady.Body.String())
+		}
+	}
+	if list := apiRequest(t, first.server, http.MethodGet, "/v1/devices", joinedToken, nil); list.Code != http.StatusOK {
+		t.Fatalf("finalized joining token did not gain normal API access: status=%d body=%s", list.Code, list.Body.String())
+	}
+}
+
+func TestPairingReadyWindowExpiryRequiresSafeCancellation(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	pairingID, joinedDeviceID, joinedToken, rollbackToken := insertClaimedPairingForTest(t, first, 0x81)
+	if _, err := first.server.db.Exec(`UPDATE pairings SET ready_expires_at = ? WHERE id = ?`,
+		time.Now().Add(-time.Second).UnixMilli(), pairingID); err != nil {
+		t.Fatal(err)
+	}
+	ready := apiRequest(t, first.server, http.MethodPost, "/v1/pairings/"+pairingID+"/ready", joinedToken, nil)
+	if ready.Code != http.StatusConflict || !strings.Contains(ready.Body.String(), "pairing_ready_window_expired") {
+		t.Fatalf("expired ready status=%d body=%s", ready.Code, ready.Body.String())
+	}
+	cancel := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+pairingID, first.token, nil)
+	if cancel.Code != http.StatusNoContent {
+		t.Fatalf("creator could not cancel expired unready pairing: status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	rollbackPath := "/v1/devices/current?account_id=" + first.accountID +
+		"&device_id=" + joinedDeviceID + "&pairing_id=" + pairingID
+	if replay := apiRequest(t, first.server, http.MethodDelete, rollbackPath, rollbackToken, nil); replay.Code != http.StatusNoContent {
+		t.Fatalf("expired pairing rollback replay status=%d body=%s", replay.Code, replay.Body.String())
+	}
+}
+
+func TestGetPairingDerivesExpiryFromCurrentStage(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name          string
+		state         string
+		initialExpiry time.Time
+		claimExpiry   time.Time
+		readyExpiry   time.Time
+		readyAt       *time.Time
+		finalizedAt   *time.Time
+		wantState     string
+		wantExpired   bool
+	}{
+		{name: "created live", state: "created", initialExpiry: now.Add(time.Minute), wantState: "created"},
+		{name: "created expired", state: "created", initialExpiry: now.Add(-time.Minute), wantState: "created", wantExpired: true},
+		{name: "joined live", state: "joined", initialExpiry: now.Add(time.Minute), wantState: "joined"},
+		{name: "joined expired", state: "joined", initialExpiry: now.Add(-time.Minute), wantState: "joined", wantExpired: true},
+		{
+			name: "approved remains live after initial invitation window", state: "approved",
+			initialExpiry: now.Add(-time.Minute), claimExpiry: now.Add(time.Hour), wantState: "approved",
+		},
+		{
+			name: "approved claim window expired", state: "approved",
+			initialExpiry: now.Add(time.Hour), claimExpiry: now.Add(-time.Minute), wantState: "approved", wantExpired: true,
+		},
+		{
+			name: "claimed remains live after earlier windows", state: "claimed",
+			initialExpiry: now.Add(-2 * time.Hour), claimExpiry: now.Add(-time.Hour), readyExpiry: now.Add(time.Hour), wantState: "claimed",
+		},
+		{
+			name: "claimed ready window expired", state: "claimed",
+			initialExpiry: now.Add(time.Hour), claimExpiry: now.Add(time.Hour), readyExpiry: now.Add(-time.Minute), wantState: "claimed", wantExpired: true,
+		},
+		{
+			name: "ready is not expired by earlier deadline", state: "claimed",
+			initialExpiry: now.Add(-3 * time.Hour), claimExpiry: now.Add(-2 * time.Hour), readyExpiry: now.Add(-time.Hour),
+			readyAt: timePointer(now.Add(-90 * time.Minute)), wantState: "ready",
+		},
+		{
+			name: "finalized is not expired by earlier deadline", state: "claimed",
+			initialExpiry: now.Add(-3 * time.Hour), claimExpiry: now.Add(-2 * time.Hour), readyExpiry: now.Add(-time.Hour),
+			readyAt: timePointer(now.Add(-90 * time.Minute)), finalizedAt: timePointer(now.Add(-30 * time.Minute)), wantState: "finalized",
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			creator := newTestAccount(t)
+			defer creator.server.Close()
+			creator.server.now = func() time.Time { return now }
+			pairingID := hex.EncodeToString(bytes.Repeat([]byte{byte(0x91 + index)}, 16))
+			var readyAt, finalizedAt any
+			if test.readyAt != nil {
+				readyAt = test.readyAt.UnixMilli()
+			}
+			if test.finalizedAt != nil {
+				finalizedAt = test.finalizedAt.UnixMilli()
+			}
+			if _, err := creator.server.db.Exec(`INSERT INTO pairings(
+				id, account_id, creator_device_id, secret_hash, state, expires_at,
+				claim_expires_at, ready_at, ready_expires_at, finalized_at, created_at)
+				VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, pairingID, creator.accountID,
+				creator.deviceID, bytes.Repeat([]byte{0x44}, 32), test.state, test.initialExpiry.UnixMilli(),
+				test.claimExpiry.UnixMilli(), readyAt, test.readyExpiry.UnixMilli(), finalizedAt, now.Add(-4*time.Hour).UnixMilli()); err != nil {
+				t.Fatal(err)
+			}
+			response := apiRequest(t, creator.server, http.MethodGet, "/v1/pairings/"+pairingID, creator.token, nil)
+			var status struct {
+				State   string `json:"state"`
+				Expired bool   `json:"expired"`
+			}
+			decodeResponse(t, response, &status)
+			if response.Code != http.StatusOK || status.State != test.wantState || status.Expired != test.wantExpired {
+				t.Fatalf("status=%d state=%q expired=%v body=%s", response.Code, status.State, status.Expired, response.Body.String())
+			}
+		})
+	}
+}
+
+func timePointer(value time.Time) *time.Time {
+	return &value
+}
+
+func TestPairingCancellationRefusesAnyJoiningDeviceWrite(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	pairingID, joinedDeviceID, _, _ := insertClaimedPairingForTest(t, first, 0x89)
+	if _, err := first.server.db.Exec(`INSERT INTO keyrings(account_id, epoch, ciphertext, writer_device_id, created_at)
+		VALUES(?, 2, ?, ?, ?)`, first.accountID, bytes.Repeat([]byte{0xa1}, 49), joinedDeviceID,
+		time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	cancel := apiRequest(t, first.server, http.MethodDelete, "/v1/pairings/"+pairingID, first.token, nil)
+	if cancel.Code != http.StatusConflict || !strings.Contains(cancel.Body.String(), "pairing_cancel_not_safe") {
+		t.Fatalf("unsafe pairing cancellation status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	var devices, pairings, tombstones int
+	if err := first.server.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM devices WHERE id = ? AND account_id = ?),
+		(SELECT COUNT(*) FROM pairings WHERE id = ? AND account_id = ?),
+		(SELECT COUNT(*) FROM device_rollback_tombstones
+		 WHERE account_id = ? AND device_id = ? AND pairing_id = ?)`,
+		joinedDeviceID, first.accountID, pairingID, first.accountID,
+		first.accountID, joinedDeviceID, pairingID).Scan(&devices, &pairings, &tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if devices != 1 || pairings != 1 || tombstones != 0 {
+		t.Fatalf("unsafe cancellation mutated state: devices=%d pairings=%d tombstones=%d",
+			devices, pairings, tombstones)
+	}
+}
+
+func TestConcurrentPairingReservationsLeaveExactlyOneLiveInvitation(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	const attempts = 8
+	type result struct {
+		status int
+		body   string
+	}
+	results := make(chan result, attempts)
+	for index := 0; index < attempts; index++ {
+		go func(index int) {
+			body, _ := json.Marshal(map[string]any{
+				"pairing_id":       fmt.Sprintf("%032x", index+1),
+				"pairing_verifier": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(0x91 + index)}, 32)),
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/pairings", bytes.NewReader(body))
+			request.RemoteAddr = "127.0.0.1:12345"
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+first.token)
+			response := httptest.NewRecorder()
+			first.server.ServeHTTP(response, request)
+			results <- result{status: response.Code, body: response.Body.String()}
+		}(index)
+	}
+	created, conflicts := 0, 0
+	for index := 0; index < attempts; index++ {
+		outcome := <-results
+		switch outcome.status {
+		case http.StatusCreated:
+			created++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("concurrent create returned status=%d body=%s", outcome.status, outcome.body)
+		}
+	}
+	var live int
+	if err := first.server.db.QueryRow(`SELECT COUNT(*) FROM pairings
+		WHERE account_id = ? AND state IN ('created', 'joined', 'approved')`, first.accountID).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || conflicts != attempts-1 || live != 1 {
+		t.Fatalf("reservation race created=%d conflicts=%d live=%d", created, conflicts, live)
+	}
+}
+
+func insertClaimedPairingForTest(t *testing.T, first testDevice, marker byte) (string, string, string, string) {
+	t.Helper()
+	pairingID := hex.EncodeToString(bytes.Repeat([]byte{marker}, 16))
+	deviceID := hex.EncodeToString(bytes.Repeat([]byte{marker + 1}, 16))
+	tokenBytes := bytes.Repeat([]byte{marker + 2}, 32)
+	rollbackBytes := bytes.Repeat([]byte{marker + 3}, 32)
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	rollbackToken := base64.RawURLEncoding.EncodeToString(rollbackBytes)
+	now := time.Now()
+	tx, err := first.server.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO devices(id, account_id, name_ciphertext, token_hash,
+		ed25519_public_key, x25519_public_key, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`, deviceID, first.accountID, bytes.Repeat([]byte{marker + 4}, 32),
+		digest(token), bytes.Repeat([]byte{marker + 5}, 32), bytes.Repeat([]byte{marker + 6}, 32), now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO pairings(id, account_id, creator_device_id, secret_hash, state,
+		pending_name_ciphertext, pending_ed25519_public_key, pending_x25519_public_key,
+		pending_join_proof, rollback_hash, new_device_id, encrypted_keyring, expires_at,
+		claim_expires_at, claimed_at, ready_expires_at, created_at)
+		VALUES(?, ?, ?, ?, 'claimed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, pairingID,
+		first.accountID, first.deviceID, bytes.Repeat([]byte{marker + 7}, 32), bytes.Repeat([]byte{marker + 4}, 32),
+		bytes.Repeat([]byte{marker + 5}, 32), bytes.Repeat([]byte{marker + 6}, 32), bytes.Repeat([]byte{marker + 8}, 32),
+		digest(rollbackToken), deviceID, bytes.Repeat([]byte{marker + 9}, 49), now.Add(10*time.Minute).UnixMilli(),
+		now.Add(24*time.Hour).UnixMilli(), now.UnixMilli(), now.Add(24*time.Hour).UnixMilli(), now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return pairingID, deviceID, token, rollbackToken
+}
+
+func TestGeneralRevocationDisabledInTwoDevicePreview(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	response := apiRequest(t, first.server, http.MethodDelete, "/v1/devices/"+strings.Repeat("f", 32), first.token, nil)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "device_revocation_not_available_in_two_device_preview") {
+		t.Fatalf("revocation preview gate status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRecoveryDisabledInTwoDevicePreview(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	credentials := map[string]any{
+		"device_id":               strings.Repeat("e", 32),
+		"device_token":            base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe1}, 32)),
+		"recovery_authentication": first.recoveryAuthentication,
+		"device_name_ciphertext":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe2}, 32)),
+		"ed25519_public_key":      base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe3}, 32)),
+		"x25519_public_key":       base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe4}, 32)),
+	}
+	response := apiRequest(t, first.server, http.MethodPost, "/v1/accounts/"+first.accountID+"/recover", "", credentials)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "recovery_not_available_in_two_device_preview") {
+		t.Fatalf("recovery preview gate status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestRecoveryAndImmutableKeyringEpoch(t *testing.T) {
+	twoDeviceRecoveryEnabled = true
+	t.Cleanup(func() { twoDeviceRecoveryEnabled = false })
 	first := newTestAccount(t)
 	defer first.server.Close()
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
@@ -468,6 +1042,8 @@ func TestRecoveryAndImmutableKeyringEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	recoverResponse := apiRequest(t, first.server, http.MethodPost, "/v1/accounts/"+first.accountID+"/recover", "", map[string]any{
+		"device_id":               strings.Repeat("9", 32),
+		"device_token":            base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x92}, 32)),
 		"recovery_authentication": first.recoveryAuthentication,
 		"device_name_ciphertext":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x32}, 32)),
 		"ed25519_public_key":      base64.RawURLEncoding.EncodeToString(publicKey),
@@ -537,6 +1113,14 @@ func TestSealedBoxWireLimitMatchesProtocol(t *testing.T) {
 }
 
 func newTestAccount(t *testing.T) testDevice {
+	return newTestAccountState(t, true)
+}
+
+func newTestUnsealedAccount(t *testing.T) testDevice {
+	return newTestAccountState(t, false)
+}
+
+func newTestAccountState(t *testing.T, seal bool) testDevice {
 	t.Helper()
 	databasePath := filepath.Join(t.TempDir(), "sync.db")
 	logs := &bytes.Buffer{}
@@ -550,7 +1134,24 @@ func newTestAccount(t *testing.T) testDevice {
 	}
 	xKey := bytes.Repeat([]byte{0x21}, 32)
 	recoveryAuthentication := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x91}, 32))
+	randomID := make([]byte, 16)
+	randomDeviceID := make([]byte, 16)
+	randomDeviceToken := make([]byte, 32)
+	randomRollbackToken := make([]byte, 32)
+	for _, value := range [][]byte{randomID, randomDeviceID, randomDeviceToken, randomRollbackToken} {
+		if _, err := rand.Read(value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accountID := hex.EncodeToString(randomID)
+	deviceID := hex.EncodeToString(randomDeviceID)
+	deviceToken := base64.RawURLEncoding.EncodeToString(randomDeviceToken)
+	rollbackToken := base64.RawURLEncoding.EncodeToString(randomRollbackToken)
 	response := apiRequest(t, application, http.MethodPost, "/v1/accounts", "", map[string]any{
+		"account_id":              accountID,
+		"device_id":               deviceID,
+		"device_token":            deviceToken,
+		"rollback_token":          rollbackToken,
 		"recovery_authentication": recoveryAuthentication,
 		"device_name_ciphertext":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x30}, 32)),
 		"ed25519_public_key":      base64.RawURLEncoding.EncodeToString(publicKey),
@@ -570,9 +1171,703 @@ func newTestAccount(t *testing.T) testDevice {
 		Token     string `json:"device_token"`
 	}
 	decodeResponse(t, response, &account)
+	if seal {
+		if _, err := application.db.Exec(`UPDATE accounts SET provisioning_sealed_at = ?,
+			provisioning_rollback_hash = NULL, provisioning_expires_at = NULL WHERE id = ?`,
+			time.Now().UnixMilli(), account.AccountID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return testDevice{
-		accountID: account.AccountID, deviceID: account.DeviceID, token: account.Token, recoveryAuthentication: recoveryAuthentication,
-		publicKey: publicKey, privateKey: privateKey, x25519Key: xKey, databasePath: databasePath, server: application, logBuffer: logs,
+		accountID: account.AccountID, deviceID: account.DeviceID, token: account.Token, rollbackToken: rollbackToken,
+		recoveryAuthentication: recoveryAuthentication,
+		publicKey:              publicKey, privateKey: privateKey, x25519Key: xKey, databasePath: databasePath, server: application, logBuffer: logs,
+	}
+}
+
+func TestAccountRollbackDeletesOnlyUnusedSoleDeviceAccount(t *testing.T) {
+	device := newTestUnsealedAccount(t)
+	defer device.server.Close()
+	// Provisioning writes the recovery keyring before committing the local
+	// Keychain/DPAPI record.  That keyring must therefore not prevent rollback.
+	if _, err := device.server.db.Exec(`INSERT INTO keyrings(account_id, epoch, ciphertext, writer_device_id, created_at)
+		VALUES(?, 1, ?, ?, ?)`, device.accountID, bytes.Repeat([]byte{0x42}, 49), device.deviceID, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	response := apiRequest(t, device.server, http.MethodDelete, "/v1/accounts/"+device.accountID, device.rollbackToken, nil)
+	if response.Code != http.StatusNoContent || response.Body.Len() != 0 {
+		t.Fatalf("rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+	var accounts, devices, keyrings int
+	if err := device.server.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM accounts),
+		(SELECT COUNT(*) FROM devices),
+		(SELECT COUNT(*) FROM keyrings)`).Scan(&accounts, &devices, &keyrings); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 0 || devices != 0 || keyrings != 0 {
+		t.Fatalf("rollback did not cascade: accounts=%d devices=%d keyrings=%d", accounts, devices, keyrings)
+	}
+	replayed := apiRequest(t, device.server, http.MethodDelete, "/v1/accounts/"+device.accountID, device.rollbackToken, nil)
+	if replayed.Code != http.StatusNoContent {
+		t.Fatalf("idempotent account rollback replay status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+	wrong := apiRequest(t, device.server, http.MethodDelete, "/v1/accounts/"+device.accountID,
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xaa}, 32)), nil)
+	if wrong.Code == http.StatusNoContent {
+		t.Fatal("wrong account rollback capability was accepted")
+	}
+}
+
+func TestExpiredProvisioningGCCreatesIdempotentRollbackTombstone(t *testing.T) {
+	device := newTestUnsealedAccount(t)
+	defer device.server.Close()
+	if _, err := device.server.db.Exec(`UPDATE accounts SET provisioning_expires_at = ? WHERE id = ?`,
+		time.Now().Add(-time.Second).UnixMilli(), device.accountID); err != nil {
+		t.Fatal(err)
+	}
+	if err := device.server.cleanupExpiredProvisioning(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	response := apiRequest(t, device.server, http.MethodDelete, "/v1/accounts/"+device.accountID, device.rollbackToken, nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expired provisioning rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+	// A delayed create replay must not resurrect the same remote incarnation.
+	response = apiRequest(t, device.server, http.MethodPost, "/v1/accounts", "", map[string]any{
+		"account_id": device.accountID, "device_id": device.deviceID, "device_token": device.token,
+		"rollback_token": device.rollbackToken, "recovery_authentication": device.recoveryAuthentication,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x30}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(device.publicKey),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(device.x25519Key),
+	})
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "provisioning_identity_retired") {
+		t.Fatalf("retired provisioning identity status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAccountProvisioningIsIdempotentAndNormalBearerCannotRollback(t *testing.T) {
+	device := newTestUnsealedAccount(t)
+	defer device.server.Close()
+	var name, edKey, xKey []byte
+	if err := device.server.db.QueryRow(`SELECT name_ciphertext, ed25519_public_key, x25519_public_key
+		FROM devices WHERE id = ?`, device.deviceID).Scan(&name, &edKey, &xKey); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{
+		"account_id": device.accountID, "device_id": device.deviceID,
+		"device_token": device.token, "rollback_token": device.rollbackToken,
+		"recovery_authentication": device.recoveryAuthentication,
+		"device_name_ciphertext":  base64.RawURLEncoding.EncodeToString(name),
+		"ed25519_public_key":      base64.RawURLEncoding.EncodeToString(edKey),
+		"x25519_public_key":       base64.RawURLEncoding.EncodeToString(xKey),
+	}
+	replayed := apiRequest(t, device.server, http.MethodPost, "/v1/accounts", "", payload)
+	if replayed.Code != http.StatusCreated {
+		t.Fatalf("idempotent provisioning replay status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+	var accounts, devices int
+	if err := device.server.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM accounts), (SELECT COUNT(*) FROM devices)`).Scan(&accounts, &devices); err != nil {
+		t.Fatal(err)
+	}
+	if accounts != 1 || devices != 1 {
+		t.Fatalf("provisioning replay duplicated state: accounts=%d devices=%d", accounts, devices)
+	}
+	wrongCapability := apiRequest(t, device.server, http.MethodDelete, "/v1/accounts/"+device.accountID, device.token, nil)
+	if wrongCapability.Code != http.StatusConflict {
+		t.Fatalf("normal device bearer deleted account: status=%d body=%s", wrongCapability.Code, wrongCapability.Body.String())
+	}
+	payload["device_token"] = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xee}, 32))
+	conflict := apiRequest(t, device.server, http.MethodPost, "/v1/accounts", "", payload)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "provisioning_identity_conflict") {
+		t.Fatalf("conflicting provisioning replay status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+}
+
+func TestUnsealedProvisioningAcceptsOnlyEpochOneKeyring(t *testing.T) {
+	device := newTestUnsealedAccount(t)
+	defer device.server.Close()
+	response := apiRequest(t, device.server, http.MethodPut, "/v1/keyring", device.token, map[string]any{
+		"epoch": 2, "ciphertext": sealedBoxWireGolden,
+	})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_keyring") {
+		t.Fatalf("unsealed epoch-two keyring status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = apiRequest(t, device.server, http.MethodPut, "/v1/keyring", device.token, map[string]any{
+		"epoch": 1, "ciphertext": sealedBoxWireGolden,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("unsealed epoch-one keyring status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCurrentDeviceRollbackRemovesOnlyUnusedPairedDevice(t *testing.T) {
+	first := newTestAccount(t)
+	defer first.server.Close()
+	secondID := strings.Repeat("e", 32)
+	secondToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe1}, 32))
+	rollbackToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe2}, 32))
+	pairingID := strings.Repeat("d", 32)
+	now := time.Now().UnixMilli()
+	if _, err := first.server.db.Exec(`INSERT INTO devices(id, account_id, name_ciphertext, token_hash,
+		ed25519_public_key, x25519_public_key, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		secondID, first.accountID, bytes.Repeat([]byte{0x51}, 32), digest(secondToken),
+		bytes.Repeat([]byte{0x52}, 32), bytes.Repeat([]byte{0x53}, 32), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.server.db.Exec(`INSERT INTO pairings(id, account_id, creator_device_id,
+		secret_hash, state, pending_name_ciphertext, pending_ed25519_public_key,
+		pending_x25519_public_key, new_device_id, encrypted_keyring, rollback_hash, expires_at, claimed_at, created_at)
+		VALUES(?, ?, ?, ?, 'claimed', ?, ?, ?, ?, ?, ?, ?, ?, ?)`, pairingID, first.accountID,
+		first.deviceID, bytes.Repeat([]byte{0x54}, 32), bytes.Repeat([]byte{0x55}, 32),
+		bytes.Repeat([]byte{0x56}, 32), bytes.Repeat([]byte{0x57}, 32), secondID,
+		bytes.Repeat([]byte{0x58}, 49), digest(rollbackToken), now+60000, now, now); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/devices/current?account_id=" + first.accountID + "&device_id=" + secondID + "&pairing_id=" + pairingID
+	response := apiRequest(t, first.server, http.MethodDelete, path, rollbackToken, nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("paired device rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+	var remainingDevices, remainingPairings int
+	if err := first.server.db.QueryRow(`SELECT (SELECT COUNT(*) FROM devices),
+		(SELECT COUNT(*) FROM pairings)`).Scan(&remainingDevices, &remainingPairings); err != nil {
+		t.Fatal(err)
+	}
+	if remainingDevices != 1 || remainingPairings != 0 {
+		t.Fatalf("paired rollback changed wrong state: devices=%d pairings=%d", remainingDevices, remainingPairings)
+	}
+	if current := apiRequest(t, first.server, http.MethodGet, "/v1/devices", first.token, nil); current.Code != http.StatusOK {
+		t.Fatalf("working peer was affected: status=%d body=%s", current.Code, current.Body.String())
+	}
+	replayed := apiRequest(t, first.server, http.MethodDelete, path, rollbackToken, nil)
+	if replayed.Code != http.StatusNoContent {
+		t.Fatalf("idempotent device rollback replay status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+	wrong := apiRequest(t, first.server, http.MethodDelete, path,
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xe3}, 32)), nil)
+	if wrong.Code == http.StatusNoContent {
+		t.Fatal("wrong paired-device rollback capability was accepted")
+	}
+}
+
+type rollbackPairingFixture struct {
+	creator      testDevice
+	pairingID    string
+	deviceID     string
+	verifier     string
+	rollback     string
+	deviceToken  string
+	joinPayload  map[string]any
+	claimPayload map[string]any
+}
+
+func newRollbackPairingFixture(t *testing.T, marker byte, stage string) rollbackPairingFixture {
+	t.Helper()
+	fixture := rollbackPairingFixture{
+		creator:     newTestAccount(t),
+		pairingID:   hex.EncodeToString(bytes.Repeat([]byte{marker}, 16)),
+		deviceID:    hex.EncodeToString(bytes.Repeat([]byte{marker + 1}, 16)),
+		verifier:    base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{marker + 2}, 32)),
+		rollback:    base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{marker + 3}, 32)),
+		deviceToken: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{marker + 4}, 32)),
+	}
+	created := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings", fixture.creator.token, map[string]any{
+		"pairing_id": fixture.pairingID, "pairing_verifier": fixture.verifier,
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create rollback fixture status=%d body=%s", created.Code, created.Body.String())
+	}
+	if stage == "created" {
+		return fixture
+	}
+
+	joiningPublicKey, joiningPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joiningX25519Key := bytes.Repeat([]byte{marker + 5}, 32)
+	fixture.joinPayload = map[string]any{
+		"pairing_verifier":       fixture.verifier,
+		"device_id":              fixture.deviceID,
+		"join_proof":             base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{marker + 6}, 32)),
+		"rollback_token":         fixture.rollback,
+		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{marker + 7}, 32)),
+		"ed25519_public_key":     base64.RawURLEncoding.EncodeToString(joiningPublicKey),
+		"x25519_public_key":      base64.RawURLEncoding.EncodeToString(joiningX25519Key),
+	}
+	joined := apiRequest(t, fixture.creator.server, http.MethodPut, "/v1/pairings/"+fixture.pairingID, "", fixture.joinPayload)
+	if joined.Code != http.StatusOK {
+		t.Fatalf("join rollback fixture status=%d body=%s", joined.Code, joined.Body.String())
+	}
+	if stage == "joined" {
+		return fixture
+	}
+
+	approved := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings/"+fixture.pairingID+"/approve",
+		fixture.creator.token, map[string]any{"encrypted_keyring": sealedBoxWireGolden})
+	if approved.Code != http.StatusOK {
+		t.Fatalf("approve rollback fixture status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	if stage == "approved" {
+		return fixture
+	}
+
+	claimMessage, err := canonicalPairingClaimMessage(fixture.pairingID, fixture.creator.accountID,
+		fixture.creator.deviceID, fixture.deviceID, fixture.creator.publicKey, joiningPublicKey,
+		fixture.creator.x25519Key, joiningX25519Key, fixture.deviceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.claimPayload = map[string]any{
+		"pairing_verifier": fixture.verifier,
+		"device_token":     fixture.deviceToken,
+		"claim_proof":      base64.RawURLEncoding.EncodeToString(ed25519.Sign(joiningPrivateKey, claimMessage)),
+	}
+	claimed := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings/"+fixture.pairingID+"/claim", "", fixture.claimPayload)
+	if claimed.Code != http.StatusCreated {
+		t.Fatalf("claim rollback fixture status=%d body=%s", claimed.Code, claimed.Body.String())
+	}
+	if stage == "claimed" {
+		return fixture
+	}
+
+	ready := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings/"+fixture.pairingID+"/ready",
+		fixture.deviceToken, nil)
+	if ready.Code != http.StatusOK {
+		t.Fatalf("ready rollback fixture status=%d body=%s", ready.Code, ready.Body.String())
+	}
+	if stage == "ready" {
+		return fixture
+	}
+
+	finalized := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings/"+fixture.pairingID+"/finalize",
+		fixture.creator.token, nil)
+	if finalized.Code != http.StatusOK {
+		t.Fatalf("finalize rollback fixture status=%d body=%s", finalized.Code, finalized.Body.String())
+	}
+	if stage != "finalized" {
+		t.Fatalf("unknown rollback fixture stage %q", stage)
+	}
+	return fixture
+}
+
+func (fixture rollbackPairingFixture) rollbackPath() string {
+	return "/v1/devices/current?account_id=" + fixture.creator.accountID +
+		"&device_id=" + fixture.deviceID + "&pairing_id=" + fixture.pairingID
+}
+
+type rollbackDatabaseSnapshot struct {
+	Pairings      int
+	Devices       int
+	Tombstones    int
+	State         string
+	ReadyAt       int64
+	FinalizedAt   int64
+	RollbackHash  string
+	JoiningDevice string
+}
+
+func snapshotRollbackDatabase(t *testing.T, fixture rollbackPairingFixture) rollbackDatabaseSnapshot {
+	t.Helper()
+	var snapshot rollbackDatabaseSnapshot
+	err := fixture.creator.server.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM pairings WHERE id = ? AND account_id = ?),
+		(SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL),
+		(SELECT COUNT(*) FROM device_rollback_tombstones
+		 WHERE account_id = ? AND device_id = ? AND pairing_id = ?),
+		COALESCE((SELECT state FROM pairings WHERE id = ?), ''),
+		COALESCE((SELECT ready_at FROM pairings WHERE id = ?), 0),
+		COALESCE((SELECT finalized_at FROM pairings WHERE id = ?), 0),
+		COALESCE((SELECT hex(rollback_hash) FROM pairings WHERE id = ?), ''),
+		COALESCE((SELECT new_device_id FROM pairings WHERE id = ?), '')`,
+		fixture.pairingID, fixture.creator.accountID, fixture.creator.accountID,
+		fixture.creator.accountID, fixture.deviceID, fixture.pairingID,
+		fixture.pairingID, fixture.pairingID, fixture.pairingID, fixture.pairingID, fixture.pairingID).
+		Scan(&snapshot.Pairings, &snapshot.Devices, &snapshot.Tombstones, &snapshot.State,
+			&snapshot.ReadyAt, &snapshot.FinalizedAt, &snapshot.RollbackHash, &snapshot.JoiningDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func TestRollbackCapabilityLifecycleStages(t *testing.T) {
+	tests := []struct {
+		stage        string
+		wantStatus   int
+		wantCode     string
+		wantDevices  int
+		wantPairings int
+		wantTombs    int
+	}{
+		{stage: "created", wantStatus: http.StatusConflict, wantCode: "device_rollback_not_safe", wantDevices: 1, wantPairings: 1},
+		{stage: "joined", wantStatus: http.StatusNoContent, wantDevices: 1, wantTombs: 1},
+		{stage: "approved", wantStatus: http.StatusNoContent, wantDevices: 1, wantTombs: 1},
+		{stage: "claimed", wantStatus: http.StatusNoContent, wantDevices: 1, wantTombs: 1},
+		{stage: "ready", wantStatus: http.StatusConflict, wantCode: "device_rollback_after_ready", wantDevices: 2, wantPairings: 1},
+		{stage: "finalized", wantStatus: http.StatusConflict, wantCode: "device_rollback_after_ready", wantDevices: 2, wantPairings: 1},
+	}
+	for index, test := range tests {
+		t.Run(test.stage, func(t *testing.T) {
+			fixture := newRollbackPairingFixture(t, byte(0x30+index*8), test.stage)
+			defer fixture.creator.server.Close()
+			before := snapshotRollbackDatabase(t, fixture)
+			response := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil)
+			if response.Code != test.wantStatus || (test.wantCode != "" && !strings.Contains(response.Body.String(), test.wantCode)) {
+				t.Fatalf("%s rollback status=%d body=%s", test.stage, response.Code, response.Body.String())
+			}
+			after := snapshotRollbackDatabase(t, fixture)
+			if after.Devices != test.wantDevices || after.Pairings != test.wantPairings || after.Tombstones != test.wantTombs {
+				t.Fatalf("%s rollback state=%+v", test.stage, after)
+			}
+			if test.wantStatus != http.StatusNoContent && before != after {
+				t.Fatalf("rejected %s rollback mutated state: before=%+v after=%+v", test.stage, before, after)
+			}
+			if test.wantStatus == http.StatusNoContent {
+				replay := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil)
+				if replay.Code != http.StatusNoContent || snapshotRollbackDatabase(t, fixture) != after {
+					t.Fatalf("%s DELETE response-loss replay status=%d body=%s", test.stage, replay.Code, replay.Body.String())
+				}
+				wrong := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(),
+					base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xfe}, 32)), nil)
+				if wrong.Code != http.StatusConflict || !strings.Contains(wrong.Body.String(), "device_rollback_not_safe") ||
+					snapshotRollbackDatabase(t, fixture) != after {
+					t.Fatalf("%s conflicting tombstone capability status=%d body=%s", test.stage, wrong.Code, wrong.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestReadyAndFinalizedRollbackRejectEvenWithExactTombstone(t *testing.T) {
+	for index, stage := range []string{"ready", "finalized"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newRollbackPairingFixture(t, byte(0x64+index*8), stage)
+			defer fixture.creator.server.Close()
+			if _, err := fixture.creator.server.db.Exec(`INSERT INTO device_rollback_tombstones(
+				account_id, device_id, pairing_id, rollback_hash) VALUES(?, ?, ?, ?)`,
+				fixture.creator.accountID, fixture.deviceID, fixture.pairingID, digest(fixture.rollback)); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotRollbackDatabase(t, fixture)
+			response := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil)
+			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "device_rollback_after_ready") {
+				t.Fatalf("%s rollback status=%d body=%s", stage, response.Code, response.Body.String())
+			}
+			if after := snapshotRollbackDatabase(t, fixture); after != before {
+				t.Fatalf("%s rollback with exact tombstone mutated state: before=%+v after=%+v", stage, before, after)
+			}
+		})
+	}
+}
+
+func TestPreclaimRollbackRequiresExactTupleAndCapability(t *testing.T) {
+	fixture := newRollbackPairingFixture(t, 0x75, "joined")
+	defer fixture.creator.server.Close()
+	before := snapshotRollbackDatabase(t, fixture)
+	wrongToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xf1}, 32))
+	wrongAccount := strings.Repeat("a", 32)
+	if wrongAccount == fixture.creator.accountID {
+		wrongAccount = strings.Repeat("b", 32)
+	}
+	tests := []struct {
+		name  string
+		path  string
+		token string
+		code  int
+	}{
+		{name: "wrong capability", path: fixture.rollbackPath(), token: wrongToken, code: http.StatusConflict},
+		{name: "wrong account", path: "/v1/devices/current?account_id=" + wrongAccount + "&device_id=" + fixture.deviceID + "&pairing_id=" + fixture.pairingID, token: fixture.rollback, code: http.StatusConflict},
+		{name: "wrong device", path: "/v1/devices/current?account_id=" + fixture.creator.accountID + "&device_id=" + strings.Repeat("c", 32) + "&pairing_id=" + fixture.pairingID, token: fixture.rollback, code: http.StatusConflict},
+		{name: "wrong pairing", path: "/v1/devices/current?account_id=" + fixture.creator.accountID + "&device_id=" + fixture.deviceID + "&pairing_id=" + strings.Repeat("d", 32), token: fixture.rollback, code: http.StatusConflict},
+		{name: "missing row", path: "/v1/devices/current?account_id=" + fixture.creator.accountID + "&device_id=" + strings.Repeat("e", 32) + "&pairing_id=" + strings.Repeat("f", 32), token: fixture.rollback, code: http.StatusConflict},
+		{name: "malformed capability", path: fixture.rollbackPath(), token: "not-canonical", code: http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := apiRequest(t, fixture.creator.server, http.MethodDelete, test.path, test.token, nil)
+			if response.Code != test.code || snapshotRollbackDatabase(t, fixture) != before {
+				t.Fatalf("status=%d body=%s before=%+v after=%+v", response.Code, response.Body.String(),
+					before, snapshotRollbackDatabase(t, fixture))
+			}
+		})
+	}
+}
+
+func TestCreatorCancellationRetiresEveryJoinedTuple(t *testing.T) {
+	for index, stage := range []string{"created", "joined", "approved", "claimed"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newRollbackPairingFixture(t, byte(0x90+index*8), stage)
+			defer fixture.creator.server.Close()
+			cancelled := apiRequest(t, fixture.creator.server, http.MethodDelete, "/v1/pairings/"+fixture.pairingID,
+				fixture.creator.token, nil)
+			if cancelled.Code != http.StatusNoContent {
+				t.Fatalf("cancel %s status=%d body=%s", stage, cancelled.Code, cancelled.Body.String())
+			}
+			after := snapshotRollbackDatabase(t, fixture)
+			wantTombstone := 1
+			if stage == "created" {
+				wantTombstone = 0
+			}
+			if after.Pairings != 0 || after.Devices != 1 || after.Tombstones != wantTombstone {
+				t.Fatalf("cancel %s state=%+v", stage, after)
+			}
+			rollbackReplay := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil)
+			if stage == "created" {
+				if rollbackReplay.Code != http.StatusConflict {
+					t.Fatalf("created cancellation authenticated a nonexistent tuple: status=%d body=%s", rollbackReplay.Code, rollbackReplay.Body.String())
+				}
+				reused := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings", fixture.creator.token, map[string]any{
+					"pairing_id": fixture.pairingID, "pairing_verifier": fixture.verifier,
+				})
+				if reused.Code != http.StatusCreated {
+					t.Fatalf("untouched created invitation was unnecessarily retired: status=%d body=%s", reused.Code, reused.Body.String())
+				}
+			} else if rollbackReplay.Code != http.StatusNoContent {
+				t.Fatalf("%s creator-cancel response-loss rollback status=%d body=%s", stage, rollbackReplay.Code, rollbackReplay.Body.String())
+			} else {
+				retiredInvitation := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings", fixture.creator.token, map[string]any{
+					"pairing_id": fixture.pairingID, "pairing_verifier": fixture.verifier,
+				})
+				if retiredInvitation.Code != http.StatusConflict || !strings.Contains(retiredInvitation.Body.String(), "pairing_invitation_conflict") {
+					t.Fatalf("cancelled %s pairing identity was reusable: status=%d body=%s", stage, retiredInvitation.Code, retiredInvitation.Body.String())
+				}
+
+				replacementID := fmt.Sprintf("%032x", 0x1234+index)
+				replacementVerifier := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(0x41 + index)}, 32))
+				replacement := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings", fixture.creator.token, map[string]any{
+					"pairing_id": replacementID, "pairing_verifier": replacementVerifier,
+				})
+				if replacement.Code != http.StatusCreated {
+					t.Fatalf("replacement pairing after %s cancellation status=%d body=%s", stage, replacement.Code, replacement.Body.String())
+				}
+				retiredJoinPayload := make(map[string]any, len(fixture.joinPayload))
+				for key, value := range fixture.joinPayload {
+					retiredJoinPayload[key] = value
+				}
+				retiredJoinPayload["pairing_verifier"] = replacementVerifier
+				retiredJoin := apiRequest(t, fixture.creator.server, http.MethodPut, "/v1/pairings/"+replacementID, "", retiredJoinPayload)
+				if retiredJoin.Code != http.StatusConflict || !strings.Contains(retiredJoin.Body.String(), "pairing_join_conflict") {
+					t.Fatalf("cancelled %s device identity was reusable: status=%d body=%s", stage, retiredJoin.Code, retiredJoin.Body.String())
+				}
+			}
+		})
+	}
+}
+
+func TestJoinAndClaimResponseLossCanRollback(t *testing.T) {
+	for index, stage := range []string{"joined", "claimed"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newRollbackPairingFixture(t, byte(0xc0+index*8), stage)
+			defer fixture.creator.server.Close()
+			// The fixture intentionally discards the first transition response just
+			// as a client would after a transport loss. Its protected journal still
+			// has the exact rollback tuple and capability.
+			rolledBack := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil)
+			if rolledBack.Code != http.StatusNoContent {
+				t.Fatalf("%s response-loss rollback status=%d body=%s", stage, rolledBack.Code, rolledBack.Body.String())
+			}
+			var replay *httptest.ResponseRecorder
+			if stage == "joined" {
+				replay = apiRequest(t, fixture.creator.server, http.MethodPut, "/v1/pairings/"+fixture.pairingID, "", fixture.joinPayload)
+			} else {
+				replay = apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings/"+fixture.pairingID+"/claim", "", fixture.claimPayload)
+			}
+			if replay.Code != http.StatusUnauthorized {
+				t.Fatalf("retired %s tuple was replayable: status=%d body=%s", stage, replay.Code, replay.Body.String())
+			}
+		})
+	}
+}
+
+func TestExpiredJoinedTupleIsRetiredBeforeReplacement(t *testing.T) {
+	for index, stage := range []string{"joined", "approved"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newRollbackPairingFixture(t, byte(0xb0+index*8), stage)
+			defer fixture.creator.server.Close()
+			if stage == "joined" {
+				if _, err := fixture.creator.server.db.Exec(`UPDATE pairings SET expires_at = ? WHERE id = ?`,
+					time.Now().Add(-time.Second).UnixMilli(), fixture.pairingID); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := fixture.creator.server.db.Exec(`UPDATE pairings SET claim_expires_at = ? WHERE id = ?`,
+				time.Now().Add(-time.Second).UnixMilli(), fixture.pairingID); err != nil {
+				t.Fatal(err)
+			}
+			replacementID := fmt.Sprintf("%032x", 0x4321+index)
+			replacement := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings", fixture.creator.token, map[string]any{
+				"pairing_id":       replacementID,
+				"pairing_verifier": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(0x51 + index)}, 32)),
+			})
+			if replacement.Code != http.StatusCreated {
+				t.Fatalf("replacement after expired %s status=%d body=%s", stage, replacement.Code, replacement.Body.String())
+			}
+			after := snapshotRollbackDatabase(t, fixture)
+			if after.Pairings != 0 || after.Devices != 1 || after.Tombstones != 1 {
+				t.Fatalf("expired %s tuple was not retired: %+v", stage, after)
+			}
+			if replay := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil); replay.Code != http.StatusNoContent {
+				t.Fatalf("expired %s rollback replay status=%d body=%s", stage, replay.Code, replay.Body.String())
+			}
+			if cancel := apiRequest(t, fixture.creator.server, http.MethodDelete, "/v1/pairings/"+replacementID,
+				fixture.creator.token, nil); cancel.Code != http.StatusNoContent {
+				t.Fatalf("replacement cancel status=%d body=%s", cancel.Code, cancel.Body.String())
+			}
+			retiredCreate := apiRequest(t, fixture.creator.server, http.MethodPost, "/v1/pairings", fixture.creator.token, map[string]any{
+				"pairing_id": fixture.pairingID, "pairing_verifier": fixture.verifier,
+			})
+			if retiredCreate.Code != http.StatusConflict || !strings.Contains(retiredCreate.Body.String(), "pairing_invitation_conflict") {
+				t.Fatalf("expired %s pairing identity resurrected: status=%d body=%s", stage, retiredCreate.Code, retiredCreate.Body.String())
+			}
+		})
+	}
+}
+
+func TestConcurrentCreatorCancelAndJoiningRollbackConverge(t *testing.T) {
+	for index, stage := range []string{"joined", "approved", "claimed"} {
+		t.Run(stage, func(t *testing.T) {
+			fixture := newRollbackPairingFixture(t, byte(0xd0+index*8), stage)
+			defer fixture.creator.server.Close()
+			start := make(chan struct{})
+			statuses := make(chan int, 2)
+			go func() {
+				<-start
+				statuses <- apiRequest(t, fixture.creator.server, http.MethodDelete,
+					"/v1/pairings/"+fixture.pairingID, fixture.creator.token, nil).Code
+			}()
+			go func() {
+				<-start
+				statuses <- apiRequest(t, fixture.creator.server, http.MethodDelete,
+					fixture.rollbackPath(), fixture.rollback, nil).Code
+			}()
+			close(start)
+			for attempt := 0; attempt < 2; attempt++ {
+				if status := <-statuses; status != http.StatusNoContent {
+					t.Fatalf("concurrent %s cancellation status=%d", stage, status)
+				}
+			}
+			after := snapshotRollbackDatabase(t, fixture)
+			if after.Pairings != 0 || after.Devices != 1 || after.Tombstones != 1 {
+				t.Fatalf("concurrent %s cancellation did not converge: %+v", stage, after)
+			}
+		})
+	}
+}
+
+func TestConcurrentCancelAndRollbackAcrossServerInstancesConverge(t *testing.T) {
+	fixture := newRollbackPairingFixture(t, 0xe8, "claimed")
+	defer fixture.creator.server.Close()
+	secondServer, err := New(context.Background(), fixture.creator.databasePath, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondServer.Close()
+
+	start := make(chan struct{})
+	statuses := make(chan int, 2)
+	go func() {
+		<-start
+		statuses <- apiRequest(t, fixture.creator.server, http.MethodDelete,
+			"/v1/pairings/"+fixture.pairingID, fixture.creator.token, nil).Code
+	}()
+	go func() {
+		<-start
+		statuses <- apiRequest(t, secondServer, http.MethodDelete,
+			fixture.rollbackPath(), fixture.rollback, nil).Code
+	}()
+	close(start)
+	for attempt := 0; attempt < 2; attempt++ {
+		if status := <-statuses; status != http.StatusNoContent {
+			t.Fatalf("cross-instance cancellation status=%d", status)
+		}
+	}
+	after := snapshotRollbackDatabase(t, fixture)
+	if after.Pairings != 0 || after.Devices != 1 || after.Tombstones != 1 {
+		t.Fatalf("cross-instance cancellation did not converge: %+v", after)
+	}
+}
+
+func TestClaimedRollbackStillRefusesUnsafeWrites(t *testing.T) {
+	fixture := newRollbackPairingFixture(t, 0xf0, "claimed")
+	defer fixture.creator.server.Close()
+	if _, err := fixture.creator.server.db.Exec(`INSERT INTO keyrings(account_id, epoch, ciphertext, writer_device_id, created_at)
+		VALUES(?, 2, ?, ?, ?)`, fixture.creator.accountID, bytes.Repeat([]byte{0xa1}, 49),
+		fixture.deviceID, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotRollbackDatabase(t, fixture)
+	response := apiRequest(t, fixture.creator.server, http.MethodDelete, fixture.rollbackPath(), fixture.rollback, nil)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "device_rollback_not_safe") ||
+		snapshotRollbackDatabase(t, fixture) != before {
+		t.Fatalf("unsafe claimed rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAccountRollbackFailsClosedAfterUse(t *testing.T) {
+	tests := []struct {
+		name  string
+		stage func(*testing.T, testDevice)
+	}{
+		{
+			name: "sealed",
+			stage: func(t *testing.T, device testDevice) {
+				if _, err := device.server.db.Exec(`INSERT INTO keyrings(account_id, epoch, ciphertext, writer_device_id, created_at)
+					VALUES(?, 1, ?, ?, ?)`, device.accountID, bytes.Repeat([]byte{0x42}, 49), device.deviceID, time.Now().UnixMilli()); err != nil {
+					t.Fatal(err)
+				}
+				response := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/seal", device.token, map[string]any{})
+				if response.Code != http.StatusNoContent {
+					t.Fatalf("seal status=%d body=%s", response.Code, response.Body.String())
+				}
+			},
+		},
+		{
+			name: "envelope",
+			stage: func(t *testing.T, device testDevice) {
+				_, err := device.server.db.Exec(`INSERT INTO envelopes(
+					account_id, device_id, device_seq, version, object_id, key_epoch,
+					nonce, ciphertext, signature, record_hash, created_at)
+					VALUES(?, ?, 1, 1, ?, 1, ?, ?, ?, ?, ?)`,
+					device.accountID, device.deviceID, bytes.Repeat([]byte{0x11}, 16),
+					bytes.Repeat([]byte{0x12}, 24), bytes.Repeat([]byte{0x13}, 528),
+					bytes.Repeat([]byte{0x14}, 64), bytes.Repeat([]byte{0x15}, 32), time.Now().UnixMilli())
+				if err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			device := newTestUnsealedAccount(t)
+			defer device.server.Close()
+			test.stage(t, device)
+			response := apiRequest(t, device.server, http.MethodDelete, "/v1/accounts/"+device.accountID, device.rollbackToken, nil)
+			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "account_rollback_not_safe") {
+				t.Fatalf("unsafe rollback status=%d body=%s", response.Code, response.Body.String())
+			}
+			var count int
+			if err := device.server.db.QueryRow("SELECT COUNT(*) FROM accounts WHERE id = ?", device.accountID).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("unsafe rollback changed account: count=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
+func TestAccountRollbackRequiresOwningDevice(t *testing.T) {
+	first := newTestUnsealedAccount(t)
+	defer first.server.Close()
+	second := newTestUnsealedAccount(t)
+	defer second.server.Close()
+	response := apiRequest(t, first.server, http.MethodDelete, "/v1/accounts/"+first.accountID, second.rollbackToken, nil)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("foreign token status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = apiRequest(t, first.server, http.MethodDelete, "/v1/accounts/"+strings.Repeat("a", 32), first.rollbackToken, nil)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("foreign account status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -607,7 +1902,7 @@ func TestRouteLogsAreRedacted(t *testing.T) {
 	defer device.server.Close()
 	secretID := strings.Repeat("c", 32)
 	response := apiRequest(t, device.server, http.MethodDelete, fmt.Sprintf("/v1/devices/%s", secretID), device.token, nil)
-	if response.Code != http.StatusNotFound {
+	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	logs := device.logBuffer.String()
@@ -629,10 +1924,11 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 	expected := sha256.Sum256(body)
 	var count int
 	var checksum string
-	if err := application.db.QueryRow("SELECT COUNT(*), MIN(checksum) FROM schema_migrations").Scan(&count, &checksum); err != nil {
+	if err := application.db.QueryRow(`SELECT (SELECT COUNT(*) FROM schema_migrations), checksum
+		FROM schema_migrations WHERE name = '001_init.sql'`).Scan(&count, &checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 || checksum != hex.EncodeToString(expected[:]) {
+	if count != 2 || checksum != hex.EncodeToString(expected[:]) {
 		t.Fatalf("migration ledger mismatch: count=%d checksum=%q", count, checksum)
 	}
 	if err := application.Close(); err != nil {
@@ -642,7 +1938,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 1 {
+	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 2 {
 		t.Fatalf("migration reapplied: count=%d err=%v", count, err)
 	}
 	if _, err := application.db.Exec("UPDATE schema_migrations SET checksum = ? WHERE name = ?", strings.Repeat("0", 64), "001_init.sql"); err != nil {

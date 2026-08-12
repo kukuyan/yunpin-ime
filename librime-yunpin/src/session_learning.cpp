@@ -175,13 +175,13 @@ void SessionLearning::ApplyFeedbackLocked(const LearningUpdate& update) {
   }
 }
 
-void SessionLearning::ObserveCommit(SessionCommit commit) {
+bool SessionLearning::ObserveCommit(SessionCommit commit) {
   std::lock_guard<std::mutex> lock(mutex_);
   const std::string normalized = NormalizePinyin(commit.pinyin);
   if (commit.context != LearningContext::kNormal || normalized.empty() ||
       commit.phrase.empty()) {
     BreakAdjacencyLocked();
-    return;
+    return false;
   }
   commit.pinyin = normalized;
 
@@ -200,7 +200,7 @@ void SessionLearning::ObserveCommit(SessionCommit commit) {
                           tracked_stat_keys_.end();
   if (!known_stat && tracked_stat_keys_.size() >= kMaxTrackedEntries) {
     BreakAdjacencyLocked();
-    return;
+    return false;
   }
   SelectionEvent event{date_bucket, entry_id, commit.phrase, normalized};
   const LearningUpdate update = learning_.RecordSelection(std::move(event));
@@ -212,6 +212,7 @@ void SessionLearning::ObserveCommit(SessionCommit commit) {
     ApplyFeedbackLocked(update);
   }
   ArmLocked(commit, update);
+  return update.recorded;
 }
 
 void SessionLearning::ObserveUnhandledKey(bool is_unmodified_backspace,

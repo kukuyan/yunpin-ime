@@ -15,12 +15,12 @@ import (
 	"runtime"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 const (
 	cryptprotectUIForbidden = 0x1
-	movefileReplaceExisting = 0x1
-	movefileWriteThrough    = 0x8
 	maxProtectedFileBytes   = 1024 * 1024
 )
 
@@ -30,7 +30,6 @@ var (
 	procCryptProtectData   = crypt32DLL.NewProc("CryptProtectData")
 	procCryptUnprotectData = crypt32DLL.NewProc("CryptUnprotectData")
 	procLocalFree          = kernel32DLL.NewProc("LocalFree")
-	procMoveFileExW        = kernel32DLL.NewProc("MoveFileExW")
 )
 
 type dataBlob struct {
@@ -50,12 +49,12 @@ func NewPlatformSecretStore(options PlatformSecretStoreOptions) (SecretStore, er
 	if options.Directory == "" || !filepath.IsAbs(options.Directory) {
 		return nil, errors.New("DPAPI credential directory must be absolute")
 	}
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if localAppData == "" || !filepath.IsAbs(localAppData) {
-		return nil, errors.New("LOCALAPPDATA is unavailable for current-user DPAPI storage")
+	localAppData, err := knownWindowsFolder(windows.FOLDERID_LocalAppData)
+	if err != nil {
+		return nil, fmt.Errorf("resolve current-user DPAPI storage root: %w", err)
 	}
 	directory := filepath.Clean(options.Directory)
-	relative, err := filepath.Rel(filepath.Clean(localAppData), directory)
+	relative, err := filepath.Rel(localAppData, directory)
 	if err != nil || relative == ".." || filepath.IsAbs(relative) ||
 		(len(relative) > 3 && relative[:3] == ".."+string(filepath.Separator)) {
 		return nil, errors.New("DPAPI credentials must stay below the current user's LOCALAPPDATA")
@@ -151,20 +150,8 @@ func (store *dpapiSecretStore) path(profile string) (string, error) {
 }
 
 func moveReplace(source, destination string) error {
-	sourceUTF16, err := syscall.UTF16PtrFromString(source)
-	if err != nil {
-		return err
-	}
-	destinationUTF16, err := syscall.UTF16PtrFromString(destination)
-	if err != nil {
-		return err
-	}
-	result, _, callErr := procMoveFileExW.Call(
-		uintptr(unsafe.Pointer(sourceUTF16)), uintptr(unsafe.Pointer(destinationUTF16)),
-		movefileReplaceExisting|movefileWriteThrough,
-	)
-	if result == 0 {
-		return fmt.Errorf("atomically replace DPAPI credential: %w", callErr)
+	if err := replaceFile(source, destination); err != nil {
+		return fmt.Errorf("atomically replace DPAPI credential: %w", err)
 	}
 	return nil
 }
@@ -185,7 +172,7 @@ func (store *dpapiSecretStore) Save(ctx context.Context, profile string, value [
 		return err
 	}
 	defer zeroBytes(protected)
-	if err := os.MkdirAll(store.directory, 0700); err != nil {
+	if err := ensurePrivateDirectory(store.directory); err != nil {
 		return fmt.Errorf("create DPAPI credential directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(store.directory, ".credentials-*.tmp")
@@ -194,7 +181,7 @@ func (store *dpapiSecretStore) Save(ctx context.Context, profile string, value [
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err = temporary.Chmod(0600); err == nil {
+	if err = protectPrivateFile(temporary); err == nil {
 		_, err = temporary.Write(protected)
 	}
 	if err == nil {
@@ -221,6 +208,11 @@ func (store *dpapiSecretStore) Load(ctx context.Context, profile string) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	directoryInfo, err := os.Lstat(store.directory)
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 ||
+		!privateDirectoryPermissionsOK(store.directory, directoryInfo) {
+		return nil, errors.New("DPAPI credential directory is not protected by the current-user DACL")
+	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrSecretNotFound
@@ -228,7 +220,8 @@ func (store *dpapiSecretStore) Load(ctx context.Context, profile string) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("inspect DPAPI credential: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 1 || info.Size() > maxProtectedFileBytes {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !privateFilePermissionsOK(path, info) ||
+		info.Size() < 1 || info.Size() > maxProtectedFileBytes {
 		return nil, errors.New("DPAPI credential must be a bounded regular file")
 	}
 	file, err := os.Open(path)
@@ -236,6 +229,9 @@ func (store *dpapiSecretStore) Load(ctx context.Context, profile string) ([]byte
 		return nil, fmt.Errorf("open DPAPI credential: %w", err)
 	}
 	defer file.Close()
+	if !openedPrivateFilePermissionsOK(path, file, false) {
+		return nil, errors.New("DPAPI credential path and opened handle do not identify the same private file")
+	}
 	openedInfo, err := file.Stat()
 	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || openedInfo.Size() < 1 || openedInfo.Size() > maxProtectedFileBytes {
 		return nil, errors.New("DPAPI credential changed during validated open")
@@ -268,7 +264,14 @@ func (store *dpapiSecretStore) Delete(ctx context.Context, profile string) error
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrSecretNotFound
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !privateFilePermissionsOK(path, info) {
+		return errors.New("refuse to delete an unprotected DPAPI credential path")
+	}
+	if err := removePrivateFile(path); errors.Is(err, os.ErrNotExist) {
 		return ErrSecretNotFound
 	} else if err != nil {
 		return fmt.Errorf("delete DPAPI credential: %w", err)

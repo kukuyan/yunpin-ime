@@ -3,12 +3,15 @@ package protocol
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"sort"
 
 	"github.com/fxamacker/cbor/v2"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -89,6 +92,185 @@ type RecoveryPackage struct {
 	ObjectIDKey  []byte `json:"object_id_key" cbor:"4,keyasint"`
 }
 
+type PairingRosterDevice struct {
+	DeviceID         []byte `json:"device_id" cbor:"1,keyasint"`
+	Ed25519PublicKey []byte `json:"ed25519_public_key" cbor:"2,keyasint"`
+	X25519PublicKey  []byte `json:"x25519_public_key" cbor:"3,keyasint"`
+}
+
+// PairingRoster is a versioned account trust statement signed by an already
+// trusted device. The relay's /devices response is operational metadata only;
+// it is never accepted as a verification-key trust root.
+type PairingRoster struct {
+	Version        uint64                `json:"version" cbor:"1,keyasint"`
+	AccountID      []byte                `json:"account_id" cbor:"2,keyasint"`
+	Devices        []PairingRosterDevice `json:"devices" cbor:"3,keyasint"`
+	SignerDeviceID []byte                `json:"signer_device_id" cbor:"4,keyasint"`
+	Signature      []byte                `json:"signature" cbor:"5,keyasint"`
+}
+
+type PairingEpochKey struct {
+	Epoch uint64 `json:"epoch" cbor:"1,keyasint"`
+	Key   []byte `json:"key" cbor:"2,keyasint"`
+}
+
+type PairingPackage struct {
+	CurrentEpoch uint64            `json:"current_epoch" cbor:"1,keyasint"`
+	EpochKeys    []PairingEpochKey `json:"epoch_keys" cbor:"2,keyasint"`
+	ObjectIDKey  []byte            `json:"object_id_key" cbor:"3,keyasint"`
+	Roster       PairingRoster     `json:"roster" cbor:"4,keyasint"`
+}
+
+type pairingRosterUnsigned struct {
+	Version        uint64                `cbor:"1,keyasint"`
+	AccountID      []byte                `cbor:"2,keyasint"`
+	Devices        []PairingRosterDevice `cbor:"3,keyasint"`
+	SignerDeviceID []byte                `cbor:"4,keyasint"`
+}
+
+func pairingRosterSigningBytes(roster PairingRoster) ([]byte, error) {
+	if roster.Version == 0 || roster.Version > math.MaxInt64 || len(roster.AccountID) != 16 ||
+		len(roster.SignerDeviceID) != 16 || len(roster.Devices) < 2 || len(roster.Devices) > 256 {
+		return nil, errors.New("pairing roster metadata is invalid")
+	}
+	zeroID := make([]byte, 16)
+	zeroKey := make([]byte, 32)
+	if bytes.Equal(roster.AccountID, zeroID) || bytes.Equal(roster.SignerDeviceID, zeroID) {
+		return nil, errors.New("pairing roster identifiers are invalid")
+	}
+	var previous []byte
+	signerFound := false
+	for _, device := range roster.Devices {
+		if len(device.DeviceID) != 16 || len(device.Ed25519PublicKey) != ed25519.PublicKeySize ||
+			len(device.X25519PublicKey) != 32 || bytes.Equal(device.DeviceID, zeroID) ||
+			bytes.Equal(device.Ed25519PublicKey, zeroKey) || bytes.Equal(device.X25519PublicKey, zeroKey) {
+			return nil, errors.New("pairing roster device is invalid")
+		}
+		if previous != nil && bytes.Compare(previous, device.DeviceID) >= 0 {
+			return nil, errors.New("pairing roster devices are not uniquely sorted")
+		}
+		previous = device.DeviceID
+		if bytes.Equal(device.DeviceID, roster.SignerDeviceID) {
+			signerFound = true
+		}
+	}
+	if !signerFound {
+		return nil, errors.New("pairing roster signer is absent")
+	}
+	encoded, err := canonicalCBOR.Marshal(pairingRosterUnsigned{
+		Version: roster.Version, AccountID: roster.AccountID, Devices: roster.Devices, SignerDeviceID: roster.SignerDeviceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte("yunpin-pairing-roster-v1\x00"), encoded...), nil
+}
+
+func SignPairingRoster(accountID []byte, version uint64, devices []PairingRosterDevice, signerDeviceID []byte, private ed25519.PrivateKey) (PairingRoster, error) {
+	if len(private) != ed25519.PrivateKeySize {
+		return PairingRoster{}, errors.New("pairing roster signing key is invalid")
+	}
+	roster := PairingRoster{
+		Version: version, AccountID: append([]byte(nil), accountID...),
+		Devices: make([]PairingRosterDevice, len(devices)), SignerDeviceID: append([]byte(nil), signerDeviceID...),
+	}
+	for index, device := range devices {
+		roster.Devices[index] = PairingRosterDevice{
+			DeviceID: append([]byte(nil), device.DeviceID...), Ed25519PublicKey: append([]byte(nil), device.Ed25519PublicKey...),
+			X25519PublicKey: append([]byte(nil), device.X25519PublicKey...),
+		}
+	}
+	sort.Slice(roster.Devices, func(left, right int) bool {
+		return bytes.Compare(roster.Devices[left].DeviceID, roster.Devices[right].DeviceID) < 0
+	})
+	signingBytes, err := pairingRosterSigningBytes(roster)
+	if err != nil {
+		return PairingRoster{}, err
+	}
+	public := private.Public().(ed25519.PublicKey)
+	signerMatches := false
+	for _, device := range roster.Devices {
+		if bytes.Equal(device.DeviceID, roster.SignerDeviceID) {
+			signerMatches = bytes.Equal(device.Ed25519PublicKey, public)
+			break
+		}
+	}
+	if !signerMatches {
+		return PairingRoster{}, errors.New("pairing roster signer key does not match the roster")
+	}
+	roster.Signature = ed25519.Sign(private, signingBytes)
+	return roster, nil
+}
+
+func VerifyPairingRoster(roster PairingRoster) error {
+	if len(roster.Signature) != ed25519.SignatureSize {
+		return errors.New("pairing roster signature is invalid")
+	}
+	signingBytes, err := pairingRosterSigningBytes(roster)
+	if err != nil {
+		return err
+	}
+	var signer ed25519.PublicKey
+	for _, device := range roster.Devices {
+		if bytes.Equal(device.DeviceID, roster.SignerDeviceID) {
+			signer = device.Ed25519PublicKey
+			break
+		}
+	}
+	if !ed25519.Verify(signer, signingBytes, roster.Signature) {
+		return errors.New("pairing roster signature verification failed")
+	}
+	return nil
+}
+
+func validatePairingPackage(payload PairingPackage, transcript PairingTranscript) error {
+	if err := validatePairingTranscript(transcript); err != nil {
+		return err
+	}
+	if len(payload.ObjectIDKey) != 32 || payload.CurrentEpoch == 0 || payload.CurrentEpoch > math.MaxInt64 ||
+		len(payload.EpochKeys) < 1 || len(payload.EpochKeys) > 64 {
+		return errors.New("pairing package key material is invalid")
+	}
+	currentFound := false
+	var previous uint64
+	for _, epoch := range payload.EpochKeys {
+		if epoch.Epoch == 0 || epoch.Epoch > math.MaxInt64 || epoch.Epoch <= previous || len(epoch.Key) != 32 {
+			return errors.New("pairing package epoch keys are invalid")
+		}
+		if epoch.Epoch == payload.CurrentEpoch {
+			currentFound = true
+		}
+		previous = epoch.Epoch
+	}
+	if !currentFound {
+		return errors.New("pairing package current epoch is absent")
+	}
+	if err := VerifyPairingRoster(payload.Roster); err != nil {
+		return err
+	}
+	if !bytes.Equal(payload.Roster.AccountID, transcript.AccountID) {
+		return errors.New("pairing roster account does not match the authenticated transcript")
+	}
+	if !bytes.Equal(payload.Roster.SignerDeviceID, transcript.CreatorDeviceID) {
+		return errors.New("pairing roster was not signed by the invitation creator")
+	}
+	creatorFound, joiningFound := false, false
+	for _, device := range payload.Roster.Devices {
+		switch {
+		case bytes.Equal(device.DeviceID, transcript.CreatorDeviceID):
+			creatorFound = bytes.Equal(device.Ed25519PublicKey, transcript.CreatorEd25519PublicKey) &&
+				bytes.Equal(device.X25519PublicKey, transcript.CreatorX25519PublicKey)
+		case bytes.Equal(device.DeviceID, transcript.JoiningDeviceID):
+			joiningFound = bytes.Equal(device.Ed25519PublicKey, transcript.JoiningEd25519PublicKey) &&
+				bytes.Equal(device.X25519PublicKey, transcript.JoiningX25519PublicKey)
+		}
+	}
+	if !creatorFound || !joiningFound {
+		return errors.New("pairing roster does not match the authenticated transcript")
+	}
+	return nil
+}
+
 func sealBox(key, aad []byte, payload any, source io.Reader) (SealedBox, error) {
 	if len(key) != chacha20poly1305.KeySize {
 		return SealedBox{}, errors.New("sealed-box key must be 32 bytes")
@@ -126,22 +308,42 @@ func openBox(key, aad []byte, box SealedBox, destination any) error {
 	return cbor.Unmarshal(plain, destination)
 }
 
-func SealPairingPayload(private, peerPublic, sessionNonce []byte, payload any, source io.Reader) (SealedBox, error) {
-	key, err := DerivePairingKey(private, peerPublic, sessionNonce)
+func SealPairingPackage(private, peerPublic, pairingSecret []byte, transcript PairingTranscript, payload PairingPackage, source io.Reader) (SealedBox, error) {
+	if err := validatePairingPackage(payload, transcript); err != nil {
+		return SealedBox{}, err
+	}
+	key, err := DerivePairingKey(private, peerPublic, pairingSecret, transcript)
 	if err != nil {
 		return SealedBox{}, err
 	}
-	aad := append([]byte("yunpin-pairing-package-v1\x00"), sessionNonce...)
+	defer clear(key)
+	encoded, err := canonicalPairingTranscript(transcript)
+	if err != nil {
+		return SealedBox{}, err
+	}
+	aad := append([]byte("yunpin-pairing-package-v2\x00"), encoded...)
 	return sealBox(key, aad, payload, source)
 }
 
-func OpenPairingPayload(private, peerPublic, sessionNonce []byte, box SealedBox, destination any) error {
-	key, err := DerivePairingKey(private, peerPublic, sessionNonce)
+func OpenPairingPackage(private, peerPublic, pairingSecret []byte, transcript PairingTranscript, box SealedBox) (PairingPackage, error) {
+	key, err := DerivePairingKey(private, peerPublic, pairingSecret, transcript)
 	if err != nil {
-		return err
+		return PairingPackage{}, err
 	}
-	aad := append([]byte("yunpin-pairing-package-v1\x00"), sessionNonce...)
-	return openBox(key, aad, box, destination)
+	defer clear(key)
+	encoded, err := canonicalPairingTranscript(transcript)
+	if err != nil {
+		return PairingPackage{}, err
+	}
+	aad := append([]byte("yunpin-pairing-package-v2\x00"), encoded...)
+	var payload PairingPackage
+	if err := openBox(key, aad, box, &payload); err != nil {
+		return PairingPackage{}, err
+	}
+	if err := validatePairingPackage(payload, transcript); err != nil {
+		return PairingPackage{}, err
+	}
+	return payload, nil
 }
 
 func SealRecoveryPackage(recoveryKey []byte, payload RecoveryPackage, source io.Reader) (SealedBox, error) {

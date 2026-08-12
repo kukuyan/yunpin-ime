@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# YunPin lifecycle patch for librime 1.17.0.
+# Base-Commit: 33e78140250125871856cdc5b42ddc6a5fcd3cd4
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Wed, 12 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Disconnect engine notifiers before context destruction
+
+Keep explicit handles for ConcreteEngine's Context notifier slots.  Tear down
+all context-connected components and those engine slots while Context is still
+alive, instead of leaving the callbacks in Context until the base Engine
+destructor resets it.  This also makes rapid frontend session churn safe for
+components whose callbacks use weak session state.
+---
+ src/rime/engine.cc | 34 +++++++++++++++++++++++++++++-----
+ 1 file changed, 29 insertions(+), 5 deletions(-)
+
+diff --git a/src/rime/engine.cc b/src/rime/engine.cc
+--- a/src/rime/engine.cc
++++ b/src/rime/engine.cc
+@@ -45,6 +45,12 @@ class ConcreteEngine : public Engine {
+   void OnOptionUpdate(Context* ctx, const string& option);
+   void OnPropertyUpdate(Context* ctx, const string& property);
+ 
++  connection commit_connection_;
++  connection select_connection_;
++  connection update_connection_;
++  connection option_update_connection_;
++  connection property_update_connection_;
++
+   vector<of<Processor>> processors_;
+   vector<of<Segmentor>> segmentors_;
+   vector<of<Translator>> translators_;
+@@ -70,15 +76,17 @@ Engine::~Engine() {
+ ConcreteEngine::ConcreteEngine() {
+   LOG(INFO) << "starting engine.";
+   // receive context notifications
+-  context_->commit_notifier().connect([this](Context* ctx) { OnCommit(ctx); });
+-  context_->select_notifier().connect([this](Context* ctx) { OnSelect(ctx); });
+-  context_->update_notifier().connect(
++  commit_connection_ = context_->commit_notifier().connect(
++      [this](Context* ctx) { OnCommit(ctx); });
++  select_connection_ = context_->select_notifier().connect(
++      [this](Context* ctx) { OnSelect(ctx); });
++  update_connection_ = context_->update_notifier().connect(
+       [this](Context* ctx) { OnContextUpdate(ctx); });
+-  context_->option_update_notifier().connect(
++  option_update_connection_ = context_->option_update_notifier().connect(
+       [this](Context* ctx, const string& option) {
+         OnOptionUpdate(ctx, option);
+       });
+-  context_->property_update_notifier().connect(
++  property_update_connection_ = context_->property_update_notifier().connect(
+       [this](Context* ctx, const string& property) {
+         OnPropertyUpdate(ctx, property);
+       });
+@@ -93,6 +101,22 @@ ConcreteEngine::ConcreteEngine() {
+ }
+ 
+ ConcreteEngine::~ConcreteEngine() {
++  // Context is a base Engine member and therefore outlives every component.
++  // Disconnect callbacks explicitly while both endpoints are valid.  In
++  // particular, do not leave slots capturing ConcreteEngine in Context until
++  // Engine::~Engine resets the signal container.
++  commit_connection_.disconnect();
++  select_connection_.disconnect();
++  update_connection_.disconnect();
++  option_update_connection_.disconnect();
++  property_update_connection_.disconnect();
++  post_processors_.clear();
++  formatters_.clear();
++  filters_.clear();
++  translators_.clear();
++  segmentors_.clear();
++  processors_.clear();
++  switcher_.reset();
+   LOG(INFO) << "engine disposed.";
+ }
+ 
+-- 
+2.50.1

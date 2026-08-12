@@ -14,9 +14,14 @@ func DefaultPaths() (Paths, error) {
 		return Paths{}, err
 	}
 	state := filepath.Join(config, "yunpin", "sync")
+	rime := filepath.Join(config, "yunpin", "rime")
 	return Paths{
 		StateDirectory: state, EndpointConfigPath: filepath.Join(state, "sync.json"),
 		DatabasePath: filepath.Join(state, "private.db"), LockPath: filepath.Join(state, "agent.lock"),
 		CredentialService: "io.github.kukuyan.inputmethod.YunPin.sync",
+		NativeEventsPath:  filepath.Join(state, "native-events", "incoming"),
+		BaselinePath:      filepath.Join(rime, "yunpin", "baseline.tsv"),
+		SnapshotPath:      filepath.Join(rime, "yunpin", "private.tsv"),
+		SnapshotStatePath: filepath.Join(state, "snapshot-generation"),
 	}, nil
 }
