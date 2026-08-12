@@ -466,6 +466,14 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('"shousubijiaokuaideshihouu"', fixture_source)
         self.assertIn('"shouusubijiaokuaideshihouu"', fixture_source)
         self.assertIn('"youceshizhanghaoma"', fixture_source)
+        learning_capability_count = fixture_source.count(
+            'set_option(session, "yunpin_learning_allowed", True)'
+        )
+        self.assertGreater(learning_capability_count, 0)
+        self.assertEqual(
+            fixture_source.count("api->create_session()"),
+            learning_capability_count,
+        )
 
     def test_rime_overlay_enables_the_bounded_private_filter(self) -> None:
         overlay = (ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml").read_text(

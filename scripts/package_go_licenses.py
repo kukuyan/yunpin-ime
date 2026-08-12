@@ -26,6 +26,8 @@ def go_json_objects(module: Path) -> list[dict[str, object]]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="strict",
     )
     decoder = json.JSONDecoder()
     text = completed.stdout
@@ -114,7 +116,12 @@ def main() -> int:
     )
     goroot = Path(
         subprocess.run(
-            ["go", "env", "GOROOT"], check=True, text=True, stdout=subprocess.PIPE
+            ["go", "env", "GOROOT"],
+            check=True,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            stdout=subprocess.PIPE,
         ).stdout.strip()
     )
     copy_record("go.dev/toolchain", "linked", "BSD-3-Clause", goroot)

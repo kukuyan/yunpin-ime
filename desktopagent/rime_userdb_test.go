@@ -3,7 +3,6 @@ package desktopagent
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,15 +68,11 @@ func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 func TestIngestRimeUserDBSnapshotIsPrivateAtomicAndIdempotent(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "rime-userdb")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, directory)
 	path := filepath.Join(directory, "yunpin.userdb.txt")
 	contents := []byte("xue xi ci \t学习词\tc=4 d=2 t=9\n" +
 		"si ren ci \t个人静态词\tc=20 d=8 t=10\n")
-	if err := os.WriteFile(path, contents, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, path, contents)
 	localOnly := map[string]struct{}{protocol.CanonicalPhrase("个人静态词"): {}}
 	result, err := ingestRimeUserDBExport(context.Background(), path, store, localOnly)
 	if err != nil || result.Rows != 2 || result.Advanced != 1 || result.LocalOnly != 1 {

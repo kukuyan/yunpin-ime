@@ -257,6 +257,48 @@ func TestWindowsOpenedHandleIsBoundToPrivatePathIdentity(t *testing.T) {
 	}
 }
 
+func TestWindowsRimePreflightHardensOwnedInheritedCrashResidue(t *testing.T) {
+	root := windowsPrivateTestRoot(t)
+	device := filepath.Join(root, "device")
+	if err := os.Mkdir(device, 0700); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(device, "rime_ice.userdb.txt")
+	if err := os.WriteFile(snapshot, []byte("synthetic snapshot"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	user, _, err := currentUserAndSystemSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{device, snapshot} {
+		if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+			windows.OWNER_SECURITY_INFORMATION, user, nil, nil, nil); err != nil {
+			t.Fatalf("set explicit current-user owner on inherited crash residue %q: %v", path, err)
+		}
+	}
+	deviceInfo, deviceErr := os.Lstat(device)
+	snapshotInfo, snapshotErr := os.Lstat(snapshot)
+	if deviceErr != nil || snapshotErr != nil ||
+		privateDirectoryPermissionsOK(device, deviceInfo) ||
+		privateFilePermissionsOK(snapshot, snapshotInfo) {
+		t.Fatalf("crash-residue fixture unexpectedly started private: device=%v snapshot=%v", deviceErr, snapshotErr)
+	}
+	if err := hardenRimeBridgePreflightPath(device, true); err != nil {
+		t.Fatalf("harden inherited device directory: %v", err)
+	}
+	if err := hardenRimeBridgePreflightPath(snapshot, false); err != nil {
+		t.Fatalf("harden inherited snapshot file: %v", err)
+	}
+	deviceInfo, deviceErr = os.Lstat(device)
+	snapshotInfo, snapshotErr = os.Lstat(snapshot)
+	if deviceErr != nil || snapshotErr != nil ||
+		!privateDirectoryPermissionsOK(device, deviceInfo) ||
+		!privateFilePermissionsOK(snapshot, snapshotInfo) {
+		t.Fatalf("hardened crash residue is not exact private state: device=%v snapshot=%v", deviceErr, snapshotErr)
+	}
+}
+
 func TestWindowsEveryPathComponentRejectsReparsePoints(t *testing.T) {
 	root := windowsPrivateTestRoot(t)
 	real := filepath.Join(root, "real")

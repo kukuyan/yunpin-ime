@@ -59,14 +59,10 @@ func residentReadyFixture(t *testing.T, bundle CredentialBundleV1) (*memorySecre
 	if err := makePrivateDirectory(filepath.Dir(baseline)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(baseline, []byte(privateSnapshotHeader), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, baseline, []byte(privateSnapshotHeader))
 	state := filepath.Dir(paths.SyncDirectory)
 	endpoint := filepath.Join(state, "sync.json")
-	if err := os.WriteFile(endpoint, []byte(`{"endpoint":"https://sync.invalid"}`), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, endpoint, []byte(`{"endpoint":"https://sync.invalid"}`))
 	database := filepath.Join(state, "private.db")
 	store, err := localstore.OpenForDevice(
 		context.Background(), database, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
@@ -101,9 +97,7 @@ func TestResidentReadyRejectsPermissionCorrectNonDatabaseFile(t *testing.T) {
 	bundle := pairedResidentCredential(t)
 	defer bundle.Zero()
 	_, agent := residentReadyFixture(t, bundle)
-	if err := os.WriteFile(agent.DatabasePath, []byte("not-a-database"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, agent.DatabasePath, []byte("not-a-database"))
 	if _, err := agent.ResidentReady(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "valid private local database") {
 		t.Fatalf("opaque private file crossed resident database gate: %v", err)

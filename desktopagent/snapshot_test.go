@@ -13,18 +13,15 @@ import (
 
 func TestRebuildMigratesStaticBaselineAndAppendsOnlyLearnedOverlay(t *testing.T) {
 	store := openBridgeStore(t)
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "private")
+	makePrivateTestDirectory(t, root)
 	baseline := filepath.Join(root, "yunpin", "baseline.tsv")
 	snapshotPath := filepath.Join(root, "yunpin", "private.tsv")
 	original := privateSnapshotHeader +
 		"静态旧词\tr o w\tsogou_import\t7\tfalse\n" +
 		"重合词\tchong he ci\tsogou_import\t3\tfalse\n"
-	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(snapshotPath, []byte(original), 0600); err != nil {
-		t.Fatal(err)
-	}
+	makePrivateTestDirectory(t, filepath.Dir(snapshotPath))
+	writePrivateTestFile(t, snapshotPath, []byte(original))
 	if err := store.SaveExplicit(context.Background(), localstore.Phrase{
 		Text: "同步新词", Pinyin: "tong bu xin ci", Source: "native_selection", UseCount: 5, Pinned: true,
 	}); err != nil {
@@ -68,10 +65,10 @@ func TestRebuildMigratesStaticBaselineAndAppendsOnlyLearnedOverlay(t *testing.T)
 	if strings.Contains(text, "重合词\twan quan bu tong\tsynced_learning") {
 		t.Fatal("stale heteronym overlay crossed the phrase-only static boundary")
 	}
-	if info, err := os.Stat(snapshotPath); err != nil {
+	if info, err := os.Lstat(snapshotPath); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0600 {
-		t.Fatalf("snapshot permissions=%v", info.Mode().Perm())
+	} else if !privateFilePermissionsOK(snapshotPath, info) {
+		t.Fatalf("snapshot is not an exact private regular file: mode=%v", info.Mode())
 	}
 	statePath := filepath.Join(root, "sync", "snapshot-generation")
 	pending, err := snapshotReloadPending(statePath, summary.digest)
@@ -95,13 +92,12 @@ func TestRebuildMigratesStaticBaselineAndAppendsOnlyLearnedOverlay(t *testing.T)
 
 func TestRebuildDoesNotReplaceMalformedExistingSnapshot(t *testing.T) {
 	store := openBridgeStore(t)
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "private")
+	makePrivateTestDirectory(t, root)
 	baseline := filepath.Join(root, "baseline.tsv")
 	snapshotPath := filepath.Join(root, "private.tsv")
 	original := []byte("not-a-private-snapshot\n")
-	if err := os.WriteFile(snapshotPath, original, 0600); err != nil {
-		t.Fatal(err)
-	}
+	writePrivateTestFile(t, snapshotPath, original)
 	if _, err := rebuildPrivateSnapshot(context.Background(), store, baseline, snapshotPath); err == nil {
 		t.Fatal("malformed existing snapshot was overwritten")
 	}

@@ -315,6 +315,7 @@ bool ExerciseSessionLifecycleChurn(RimeApi* api) {
       }
       return false;
     }
+    api->set_option(session, "yunpin_learning_allowed", True);
 
     // Exercise option, update, select/commit and immediate destroy notifier
     // paths.  Intentionally do not drain the commit on alternating sessions:
@@ -379,6 +380,12 @@ int main(int argc, char** argv) {
     api->finalize();
     return 1;
   }
+
+  // This synthetic harness contains no password/private/one-shot field. The
+  // production host remains fail-closed unless it can make this positive
+  // per-session attestation; tests must opt in explicitly rather than weaken
+  // the filter's safe default.
+  api->set_option(session, "yunpin_learning_allowed", True);
 
   bool ok = ExpectFirst(api, session, "zgsh");
   ok = ExpectFirst(
