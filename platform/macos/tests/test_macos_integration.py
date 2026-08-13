@@ -334,11 +334,51 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("-tags=yunpin_pairing_private", agent_build)
         self.assertIn('private_root="$build_root/e2e-private/macos"', agent_build)
         self.assertIn("MACOSX_DEPLOYMENT_TARGET=13.0", agent_build)
+        self.assertIn("go_quote_argument() {", agent_build)
+        self.assertIn(
+            "cannot safely quote a Go tool argument containing both quote styles",
+            agent_build,
+        )
+        self.assertIn('sdkroot="$(xcrun --sdk macosx --show-sdk-path)"', agent_build)
+        self.assertIn('$sdkroot/usr/include/stdlib.h', agent_build)
+        self.assertIn('go_cc="$(go_quote_argument "$clang")"', agent_build)
+        self.assertIn('go_sdkroot="$(go_quote_argument "$sdkroot")"', agent_build)
+        self.assertIn('CC="$go_cc"', agent_build)
+        self.assertIn('SDKROOT="$sdkroot"', agent_build)
+        self.assertIn(
+            '-isysroot $go_sdkroot -mmacosx-version-min=13.0', agent_build
+        )
+        self.assertNotIn(
+            '-isysroot $sdkroot -mmacosx-version-min=13.0', agent_build
+        )
         self.assertIn('xcrun vtool -show-build "$output"', agent_build)
         self.assertIn("go mod verify", agent_build)
         self.assertIn("package_go_licenses.py", agent_build)
         self.assertIn('publicReleaseEligible', agent_build)
         self.assertNotIn('${tags[@]}', agent_build)
+        self.assertIn(
+            'public_baseline_output="$("$public_binary" '
+            'e2e-init-empty-baseline 2>&1)"',
+            agent_build,
+        )
+        self.assertIn(
+            '"$public_baseline_output" == "yunpin-sync-agent: unknown command"',
+            agent_build,
+        )
+        self.assertIn(
+            'private_baseline_gate_output="$("$private_binary" '
+            'e2e-init-empty-baseline 2>&1)"',
+            agent_build,
+        )
+        self.assertIn(
+            "e2e-init-empty-baseline requires --confirm-create-empty-baseline",
+            agent_build,
+        )
+        self.assertNotIn(
+            '"$private_binary" e2e-init-empty-baseline '
+            '--confirm-create-empty-baseline',
+            agent_build,
+        )
         self.assertIn(
             'build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64"\n',
             agent_build,

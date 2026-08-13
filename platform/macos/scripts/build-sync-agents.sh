@@ -28,7 +28,24 @@ rm -f \
   "$public_binary" "$private_binary" \
   "$private_root/BUILD-METADATA.json" "$private_root/SHA256SUMS"
 
+go_quote_argument() {
+  local argument="$1"
+  if [[ "$argument" == *"'"* && "$argument" == *'"'* ]]; then
+    die "cannot safely quote a Go tool argument containing both quote styles"
+  fi
+  if [[ "$argument" == *"'"* ]]; then
+    printf '"%s"' "$argument"
+  else
+    printf "'%s'" "$argument"
+  fi
+}
+
 clang="$(xcrun --find clang)"
+sdkroot="$(xcrun --sdk macosx --show-sdk-path)"
+[[ -d "$sdkroot" && -f "$sdkroot/usr/include/stdlib.h" ]] ||
+  die "the selected Xcode macOS SDK is incomplete: $sdkroot"
+go_cc="$(go_quote_argument "$clang")"
+go_sdkroot="$(go_quote_argument "$sdkroot")"
 
 build_slice() {
   local goarch="$1"
@@ -40,10 +57,11 @@ build_slice() {
     CGO_ENABLED=1 \
       GOOS=darwin \
       GOARCH="$goarch" \
-      CC="$clang" \
+      CC="$go_cc" \
+      SDKROOT="$sdkroot" \
       MACOSX_DEPLOYMENT_TARGET=13.0 \
-      CGO_CFLAGS="-arch $clang_arch -mmacosx-version-min=13.0" \
-      CGO_LDFLAGS="-arch $clang_arch -mmacosx-version-min=13.0" \
+      CGO_CFLAGS="-arch $clang_arch -isysroot $go_sdkroot -mmacosx-version-min=13.0" \
+      CGO_LDFLAGS="-arch $clang_arch -isysroot $go_sdkroot -mmacosx-version-min=13.0" \
       go build -trimpath -buildvcs=false "$@" \
         -o "$output" ./cmd/yunpin-sync-agent
   )
@@ -87,6 +105,12 @@ public_private_status=$?
 set -e
 [[ "$public_private_status" -ne 0 && "$public_private_output" == "yunpin-sync-agent: unknown command" ]] ||
   die "public sync agent exposes a private pairing command"
+set +e
+public_baseline_output="$("$public_binary" e2e-init-empty-baseline 2>&1)"
+public_baseline_status=$?
+set -e
+[[ "$public_baseline_status" -ne 0 && "$public_baseline_output" == "yunpin-sync-agent: unknown command" ]] ||
+  die "public sync agent exposes the private empty-baseline command"
 
 codesign --force --sign - --timestamp=none "$private_binary"
 codesign --verify --strict "$private_binary"
@@ -97,6 +121,12 @@ private_gate_status=$?
 set -e
 [[ "$private_gate_status" -ne 0 && "$private_gate_output" == *"pairing-invite requires --confirm-display-invitation"* ]] ||
   die "private E2E sync agent does not expose the confirmation-gated pairing command"
+set +e
+private_baseline_gate_output="$("$private_binary" e2e-init-empty-baseline 2>&1)"
+private_baseline_gate_status=$?
+set -e
+[[ "$private_baseline_gate_status" -ne 0 && "$private_baseline_gate_output" == *"e2e-init-empty-baseline requires --confirm-create-empty-baseline"* ]] ||
+  die "private E2E sync agent does not expose the confirmation-gated empty-baseline command"
 
 repo_commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'source-export')"
 /usr/bin/python3 - "$private_root/BUILD-METADATA.json" "$repo_commit" <<'PY'

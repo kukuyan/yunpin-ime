@@ -9,7 +9,7 @@ import (
 )
 
 func TestPairingCancelIsExactlyUnknownInDefaultBuild(t *testing.T) {
-	for _, command := range []string{"pairing-cancel", "pairing-abort"} {
+	for _, command := range []string{"pairing-cancel", "pairing-abort", "e2e-init-empty-baseline"} {
 		err := run(context.Background(), []string{command})
 		if err == nil || err.Error() != "unknown command" {
 			t.Fatalf("default build exposed private pairing command %q: %v", command, err)

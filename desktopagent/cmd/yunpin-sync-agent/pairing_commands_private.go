@@ -69,6 +69,22 @@ func commandPairingAbort(ctx context.Context, defaults desktopagent.Paths, argum
 	return writeJSON(result)
 }
 
+func commandE2EInitEmptyBaseline(defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("e2e-init-empty-baseline", flag.ContinueOnError)
+	confirm := set.Bool("confirm-create-empty-baseline", false, "confirm creation of the fixed immutable empty baseline on a clean E2E device")
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	if !*confirm {
+		return errors.New("e2e-init-empty-baseline requires --confirm-create-empty-baseline")
+	}
+	result, err := desktopagent.InitializeEmptyBaseline(defaults)
+	if err != nil {
+		return err
+	}
+	return writeJSON(result)
+}
+
 func runPrivatePairingCommand(ctx context.Context, defaults desktopagent.Paths, arguments []string) (bool, error) {
 	if len(arguments) == 0 {
 		return false, nil
@@ -88,6 +104,8 @@ func runPrivatePairingCommand(ctx context.Context, defaults desktopagent.Paths, 
 		return true, commandPairingCancel(ctx, defaults, arguments[1:])
 	case "pairing-abort":
 		return true, commandPairingAbort(ctx, defaults, arguments[1:])
+	case "e2e-init-empty-baseline":
+		return true, commandE2EInitEmptyBaseline(defaults, arguments[1:])
 	default:
 		return false, nil
 	}
