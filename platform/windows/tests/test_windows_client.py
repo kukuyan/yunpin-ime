@@ -326,9 +326,40 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('BuildTag "yunpin_pairing_private"', agent_build)
         self.assertIn("go mod verify", agent_build)
         self.assertIn("package_go_licenses.py", agent_build)
+        self.assertIn('$publicBaseline = Invoke-AgentCapture -Executable $publicBinary -Arguments @("e2e-init-empty-baseline")', agent_build)
+        self.assertIn('$publicBaseline.Output -cne "yunpin-sync-agent: unknown command"', agent_build)
+        self.assertIn('$privateBaseline = Invoke-AgentCapture -Executable $privateBinary -Arguments @("e2e-init-empty-baseline")', agent_build)
+        self.assertIn("e2e-init-empty-baseline requires --confirm-create-empty-baseline", agent_build)
+        self.assertNotIn('@("e2e-init-empty-baseline", "--confirm-create-empty-baseline")', agent_build)
         self.assertIn('publicReleaseEligible = $false', agent_build)
+        self.assertIn("function Reset-PrivateE2EOutput", agent_build)
+        self.assertIn(".yunpin-private-e2e-generated", agent_build)
+        self.assertIn("Refusing to reset an unmarked private E2E output root", agent_build)
+        self.assertIn("Refusing a nested reparse point in private E2E output", agent_build)
+        self.assertIn("Private E2E output path contains a reparse point", agent_build)
+        self.assertIn("Private E2E output path contains a non-directory component", agent_build)
+        self.assertIn("Unknown file in private E2E generated output", agent_build)
+        self.assertIn("Unknown directory in private E2E generated output", agent_build)
+        self.assertIn("$isPublicSourceExport", agent_build)
+        self.assertIn("$hasPrivateE2ESupport", agent_build)
+        self.assertIn("intentionally absent from this public corresponding-source export", agent_build)
+        self.assertIn('sameRunPublicOverlay = [ordered]@{', agent_build)
+        self.assertIn('activationGate = "private-snapshot-e2e-only"', agent_build)
+        for private_support in (
+            "Private-Snapshot-E2E.Common.ps1",
+            "Enable-Private-Snapshot-E2E.ps1",
+            "Disable-Private-Snapshot-E2E.ps1",
+            "README.md",
+        ):
+            self.assertIn(f'"{private_support}"', agent_build)
         self.assertIn('"desktopagent\\public\\yunpin-sync-agent.exe"', package)
         self.assertNotIn("e2e-private", package)
+        self.assertIn('$privateE2ESource = [IO.Path]::GetFullPath', package)
+        self.assertIn("Refusing to exclude a private E2E source path outside", package)
+        self.assertIn("[IO.FileAttributes]::ReparsePoint", package)
+        self.assertIn("Remove-Item -LiteralPath $privateE2ESource -Recurse -Force", package)
+        self.assertIn("Private E2E activation script entered the public runtime", package_test)
+        self.assertIn("Public runtime manifest references a private E2E activation script", package_test)
         for tree in ("desktopagent", "localstore", "protocol", "syncclient"):
             self.assertIn(f'"{tree}"', package)
         self.assertIn("third_party\\go-modules.lock.json", package)
@@ -336,6 +367,7 @@ class WindowsClientTests(unittest.TestCase):
             'Get-PeMachine -Path $syncAgent',
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("install-probe")',
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")',
+            'Invoke-AgentCapture -Executable $syncAgent -Arguments @("e2e-init-empty-baseline")',
             'yunpin-sync-agent: unknown command',
         ):
             self.assertIn(required, package_test)
@@ -345,6 +377,114 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('syncAgentRegistration = "disabled"', installer)
         self.assertNotIn('Enable-SyncAgent.ps1")', installer)
         self.assertIn('"support\\sync-agent\\Uninstall-SyncAgent.ps1"', uninstaller)
+
+    def test_private_snapshot_e2e_overlay_gate_is_private_and_fail_closed(self) -> None:
+        e2e = WINDOWS / "e2e"
+        common = (e2e / "Private-Snapshot-E2E.Common.ps1").read_text(
+            encoding="utf-8"
+        )
+        enable = (e2e / "Enable-Private-Snapshot-E2E.ps1").read_text(
+            encoding="utf-8"
+        )
+        disable = (e2e / "Disable-Private-Snapshot-E2E.ps1").read_text(
+            encoding="utf-8"
+        )
+        fixture = (e2e / "Test-Private-Snapshot-E2E.ps1").read_text(
+            encoding="utf-8"
+        )
+        private_readme = (e2e / "README.md").read_text(encoding="utf-8")
+        agent_build = (WINDOWS / "scripts" / "Build-SyncAgents.ps1").read_text(
+            encoding="utf-8"
+        )
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        for entry, confirmation in (
+            (enable, "ConfirmPrivateSnapshotE2E"),
+            (disable, "ConfirmDisablePrivateSnapshotE2E"),
+        ):
+            self.assertIn(confirmation, entry)
+            self.assertIn("ExpectedPublicOverlaySha256", entry)
+            self.assertIn("Assert-YunPinPrivateArtifactBinding", entry)
+            for forbidden_parameter in (
+                "InstallRoot",
+                "UserDataRoot",
+                "OverlayPath",
+                "PrivateSnapshotPath",
+                "DeployerPath",
+            ):
+                self.assertNotIn(f"[string]${forbidden_parameter}", entry)
+
+        for required in (
+            "[Environment+SpecialFolder]::ApplicationData",
+            "[Environment+SpecialFolder]::LocalApplicationData",
+            'Join-Path $appData "YunPin\\Rime"',
+            'Join-Path $localAppData "Programs\\YunPinIME\\Preview"',
+            "[IO.FileAttributes]::ReparsePoint",
+            "Get-YunPinCurrentUserSid",
+            "GetOwner(",
+            "Expected exactly one yunpin/enabled: false and no true value",
+            "Expected exactly one yunpin/session_learning: false and no true value",
+            '[IO.FileOptions]::WriteThrough',
+            "$stream.Flush($true)",
+            "[IO.File]::Replace",
+            "function Remove-YunPinStaleGateTemporaryFiles",
+            "Local\\YunPinIME.PrivateSnapshotE2E.",
+            "$mutex.WaitOne(0)",
+            "AbandonedMutexException",
+            '"backup-ready"',
+            '"overlay-enabled-pending-deploy"',
+            '"disabled-pending-deploy"',
+            'Arguments = "/deploy"',
+            "$process.WaitForExit($TimeoutSeconds * 1000)",
+            "$process.Kill()",
+            '"build-metadata.json"',
+            '"enable-private-snapshot-e2e.ps1"',
+            '"disable-private-snapshot-e2e.ps1"',
+        ):
+            self.assertIn(required, common)
+        self.assertNotIn("$env:APPDATA", common)
+        self.assertNotIn("$env:LOCALAPPDATA", common)
+        self.assertNotIn(
+            "Read-YunPinStrictUtf8File -Path $Paths.PrivateSnapshotPath", common
+        )
+        self.assertNotIn(
+            "Get-YunPinFileSha256 -Path $Paths.PrivateSnapshotPath", common
+        )
+        cleanup = common[common.index("function Remove-YunPinGateStateAfterDeploy") :]
+        self.assertLess(cleanup.index("$Paths.StatePath"), cleanup.index("$Paths.BackupPath"))
+        self.assertNotIn('"yunpin/session_learning": true', common + enable + disable)
+        self.assertIn("yunpin_learning_allowed", private_readme)
+        self.assertIn("insufficient to make private candidates visible", private_readme)
+        self.assertIn('hostCapabilityProvided = $false', agent_build)
+        self.assertIn('realCandidateVisibilityClaimed = $false', agent_build)
+
+        for required_fixture in (
+            "fixture deploy failure",
+            "Enable resume left a stale durable-backup temporary file",
+            "fixture disable deploy failure",
+            "Cleanup-order crash fixture did not retain the durable backup",
+            "Duplicate enabled gate created a backup",
+            "not owned by the current user",
+            "reparse point",
+            "Another private snapshot E2E gate process is active",
+        ):
+            self.assertIn(required_fixture, fixture)
+
+        for public_surface in (
+            WINDOWS / "scripts" / "Package-Preview.ps1",
+            WINDOWS / "package" / "Install-Preview.ps1",
+            WINDOWS / "package" / "README.txt",
+            ROOT / ".github" / "workflows" / "release.yml",
+        ):
+            text = public_surface.read_text(encoding="utf-8")
+            self.assertNotIn("Enable-Private-Snapshot-E2E.ps1", text)
+            self.assertNotIn("Disable-Private-Snapshot-E2E.ps1", text)
+            self.assertNotIn("private-snapshot-e2e-only", text)
+
+        self.assertIn("Test-Private-Snapshot-E2E.ps1", ci)
+        self.assertIn("sameRunPublicOverlay.sha256", ci)
 
     def test_original_windows_icon_replaces_upstream_brand_asset(self) -> None:
         svg = (WINDOWS / "assets" / "yunpin-mark.svg").read_text(encoding="utf-8")
