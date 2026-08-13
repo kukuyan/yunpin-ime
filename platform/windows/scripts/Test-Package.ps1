@@ -97,6 +97,23 @@ function Invoke-AgentCapture {
 
 $BundleRoot = [IO.Path]::GetFullPath($BundleRoot)
 Assert-BundleManifest -Root $BundleRoot
+$privateE2ENames = @(
+    "Private-Snapshot-E2E.Common.ps1",
+    "Enable-Private-Snapshot-E2E.ps1",
+    "Disable-Private-Snapshot-E2E.ps1"
+)
+foreach ($privateE2EName in $privateE2ENames) {
+    $leaks = @(Get-ChildItem -LiteralPath $BundleRoot -File -Recurse | Where-Object {
+        $_.Name -ceq $privateE2EName
+    })
+    if ($leaks.Count -ne 0) {
+        throw "Private E2E activation script entered the public runtime: $privateE2EName"
+    }
+    if (Select-String -LiteralPath (Join-Path $BundleRoot "MANIFEST.sha256") `
+        -SimpleMatch -Pattern $privateE2EName -Quiet) {
+        throw "Public runtime manifest references a private E2E activation script: $privateE2EName"
+    }
+}
 $runtime = Join-Path $BundleRoot "runtime"
 $expectedMachines = [ordered]@{
     "yunpin.dll" = 0x014c
@@ -148,6 +165,11 @@ if ($probe.ExitCode -ne 0) {
 $privateCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")
 if ($privateCommand.ExitCode -eq 0 -or $privateCommand.Output -cne "yunpin-sync-agent: unknown command") {
     throw "Public Windows package exposes a private pairing command"
+}
+$privateBaselineCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("e2e-init-empty-baseline")
+if ($privateBaselineCommand.ExitCode -eq 0 -or
+    $privateBaselineCommand.Output -cne "yunpin-sync-agent: unknown command") {
+    throw "Public Windows package exposes the private empty-baseline E2E command"
 }
 
 $setupBinaryText = [Text.Encoding]::Unicode.GetString(

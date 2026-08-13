@@ -299,6 +299,19 @@ foreach ($file in @(".gitignore", "CMakeLists.txt", "Makefile", "README.md")) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $repoRoot "engine") $file) -Destination $sourceEngine -Force
 }
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/windows" -Destination (Join-Path $sourceRoot "platform\windows") -ScratchRoot $scratchRoot
+$privateE2ESource = [IO.Path]::GetFullPath((Join-Path $sourceRoot "platform\windows\e2e"))
+$sourcePrefixForExclusion = [IO.Path]::GetFullPath($sourceRoot).TrimEnd("\") + "\"
+if (-not $privateE2ESource.StartsWith($sourcePrefixForExclusion, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to exclude a private E2E source path outside the generated source root"
+}
+if (Test-Path -LiteralPath $privateE2ESource) {
+    $privateE2EItem = Get-Item -LiteralPath $privateE2ESource -Force
+    if (-not $privateE2EItem.PSIsContainer -or
+        ($privateE2EItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to remove a non-directory or reparse-point private E2E source export"
+    }
+    Remove-Item -LiteralPath $privateE2ESource -Recurse -Force
+}
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/rime" -Destination (Join-Path $sourceRoot "platform\rime") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/weasel" -Destination (Join-Path $sourceRoot "platform\patches\weasel") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/librime-1.17" -Destination (Join-Path $sourceRoot "platform\patches\librime-1.17") -ScratchRoot $scratchRoot
@@ -340,7 +353,8 @@ This archive contains the exact exported source trees and commit markers for
 Weasel, librime, librime's nested dependencies, and Rime Ice, plus YunPin's
 engine, merged plugin, public default-tag sync agent source and its local Go
 modules, Windows scripts, ordered GPL patches, licenses, and the verified Boost
-source archive. It contains no private phrase data or E2E binary artifact.
+source archive. It contains no private phrase data, E2E binary artifact, or
+private E2E activation script.
 
 Verify SOURCE-MANIFEST.sha256, then run from a Visual Studio 2022 developer
 PowerShell:
