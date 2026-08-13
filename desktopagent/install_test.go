@@ -45,6 +45,15 @@ func TestResidentInstallAndVerifyRemainDisabledAndStopped(t *testing.T) {
 				t.Fatalf("macOS staging script %s starts the resident via %q", path, forbidden)
 			}
 		}
+		parser := `$1 == target && $2 == "=>" && ($3 == "true" || $3 == "disabled")`
+		if !strings.Contains(string(contents), parser) {
+			t.Fatalf("macOS staging script %s does not accept both documented launchctl disabled spellings exactly", path)
+		}
+		for _, unsafe := range []string{`$3 == "false"`, `$3 == "enabled"`} {
+			if strings.Contains(string(contents), unsafe) {
+				t.Fatalf("macOS staging script %s accepts enabled launchctl state via %q", path, unsafe)
+			}
+		}
 	}
 	macInstall, err := os.ReadFile("install/macos/Install-LaunchAgent.sh")
 	if err != nil {

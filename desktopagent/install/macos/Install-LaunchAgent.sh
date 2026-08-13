@@ -46,7 +46,10 @@ had_plist=0
 committed=0
 
 launchagent_is_disabled() {
-  launchctl print-disabled "$domain" 2>/dev/null | grep -F "\"$label\" => true" >/dev/null 2>&1
+  launchctl print-disabled "$domain" 2>/dev/null | awk -v target="\"$label\"" '
+    $1 == target && $2 == "=>" && ($3 == "true" || $3 == "disabled") { found = 1 }
+    END { exit found ? 0 : 1 }
+  '
 }
 
 rollback_install() {
