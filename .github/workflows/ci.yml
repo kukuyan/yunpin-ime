@@ -171,6 +171,7 @@ jobs:
         with:
           name: YunPin-Windows-private-pairing-E2E
           path: build/windows/e2e-private/windows
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
