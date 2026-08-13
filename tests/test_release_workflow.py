@@ -759,6 +759,12 @@ class ReleaseWorkflowStaticTests(unittest.TestCase):
             self.assertNotIn(path, release)
         self.assertNotIn("yunpin_pairing_private", release)
 
+    def test_windows_private_pairing_artifact_keeps_signed_hidden_marker(self) -> None:
+        ci = workflow.CI_WORKFLOW.read_text(encoding="utf-8")
+        upload = ci[ci.index("name: YunPin-Windows-private-pairing-E2E") :]
+        upload = upload[: upload.index("retention-days: 1")]
+        self.assertIn("include-hidden-files: true", upload)
+
     def test_post_create_path_never_resolves_or_uploads_by_tag(self) -> None:
         release = workflow.RELEASE_WORKFLOW.read_text(encoding="utf-8")
         after_create = release[release.index("gh release create") :]
