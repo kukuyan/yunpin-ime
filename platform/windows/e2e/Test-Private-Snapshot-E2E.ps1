@@ -24,7 +24,7 @@ function Assert-Throws {
         & $Action
     } catch {
         if ($_.Exception.Message -notmatch $Pattern) {
-            throw "Unexpected failure: $($_.Exception.Message)"
+            throw "Unexpected failure: $($_.Exception.Message)`n$($_.ScriptStackTrace)"
         }
         return
     }
@@ -97,10 +97,13 @@ try {
     Ensure-YunPinOwnedDirectoryChain -BasePath $paths.LocalAppDataBase `
         -DirectoryPath $paths.StateRoot
     $staleBackup = Join-Path $paths.StateRoot ".backup-11111111111111111111111111111111.tmp"
+    $staleReplaceBackup = Join-Path $paths.StateRoot ".replace-backup-33333333333333333333333333333333.tmp"
     $staleReplace = Join-Path $paths.UserDataRoot ".yunpin-e2e-replace-22222222222222222222222222222222.tmp"
     [IO.File]::WriteAllText($staleBackup, "stale")
+    [IO.File]::WriteAllText($staleReplaceBackup, "stale")
     [IO.File]::WriteAllText($staleReplace, "stale")
     Set-YunPinOwnerForCreatedPath -Path $staleBackup
+    Set-YunPinOwnerForCreatedPath -Path $staleReplaceBackup
     Set-YunPinOwnerForCreatedPath -Path $staleReplace
     $script:enableDeployAttempts = 0
     $failEnableOnce = {
@@ -115,6 +118,8 @@ try {
         "Enable resume left a stale durable-backup temporary file"
     Assert-True (-not (Test-Path -LiteralPath $staleReplace)) `
         "Enable resume left a stale atomic-replace temporary file"
+    Assert-True (-not (Test-Path -LiteralPath $staleReplaceBackup)) `
+        "Enable resume left a stale replacement-backup temporary file"
     Assert-True (Test-Path -LiteralPath $paths.BackupPath -PathType Leaf) `
         "Backup was not retained after enable deploy failure"
     Assert-YunPinEnabledOverlay -Text (Read-YunPinStrictUtf8File -Path $paths.OverlayPath).Text

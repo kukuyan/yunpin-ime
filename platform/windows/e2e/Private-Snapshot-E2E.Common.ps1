@@ -244,6 +244,10 @@ function Remove-YunPinStaleGateTemporaryFiles {
                 [pscustomobject]@{
                     Filter = ".state-*.tmp"
                     Regex = '^\.state-[0-9a-f]{32}\.tmp$'
+                },
+                [pscustomobject]@{
+                    Filter = ".replace-backup-*.tmp"
+                    Regex = '^\.replace-backup-[0-9a-f]{32}\.tmp$'
                 }
             )
         },
@@ -253,6 +257,10 @@ function Remove-YunPinStaleGateTemporaryFiles {
                 [pscustomobject]@{
                     Filter = ".yunpin-e2e-replace-*.tmp"
                     Regex = '^\.yunpin-e2e-replace-[0-9a-f]{32}\.tmp$'
+                },
+                [pscustomobject]@{
+                    Filter = ".replace-backup-*.tmp"
+                    Regex = '^\.replace-backup-[0-9a-f]{32}\.tmp$'
                 }
             )
         }
@@ -411,6 +419,29 @@ function Write-YunPinDurableBytes {
     Set-YunPinOwnerForCreatedPath -Path $Path
 }
 
+function Replace-YunPinFileAtomically {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReplacementPath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    $backupPath = Join-Path (Split-Path -Parent $DestinationPath) (
+        ".replace-backup-" + [guid]::NewGuid().ToString("N") + ".tmp"
+    )
+    if (Test-Path -LiteralPath $backupPath) {
+        throw "Atomic private E2E replacement backup path already exists"
+    }
+    # PowerShell/.NET on Windows rejects a null File.Replace backup path.  A
+    # unique same-directory backup retains ReplaceFile's atomic semantics; it
+    # is identity-checked before deletion and recognized by crash recovery.
+    [IO.File]::Replace($ReplacementPath, $DestinationPath, $backupPath, $true)
+    if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+        throw "Atomic private E2E replacement did not create its recovery backup"
+    }
+    Assert-YunPinOwnedNonReparsePath -Path $backupPath
+    Remove-Item -LiteralPath $backupPath -Force
+}
+
 function Set-YunPinFileAtomically {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -427,7 +458,8 @@ function Set-YunPinFileAtomically {
         if ((Get-YunPinFileSha256 -Path $temporary) -cne $ExpectedSha256) {
             throw "Durable private E2E replacement hash differs"
         }
-        [IO.File]::Replace($temporary, $Path, $null, $true)
+        Replace-YunPinFileAtomically -ReplacementPath $temporary `
+            -DestinationPath $Path
         if ((Get-YunPinFileSha256 -Path $Path) -cne $ExpectedSha256) {
             throw "Atomic private E2E replacement hash differs"
         }
@@ -476,7 +508,8 @@ function Write-YunPinGateState {
     try {
         Write-YunPinDurableBytes -Path $temporary -Bytes $bytes
         if (Test-Path -LiteralPath $Paths.StatePath -PathType Leaf) {
-            [IO.File]::Replace($temporary, $Paths.StatePath, $null, $true)
+            Replace-YunPinFileAtomically -ReplacementPath $temporary `
+                -DestinationPath $Paths.StatePath
         } else {
             [IO.File]::Move($temporary, $Paths.StatePath)
         }
