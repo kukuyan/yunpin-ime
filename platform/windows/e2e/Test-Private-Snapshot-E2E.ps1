@@ -84,6 +84,11 @@ try {
     Copy-Item -LiteralPath $sourceOverlay -Destination $paths.OverlayPath
     [IO.File]::WriteAllText($paths.PrivateSnapshotPath, "fixture-private-body-not-for-gate`n")
     [IO.File]::WriteAllBytes($paths.DeployerPath, [byte[]](0x4d, 0x5a, 0x00, 0x00))
+    $fixtureItems = @((Get-Item -LiteralPath $fixtureRoot -Force))
+    $fixtureItems += @(Get-ChildItem -LiteralPath $fixtureRoot -Recurse -Force)
+    foreach ($fixtureItem in $fixtureItems) {
+        Set-YunPinOwnerForCreatedPath -Path $fixtureItem.FullName
+    }
 
     $publicSha = Get-YunPinFileSha256 -Path $paths.OverlayPath
     $privateItem = Get-Item -LiteralPath $paths.PrivateSnapshotPath
@@ -94,6 +99,9 @@ try {
     $staleReplace = Join-Path $paths.UserDataRoot ".yunpin-e2e-replace-22222222222222222222222222222222.tmp"
     [IO.File]::WriteAllText($staleBackup, "stale")
     [IO.File]::WriteAllText($staleReplace, "stale")
+    Set-YunPinOwnerForCreatedPath -Path $paths.StateRoot
+    Set-YunPinOwnerForCreatedPath -Path $staleBackup
+    Set-YunPinOwnerForCreatedPath -Path $staleReplace
     $script:enableDeployAttempts = 0
     $failEnableOnce = {
         $script:enableDeployAttempts++
@@ -150,6 +158,7 @@ try {
         "The private snapshot fixture metadata changed"
 
     Copy-Item -LiteralPath $sourceOverlay -Destination $paths.OverlayPath -Force
+    Set-YunPinOwnerForCreatedPath -Path $paths.OverlayPath
     Add-Content -LiteralPath $paths.OverlayPath -Value '  yunpin/enabled: false'
     Assert-Throws -Action {
         Invoke-YunPinPrivateSnapshotEnable -Paths $paths `
@@ -163,6 +172,7 @@ try {
     }
 
     Copy-Item -LiteralPath $sourceOverlay -Destination $paths.OverlayPath -Force
+    Set-YunPinOwnerForCreatedPath -Path $paths.OverlayPath
     $unsafeLearning = (Get-Content -LiteralPath $paths.OverlayPath -Raw).Replace(
         '"yunpin/session_learning": false', '"yunpin/session_learning": true'
     )
@@ -177,6 +187,7 @@ try {
     }
 
     Copy-Item -LiteralPath $sourceOverlay -Destination $paths.OverlayPath -Force
+    Set-YunPinOwnerForCreatedPath -Path $paths.OverlayPath
     $fakeOwner = New-Object Security.Principal.SecurityIdentifier("S-1-5-18")
     if ($fakeOwner.Value -ceq (Get-YunPinCurrentUserSid).Value) {
         $fakeOwner = New-Object Security.Principal.SecurityIdentifier("S-1-5-32-544")

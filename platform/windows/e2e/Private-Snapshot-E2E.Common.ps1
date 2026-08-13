@@ -78,6 +78,27 @@ function Assert-YunPinOwnedNonReparsePath {
     }
 }
 
+function Set-YunPinOwnerForCreatedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # Elevated Windows tokens commonly use BUILTIN\Administrators as their
+    # default object owner even though TokenUser is the signed-in user.  Keep
+    # the production verifier strict: objects this gate creates are explicitly
+    # rebound to TokenUser instead of teaching the verifier to trust the group.
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to change ownership through a reparse point: $Path"
+    }
+    $sid = Get-YunPinCurrentUserSid
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+    if ($owner.Value -cne $sid.Value) {
+        $acl.SetOwner($sid)
+        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    }
+    Assert-YunPinOwnedNonReparsePath -Path $Path
+}
+
 function Assert-YunPinOwnedPathChain {
     param(
         [Parameter(Mandatory = $true)][string]$BasePath,
@@ -112,6 +133,42 @@ function Assert-YunPinOwnedPathChain {
             break
         }
         Assert-YunPinOwnedNonReparsePath -Path $current -ExpectedOwnerSid $ExpectedOwnerSid
+    }
+}
+
+function Ensure-YunPinOwnedDirectoryChain {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$DirectoryPath
+    )
+
+    $base = [IO.Path]::GetFullPath($BasePath).TrimEnd('\')
+    $target = [IO.Path]::GetFullPath($DirectoryPath).TrimEnd('\')
+    $prefix = $base + "\"
+    if ($target -cne $base -and
+        -not $target.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Private E2E directory escapes its fixed base: $target"
+    }
+    Assert-YunPinOwnedNonReparsePath -Path $base
+    if ($target -ceq $base) {
+        return
+    }
+
+    $current = $base
+    foreach ($part in $target.Substring($prefix.Length).Split('\')) {
+        if ([string]::IsNullOrWhiteSpace($part)) {
+            throw "Private E2E directory contains an empty path component"
+        }
+        $current = Join-Path $current $part
+        if (Test-Path -LiteralPath $current) {
+            if (-not (Test-Path -LiteralPath $current -PathType Container)) {
+                throw "Private E2E directory component is not a directory: $current"
+            }
+            Assert-YunPinOwnedNonReparsePath -Path $current
+            continue
+        }
+        New-Item -ItemType Directory -Path $current | Out-Null
+        Set-YunPinOwnerForCreatedPath -Path $current
     }
 }
 
@@ -351,6 +408,7 @@ function Write-YunPinDurableBytes {
     } finally {
         $stream.Dispose()
     }
+    Set-YunPinOwnerForCreatedPath -Path $Path
 }
 
 function Set-YunPinFileAtomically {
@@ -404,9 +462,8 @@ function Write-YunPinGateState {
         [Parameter(Mandatory = $true)][string]$EnabledSha256
     )
 
-    if (-not (Test-Path -LiteralPath $Paths.StateRoot -PathType Container)) {
-        New-Item -ItemType Directory -Path $Paths.StateRoot -Force | Out-Null
-    }
+    Ensure-YunPinOwnedDirectoryChain -BasePath $Paths.LocalAppDataBase `
+        -DirectoryPath $Paths.StateRoot
     Assert-YunPinOwnedPathChain -BasePath $Paths.LocalAppDataBase -Path $Paths.StateRoot
     $state = New-YunPinGateState -Phase $Phase -PublicSha256 $PublicSha256 `
         -EnabledSha256 $EnabledSha256
@@ -501,9 +558,8 @@ function Initialize-YunPinGateBackup {
         throw "Installed overlay does not match the expected same-run public overlay"
     }
     Assert-YunPinDisabledOverlay -Text $current.Text | Out-Null
-    if (-not (Test-Path -LiteralPath $Paths.StateRoot -PathType Container)) {
-        New-Item -ItemType Directory -Path $Paths.StateRoot -Force | Out-Null
-    }
+    Ensure-YunPinOwnedDirectoryChain -BasePath $Paths.LocalAppDataBase `
+        -DirectoryPath $Paths.StateRoot
     Assert-YunPinOwnedPathChain -BasePath $Paths.LocalAppDataBase -Path $Paths.StateRoot
     if (-not (Test-Path -LiteralPath $Paths.BackupPath -PathType Leaf)) {
         $temporary = Join-Path $Paths.StateRoot (
