@@ -8,9 +8,11 @@ Rime personal snapshot. Keyboard handlers never perform disk or network I/O.
 
 `CredentialBundleV1` contains the device bearer token, Ed25519 seed, X25519
 private key, per-device SQLite key, account object-ID key, epoch keys, and the
-authenticated verification roster. It is stored only in a
-non-synchronizable, `AfterFirstUnlockThisDeviceOnly` macOS Keychain item or a
-current-user Windows DPAPI record below `%LOCALAPPDATA%`.
+authenticated verification roster. It is stored only in the current user's
+local, non-synchronizable macOS login Keychain or a current-user Windows DPAPI
+record below `%LOCALAPPDATA%`. The ad-hoc signed command-line preview targets
+the file-based login Keychain because Apple's data protection Keychain requires
+provisioning-profile-authorized access-group entitlements.
 
 The recovery root is never stored. First-device provisioning is deliberately
 two phase:

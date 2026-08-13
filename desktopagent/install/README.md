@@ -111,8 +111,8 @@ items, snapshots, and dictionaries.
 The installers copy the agent into the current user's private YunPin state,
 register a disabled resident job, and verify it remains stopped. The separate
 enable script starts it only after local setup succeeds. The agent itself
-uses Keychain (`AfterFirstUnlockThisDeviceOnly`, non-synchronizable) on macOS
-and current-user DPAPI on Windows. The endpoint must already have been written
+uses the current user's local, non-synchronizable login Keychain on macOS and
+current-user DPAPI on Windows. The endpoint must already have been written
 with `yunpin-sync-agent configure` before the enabler succeeds. Account
 preparation and device pairing are separate, interactive operations and are
 never performed by the resident job.

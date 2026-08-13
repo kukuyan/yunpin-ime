@@ -44,10 +44,13 @@ static CFMutableDictionaryRef yp_query(const char *service, size_t service_len,
     CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
     CFDictionarySetValue(query, kSecAttrService, service_string);
     CFDictionarySetValue(query, kSecAttrAccount, account_string);
-    CFDictionarySetValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue);
-    // Scope every operation to local, non-synchronizable items. Without this
-    // predicate a lookup or delete could match an unrelated iCloud item.
-    CFDictionarySetValue(query, kSecAttrSynchronizable, kCFBooleanFalse);
+    // The preview agent is an ad-hoc signed command-line tool. Apple's data
+    // protection keychain requires provisioning-profile-authorized access
+    // group entitlements, which this deliberately unsigned preview cannot
+    // possess. SecItem defaults to the local file-based login keychain on
+    // macOS when neither kSecUseDataProtectionKeychain nor synchronizable is
+    // supplied. This keeps secrets encrypted and device-local while allowing
+    // the per-user LaunchAgent to use the same item after login.
   }
   CFRelease(service_string);
   CFRelease(account_string);
@@ -73,13 +76,9 @@ static int32_t yp_keychain_save(const char *service, size_t service_len,
     return errSecAllocate;
   }
   CFDictionarySetValue(changes, kSecValueData, data);
-  CFDictionarySetValue(changes, kSecAttrAccessible,
-                       kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
   OSStatus status = SecItemUpdate(query, changes);
   if (status == errSecItemNotFound) {
     CFDictionarySetValue(query, kSecValueData, data);
-    CFDictionarySetValue(query, kSecAttrAccessible,
-                         kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
     status = SecItemAdd(query, NULL);
   }
   CFRelease(changes);
