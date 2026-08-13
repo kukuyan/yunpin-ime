@@ -94,12 +94,12 @@ try {
     $privateItem = Get-Item -LiteralPath $paths.PrivateSnapshotPath
     $privateLengthBefore = $privateItem.Length
     $privateWriteTimeBefore = $privateItem.LastWriteTimeUtc
-    New-Item -ItemType Directory -Path $paths.StateRoot -Force | Out-Null
+    Ensure-YunPinOwnedDirectoryChain -BasePath $paths.LocalAppDataBase `
+        -DirectoryPath $paths.StateRoot
     $staleBackup = Join-Path $paths.StateRoot ".backup-11111111111111111111111111111111.tmp"
     $staleReplace = Join-Path $paths.UserDataRoot ".yunpin-e2e-replace-22222222222222222222222222222222.tmp"
     [IO.File]::WriteAllText($staleBackup, "stale")
     [IO.File]::WriteAllText($staleReplace, "stale")
-    Set-YunPinOwnerForCreatedPath -Path $paths.StateRoot
     Set-YunPinOwnerForCreatedPath -Path $staleBackup
     Set-YunPinOwnerForCreatedPath -Path $staleReplace
     $script:enableDeployAttempts = 0
