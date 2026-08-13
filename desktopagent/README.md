@@ -175,14 +175,22 @@ state, and fixed private Rime bridge metadata. Its Rime check never invokes
 maintenance or reads vocabulary rows; it validates only configuration,
 filesystem identity, permissions, and bounded metadata.
 
+Private-tag CI binaries expose one clean-device bootstrap command:
+`e2e-init-empty-baseline --confirm-create-empty-baseline`. It holds the fixed
+agent process lock and performs an OS-level no-replace publish of only the exact
+five-column empty header when both fixed baseline and snapshot paths are absent.
+Existing files are never opened, read, replaced, or automatically deleted. The
+default/public binary reports `unknown command` for this E2E-only operation.
+
 ## Honest completion boundary
 
 The first-device provisioning, two-device pairing primitives/journals, native
 event and strict Rime-userdb staging ingestion, encrypted sync worker, baseline
 merge, atomic snapshot, reload retry, and resident-service contracts are
-implemented and unit tested. The pairing CLI remains intentionally disabled
-until the exact two-device flow, rollback response-loss, platform integration,
-signed packaging, and real Mac↔R0W runtime acceptance are all green. The Rime
-userdb path additionally requires the fixed platform host maintenance and fresh
+implemented and unit tested. Pairing commands remain absent from the public
+binary and exist only in checksum-bound, short-lived private E2E artifacts until
+the exact two-device flow, rollback response-loss, platform integration, signed
+packaging, and real Mac↔R0W runtime acceptance are all green. The Rime userdb
+path additionally requires the fixed platform host maintenance and fresh
 acknowledgement boundary described above. This is therefore not yet a deployable
 multi-device release.

@@ -9,6 +9,14 @@ archive still contains the audited build-tagged source. Private-tag executable
 files are separate one-day CI E2E artifacts and are never downloaded by the
 release workflow or included in its exact seven public assets.
 
+On a clean E2E device, that private executable additionally exposes
+`e2e-init-empty-baseline --confirm-create-empty-baseline`. The public executable
+must return exactly `unknown command`. The private command uses only fixed
+platform paths and the common process lock; it creates the immutable five-column
+empty baseline only when both `baseline.tsv` and `private.tsv` are absent. It
+never reads or overwrites an existing vocabulary file and intentionally has no
+automatic delete/reset command.
+
 The installer's `install-probe` checks only that the binary starts; it never
 loads an endpoint, credential, database, dictionary, or network client, so
 interactive account/pairing setup may safely follow installation. Neither
@@ -58,8 +66,13 @@ The package integration is intentionally staged, not enabled:
    `install-probe`. They do not load user sync material or contact the relay.
 4. After account/pairing setup, run the matching explicit enable script. The
    enabler suppresses the complete local `resident-ready` stream and remains fail-closed
-   if setup is incomplete. Only then require a real candidate commit and
-   snapshot reload on both Mac and R0W. A one-off `sync-once` acceptance run
+   if setup is incomplete. Only then require encrypted transfer, private
+   snapshot replacement, and reload evidence on both Mac and R0W. Real private-
+   candidate visibility is a separate host-capability gate: until Squirrel and
+   Weasel provide a trustworthy per-field `yunpin_learning_allowed` signal, the
+   filter rejects private injection as well as native event publication. Never
+   set that option globally merely to make an E2E test pass. A one-off
+   `sync-once` acceptance run
    requires temporarily stopping the resident job because `run` deliberately
    holds the single-process lock for its lifetime; always restore and verify
    resident registration afterward.

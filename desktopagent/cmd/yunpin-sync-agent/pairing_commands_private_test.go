@@ -36,9 +36,10 @@ func TestPrivatePairingCommandDispatcherDoesNotCaptureUnknownCommands(t *testing
 
 func TestPrivatePairingCommandsAreRegisteredOnlyByThePrivateBuild(t *testing.T) {
 	for command, expectedGate := range map[string]string{
-		"pairing-invite": "--confirm-display-invitation",
-		"pairing-cancel": "--confirm",
-		"pairing-abort":  "--confirm",
+		"pairing-invite":          "--confirm-display-invitation",
+		"pairing-cancel":          "--confirm",
+		"pairing-abort":           "--confirm",
+		"e2e-init-empty-baseline": "--confirm-create-empty-baseline",
 	} {
 		err := run(context.Background(), []string{command})
 		if err == nil || !strings.Contains(err.Error(), expectedGate) || err.Error() == "unknown command" {
