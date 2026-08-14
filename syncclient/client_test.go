@@ -72,6 +72,16 @@ func TestUserLoginAndClaimKeepSessionSeparateFromDeviceBearer(t *testing.T) {
 			if request.Header.Get("Authorization") != "Bearer "+sessionToken {
 				t.Fatalf("claim authorization=%q", request.Header.Get("Authorization"))
 			}
+			var claim struct {
+				DeviceID    string `json:"device_id"`
+				DeviceToken string `json:"device_token"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&claim); err != nil {
+				t.Fatalf("decode claim: %v", err)
+			}
+			if claim.DeviceID != strings.Repeat("22", 16) || claim.DeviceToken != base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, 32)) {
+				t.Fatalf("unexpected claim body: %#v", claim)
+			}
 			writer.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected path %s", request.URL.Path)
@@ -86,7 +96,7 @@ func TestUserLoginAndClaimKeepSessionSeparateFromDeviceBearer(t *testing.T) {
 	if err != nil || session.Token != sessionToken || session.Username != "alice" {
 		t.Fatalf("login session=%#v err=%v", session, err)
 	}
-	if err := New(endpoint, WithUserSession(session.Token)).ClaimAccount(context.Background(), bytes.Repeat([]byte{0x11}, 16), bytes.Repeat([]byte{0x22}, 32)); err != nil {
+	if err := New(endpoint, WithUserSession(session.Token)).ClaimAccount(context.Background(), bytes.Repeat([]byte{0x11}, 16), bytes.Repeat([]byte{0x22}, 16), bytes.Repeat([]byte{0x33}, 32)); err != nil {
 		t.Fatalf("claim account: %v", err)
 	}
 }

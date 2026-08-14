@@ -109,9 +109,10 @@ paths:
       security:
         - userSession: []
       description: >-
-        Binds an existing recovery-protected account to the logged-in user.
-        The human recovery key never crosses the network; the client sends
-        only its domain-separated authentication material.
+        Binds an existing account to the logged-in user. The request must
+        prove possession of the account's current active device credential,
+        which is already protected by the local OS credential store. It does
+        not accept a recovery key, password, or recovery-derived value.
       requestBody:
         required: true
         content:
@@ -119,9 +120,11 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [recovery_authentication]
+              required: [device_id, device_token]
               properties:
-                recovery_authentication:
+                device_id:
+                  $ref: "#/components/schemas/ID"
+                device_token:
                   $ref: "#/components/schemas/SecretInput"
       responses:
         "200":

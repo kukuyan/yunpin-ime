@@ -231,10 +231,6 @@ func commandClaimAccount(ctx context.Context, defaults desktopagent.Paths, argum
 	if !*confirm {
 		return errors.New("claim-account requires --confirm-claim-existing-account")
 	}
-	recoveryKey, err := readSecretPrompt("Saved YunPin recovery key: ")
-	if err != nil {
-		return err
-	}
 	secrets, _, err := common.components()
 	if err != nil {
 		return err
@@ -248,7 +244,7 @@ func commandClaimAccount(ctx context.Context, defaults desktopagent.Paths, argum
 		return err
 	}
 	if err := desktopagent.WithProcessLock(common.lock, func() error {
-		return desktopagent.ClaimCurrentAccount(ctx, syncclient.New(endpoint, syncclient.WithUserSession(session.Token)), secrets, common.profile, endpoint.String(), recoveryKey)
+		return desktopagent.ClaimCurrentAccount(ctx, syncclient.New(endpoint, syncclient.WithUserSession(session.Token)), secrets, common.profile, endpoint.String())
 	}); err != nil {
 		return err
 	}
