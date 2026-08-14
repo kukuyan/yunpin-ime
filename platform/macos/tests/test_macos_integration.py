@@ -73,7 +73,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(10, len(patches))
+        self.assertEqual(11, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -462,6 +462,62 @@ class MacOSIntegrationTests(unittest.TestCase):
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+        )
+
+    def test_candidate_updates_detach_rime_memory_and_serialize_reentry(self) -> None:
+        controller = (
+            self.prepared / "sources" / "SquirrelInputController.swift"
+        ).read_text(encoding="utf-8")
+        update = controller[
+            controller.index("  func rimeUpdate()") : controller.index(
+                "  func commit(string:"
+            )
+        ]
+
+        for marker in (
+            "private static var rimeUpdateInProgress",
+            "private static var rimeUpdateWasReentered",
+            "pendingRimeUpdates",
+            "guard Thread.isMainThread",
+            "DispatchQueue.main.async",
+        ):
+            self.assertIn(marker, controller)
+        self.assertLess(
+            update.index("if Self.rimeUpdateInProgress"),
+            update.index("rimeConsumeCommittedText()"),
+        )
+        self.assertIn("Self.pendingRimeUpdates.add(self)", update)
+        self.assertIn("guard !Self.rimeUpdateWasReentered else { return }", update)
+
+        # No Rime-owned pointer may cross an IMK/AppKit callback. The complete
+        # Swift snapshot is formed and released before either UI entry point.
+        context_release = update.index("rimeAPI.free_context(&ctx)")
+        self.assertLess(context_release, update.index("show(preedit:"))
+        self.assertLess(context_release, update.index("showPanel(preedit:"))
+        self.assertNotIn("ctx.", update[context_release:])
+        self.assertIn("min(rawOffset, preedit.utf8.count)", update)
+
+        status_release = update.index("rimeAPI.free_status(&status)")
+        self.assertLess(status_release, update.index("loadSettings(for: schemaId)"))
+        committed = controller[
+            controller.index("  func rimeConsumeCommittedText()") :
+            controller.index("  func rimeUpdate()")
+        ]
+        self.assertLess(
+            committed.index("rimeAPI.free_commit(&commitText)"),
+            committed.index("commit(string: committed)"),
+        )
+
+        show_panel = controller[
+            controller.index("  func showPanel(") : controller.rindex("\n}")
+        ]
+        self.assertLess(
+            show_panel.index("client.attributes("),
+            show_panel.index("guard !Self.rimeUpdateWasReentered"),
+        )
+        self.assertLess(
+            show_panel.index("guard !Self.rimeUpdateWasReentered"),
+            show_panel.index("panel.update("),
         )
 
     def test_original_artwork_replaces_upstream_visible_assets(self) -> None:
