@@ -112,6 +112,12 @@
       "license_source": "https://go.googlesource.com/sys/+/refs/tags/v0.47.0/LICENSE"
     },
     {
+      "module": "golang.org/x/term",
+      "version": "v0.45.0",
+      "license": "BSD-3-Clause",
+      "license_source": "https://go.googlesource.com/term/+/refs/tags/v0.45.0/LICENSE"
+    },
+    {
       "module": "golang.org/x/text",
       "version": "v0.40.0",
       "license": "BSD-3-Clause",
