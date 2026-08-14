@@ -119,6 +119,9 @@ class WindowsClientTests(unittest.TestCase):
             rime_with_weasel = (
                 target / "RimeWithWeasel" / "RimeWithWeasel.cpp"
             ).read_text(encoding="utf-8-sig")
+            rime_with_weasel_header = (
+                target / "include" / "RimeWithWeasel.h"
+            ).read_text(encoding="utf-8-sig")
             configurator = (
                 target / "WeaselDeployer" / "Configurator.cpp"
             ).read_text(encoding="utf-8-sig")
@@ -162,6 +165,57 @@ class WindowsClientTests(unittest.TestCase):
                 rime_with_weasel.index("if (!_SessionsAreIdle())", idle_gate),
                 rime_with_weasel.index("StartMaintenance();", idle_gate),
             )
+            session_allocator = rime_with_weasel[
+                rime_with_weasel.index("WeaselSessionId _GenerateNewWeaselSessionId") :
+                rime_with_weasel.index("int expand_ibus_modifier")
+            ]
+            self.assertIn("const SessionStatusMap& sm", session_allocator)
+            self.assertIn("WeaselSessionId& next_id", session_allocator)
+            self.assertIn("const WeaselSessionId candidate = next_id++", session_allocator)
+            self.assertIn("return 0", session_allocator)
+            self.assertNotIn("sm.empty()", session_allocator)
+            self.assertNotIn("sm.rbegin()", session_allocator)
+            self.assertIn("WeaselSessionId m_next_session_id = 0", rime_with_weasel_header)
+            self.assertLess(
+                rime_with_weasel.index("m_pid = (m_pid << (31 - msbit))"),
+                rime_with_weasel.index("m_next_session_id = m_pid + 1"),
+            )
+            self.assertLess(
+                rime_with_weasel.index("m_next_session_id = m_pid + 1"),
+                rime_with_weasel.index("_Setup();"),
+            )
+            add_session = rime_with_weasel[
+                rime_with_weasel.index("DWORD RimeWithWeaselHandler::AddSession") :
+                rime_with_weasel.index("DWORD RimeWithWeaselHandler::RemoveSession")
+            ]
+            self.assertIn(
+                "_GenerateNewWeaselSessionId(m_session_status_map, m_next_session_id)",
+                add_session,
+            )
+            exhausted = add_session[add_session.index("if (!ipc_id)") :]
+            self.assertLess(
+                exhausted.index("rime_api->destroy_session(session_id)"),
+                exhausted.index("return 0"),
+            )
+            finalize = rime_with_weasel[
+                rime_with_weasel.index("void RimeWithWeaselHandler::Finalize()") :
+                rime_with_weasel.index("DWORD RimeWithWeaselHandler::FindSession")
+            ]
+            self.assertLess(finalize.index("if (m_disabled)"), finalize.index("m_disabled = true"))
+            self.assertLess(
+                finalize.index("pair.second.session_id = 0"),
+                finalize.index("rime_api->destroy_session(session_id)"),
+            )
+            self.assertLess(
+                finalize.index("rime_api->destroy_session(session_id)"),
+                finalize.index("m_session_status_map.clear()"),
+            )
+            start_maintenance = rime_with_weasel[
+                rime_with_weasel.index("void RimeWithWeaselHandler::StartMaintenance()") :
+                rime_with_weasel.index("bool RimeWithWeaselHandler::_SessionsAreIdle()")
+            ]
+            self.assertIn("Finalize();", start_maintenance)
+            self.assertNotIn("m_session_status_map.clear()", start_maintenance)
             sync_method = configurator[configurator.index("int Configurator::SyncUserData()") :]
             self.assertIn("constexpr int kMaintenanceBusyExitCode = 75", sync_method)
             self.assertIn("client.TryStartMaintenance()", sync_method)
