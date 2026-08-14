@@ -120,6 +120,38 @@
       "license": "MIT"
     },
     {
+      "name": "librime-lua-68f9c36.tar.gz",
+      "url": "https://codeload.github.com/hchunhui/librime-lua/tar.gz/68f9c364a2d25a04c7d4794981d7c796b05ab627",
+      "sha256": "3c4a60bacf8dd6389ca1b4b4889207b8f6c0c6a43e7b848cdac570d592a640b5",
+      "rime_plugin": "lua",
+      "commit": "68f9c364a2d25a04c7d4794981d7c796b05ab627",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "librime-lua-thirdparty-fa40fad.tar.gz",
+      "url": "https://codeload.github.com/hchunhui/librime-lua/tar.gz/fa40fadd8af1e5b1fbd55703ccbd54476956d74c",
+      "sha256": "70f43164aaec58a22cb92774d61b19d206563cc62a08954832c2dfd416cf8fd8",
+      "rime_plugin_thirdparty": "lua",
+      "commit": "fa40fadd8af1e5b1fbd55703ccbd54476956d74c",
+      "license": "MIT"
+    },
+    {
+      "name": "librime-octagram-dfcc151.tar.gz",
+      "url": "https://codeload.github.com/lotem/librime-octagram/tar.gz/dfcc15115788c828d9dd7b4bff68067d3ce2ffb8",
+      "sha256": "7da3df7a5dae82557f7a4842b94dfe81dd21ef7e036b132df0f462f2dae18393",
+      "rime_plugin": "octagram",
+      "commit": "dfcc15115788c828d9dd7b4bff68067d3ce2ffb8",
+      "license": "GPL-3.0-only"
+    },
+    {
+      "name": "librime-predict-920bd41.tar.gz",
+      "url": "https://codeload.github.com/rime/librime-predict/tar.gz/920bd41ebf6f9bf6855d14fbe80212e54e749791",
+      "sha256": "38b2f32254e1a35ac04dba376bc8999915c8fbdb35be489bffdf09079983400c",
+      "rime_plugin": "predict",
+      "commit": "920bd41ebf6f9bf6855d14fbe80212e54e749791",
+      "license": "BSD-3-Clause"
+    },
+    {
       "name": "rime-prelude-082425e.tar.gz",
       "url": "https://github.com/rime/rime-prelude/archive/082425ea0684bca36474415d4a0e8db9b016487e.tar.gz",
       "sha256": "66239ba4745d54471e5ce5540b45e86ec663ff5dba004cb23c95531a3bdec00f",

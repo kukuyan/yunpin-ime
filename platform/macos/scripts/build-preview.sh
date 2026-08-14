@@ -82,11 +82,20 @@ cp "${REPO_ROOT}/third_party/squirrel/LICENSE.txt" "$shared_support/licenses/Squ
 cp "${REPO_ROOT}/LICENSE" "$shared_support/licenses/YunPin-Apache-LICENSE"
 cp "$source_dir/librime/deps/boost-$(read_lock_value boost_version)/LICENSE_1_0.txt" \
   "$shared_support/licenses/Boost-1.89.0-LICENSE"
+cp "$source_dir/librime/plugins/lua/LICENSE" \
+  "$shared_support/licenses/librime-lua-BSD-3-Clause-LICENSE"
+cp "$source_dir/librime/plugins/lua/thirdparty/lua5.4/lua.h" \
+  "$shared_support/licenses/Lua-5.4.8-Copyright-Notice.h"
+cp "$source_dir/librime/plugins/octagram/LICENSE" \
+  "$shared_support/licenses/librime-octagram-GPL-3.0-LICENSE"
+cp "$source_dir/librime/plugins/predict/LICENSE" \
+  "$shared_support/licenses/librime-predict-BSD-3-Clause-LICENSE"
 for package in bopomofo cangjie essay luna-pinyin prelude stroke terra-pinyin; do
   cp "$source_dir/plum/package/rime/$package/LICENSE" "$shared_support/licenses/Rime-$package-LGPL-3.0-LICENSE"
 done
 cp "${MACOS_DIR}/preview-manifest.json" "$shared_support/yunpin-preview.json"
 
+"${MACOS_DIR}/scripts/test-rime-plugin-runtime.sh" "$app" "$source_dir"
 "${MACOS_DIR}/scripts/sign-app-adhoc.sh" "$app"
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
 lsregister="${YUNPIN_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister}"
