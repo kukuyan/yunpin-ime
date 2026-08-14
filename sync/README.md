@@ -26,7 +26,11 @@ The Dockerfile exposes explicit `test` and `runtime` targets. The complete HTTP 
 | Method | Path | Authentication | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | none | Database liveness |
-| `POST` | `/v1/accounts` | none | Create an account and its first device |
+| `POST` | `/v1/auth/register` | none | Create a self-hosted username/password login and return an opaque session |
+| `POST` | `/v1/auth/login` | none | Create a bounded opaque session for a selected server |
+| `POST` | `/v1/auth/logout` | user session | Revoke the current opaque session |
+| `POST` | `/v1/accounts` | user session | Create an account and its first device |
+| `POST` | `/v1/accounts/{id}/claim` | user session + recovery authentication | Bind a pre-login encrypted account to its owner |
 | `DELETE` | `/v1/accounts/{id}` | short-lived rollback capability | Roll back an otherwise-unused, unsealed new account |
 | `POST` | `/v1/accounts/{id}/seal` | provisioning device token | Seal the first device after durable local commit |
 | `POST` | `/v1/accounts/{id}/recover` | recovery authentication | Reserved; fail-closed in the fixed two-device preview |
@@ -45,6 +49,24 @@ The Dockerfile exposes explicit `test` and `runtime` targets. The complete HTTP 
 | `GET`, `PUT` | `/v1/keyring` | bearer device token | Fetch or publish opaque key epochs |
 
 Device IDs and tokens are generated client-side; the relay stores only token SHA-256 digests. The client creates the 256-bit human recovery key, presents it as checksummed `yprec1…` text/QR, and derives `recovery_authentication` with HKDF-SHA-256 domain `yunpin-recovery-authentication-v1`. Only the SHA-256 of that 32-byte authentication output is stored; the human recovery key and the recovery encryption key are never sent to or derived by the relay.
+
+## User login and selectable relay
+
+The relay is selected per desktop profile, not compiled into the input method.
+`configure-server --endpoint <HTTPS URL>` writes only the selected endpoint and
+its explicit private-HTTP policy. `register --username <name>` and
+`login --username <name>` read the password privately from the terminal; the
+password is never accepted as a command argument or stored on either desktop.
+The relay stores a salted PBKDF2-SHA-256 verifier and hashes every opaque
+30-day session. The session itself is held only in macOS Keychain or
+current-user Windows DPAPI.
+
+Daily encrypted synchronization still authenticates with the per-device
+bearer and signed roster; it does not require a long-lived user-password
+session. Existing pre-login accounts are adopted once with
+`claim-account --confirm-claim-existing-account`: the recovery key is entered
+locally, the client derives domain-separated authentication material, and the
+human recovery key never leaves the device.
 
 Device display names are supplied and returned as client-encrypted `device_name_ciphertext`, never plaintext. Relay device listings are operational metadata and are never a trust root. Each credential persists the creator-signed, versioned roster delivered inside the encrypted pairing package; private keys never leave DPAPI/Credential Manager or Apple Keychain.
 

@@ -58,6 +58,39 @@ func TestDeleteAccountUsesAuthenticatedExactPath(t *testing.T) {
 	}
 }
 
+func TestUserLoginAndClaimKeepSessionSeparateFromDeviceBearer(t *testing.T) {
+	const sessionToken = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/auth/login":
+			if request.Header.Get("Authorization") != "" {
+				t.Fatal("login unexpectedly carried a session bearer")
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"username":"alice","token":"` + sessionToken + `","expires_at":"2030-01-01T00:00:00Z"}`))
+		case "/v1/accounts/11111111111111111111111111111111/claim":
+			if request.Header.Get("Authorization") != "Bearer "+sessionToken {
+				t.Fatalf("claim authorization=%q", request.Header.Get("Authorization"))
+			}
+			writer.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	endpoint, err := ParseEndpoint(server.URL, EndpointPolicy{AllowPrivateHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := New(endpoint).Login(context.Background(), "alice", "a-long-enough-password")
+	if err != nil || session.Token != sessionToken || session.Username != "alice" {
+		t.Fatalf("login session=%#v err=%v", session, err)
+	}
+	if err := New(endpoint, WithUserSession(session.Token)).ClaimAccount(context.Background(), bytes.Repeat([]byte{0x11}, 16), bytes.Repeat([]byte{0x22}, 32)); err != nil {
+		t.Fatalf("claim account: %v", err)
+	}
+}
+
 func TestPairingAndRosterClientRoundTrip(t *testing.T) {
 	pairingID := bytes.Repeat([]byte{0x41}, 16)
 	pairingSecret := bytes.Repeat([]byte{0x42}, protocol.PairingSecretSize)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/kukuyan/yunpin-ime/desktopagent"
 	"github.com/kukuyan/yunpin-ime/syncclient"
+	"golang.org/x/term"
 )
 
 const savedRecoveryConfirmation = "SAVED"
@@ -113,6 +114,145 @@ func writeJSON(value any) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
+}
+
+func readSecretPrompt(label string) (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errors.New("interactive terminal input is required; do not pass passwords or recovery keys as command arguments")
+	}
+	_, _ = fmt.Fprint(os.Stderr, label)
+	value, err := term.ReadPassword(int(os.Stdin.Fd()))
+	_, _ = fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", errors.New("could not read private terminal input")
+	}
+	defer clear(value)
+	if len(value) == 0 {
+		return "", errors.New("private terminal input cannot be empty")
+	}
+	return string(value), nil
+}
+
+func commandRegister(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("register", flag.ContinueOnError)
+	common := addCommonFlags(set, defaults)
+	username := set.String("username", "", "self-hosted YunPin username")
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	password, err := readSecretPrompt("YunPin password: ")
+	if err != nil {
+		return err
+	}
+	confirm, err := readSecretPrompt("Repeat YunPin password: ")
+	if err != nil {
+		return err
+	}
+	if password != confirm {
+		return errors.New("password confirmation does not match")
+	}
+	secrets, _, err := common.components()
+	if err != nil {
+		return err
+	}
+	endpoint, err := syncclient.LoadEndpointConfig(common.endpoint)
+	if err != nil {
+		return err
+	}
+	var result desktopagent.UserLoginResult
+	err = desktopagent.WithProcessLock(common.lock, func() error {
+		var registerErr error
+		result, registerErr = desktopagent.RegisterUser(ctx, syncclient.New(endpoint), secrets, common.profile, endpoint.String(), *username, password)
+		return registerErr
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(result)
+}
+
+func commandLogin(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("login", flag.ContinueOnError)
+	common := addCommonFlags(set, defaults)
+	username := set.String("username", "", "self-hosted YunPin username")
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	password, err := readSecretPrompt("YunPin password: ")
+	if err != nil {
+		return err
+	}
+	secrets, _, err := common.components()
+	if err != nil {
+		return err
+	}
+	endpoint, err := syncclient.LoadEndpointConfig(common.endpoint)
+	if err != nil {
+		return err
+	}
+	var result desktopagent.UserLoginResult
+	err = desktopagent.WithProcessLock(common.lock, func() error {
+		var loginErr error
+		result, loginErr = desktopagent.LoginUser(ctx, syncclient.New(endpoint), secrets, common.profile, endpoint.String(), *username, password)
+		return loginErr
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(result)
+}
+
+func commandLogout(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("logout", flag.ContinueOnError)
+	common := addCommonFlags(set, defaults)
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	secrets, _, err := common.components()
+	if err != nil {
+		return err
+	}
+	endpoint, err := syncclient.LoadEndpointConfig(common.endpoint)
+	if err != nil {
+		return err
+	}
+	return desktopagent.WithProcessLock(common.lock, func() error {
+		return desktopagent.LogoutUser(ctx, syncclient.New(endpoint), secrets, common.profile, endpoint.String())
+	})
+}
+
+func commandClaimAccount(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("claim-account", flag.ContinueOnError)
+	common := addCommonFlags(set, defaults)
+	confirm := set.Bool("confirm-claim-existing-account", false, "confirm binding this local account to the current YunPin login")
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	if !*confirm {
+		return errors.New("claim-account requires --confirm-claim-existing-account")
+	}
+	recoveryKey, err := readSecretPrompt("Saved YunPin recovery key: ")
+	if err != nil {
+		return err
+	}
+	secrets, _, err := common.components()
+	if err != nil {
+		return err
+	}
+	endpoint, err := syncclient.LoadEndpointConfig(common.endpoint)
+	if err != nil {
+		return err
+	}
+	session, err := desktopagent.LoadUserSession(ctx, secrets, common.profile, endpoint.String())
+	if err != nil {
+		return err
+	}
+	if err := desktopagent.WithProcessLock(common.lock, func() error {
+		return desktopagent.ClaimCurrentAccount(ctx, syncclient.New(endpoint, syncclient.WithUserSession(session.Token)), secrets, common.profile, endpoint.String(), recoveryKey)
+	}); err != nil {
+		return err
+	}
+	return writeJSON(map[string]bool{"claimed": true})
 }
 
 type installProbeResult struct {
@@ -293,10 +433,14 @@ func commandInitAccount(ctx context.Context, defaults desktopagent.Paths, argume
 	if err != nil {
 		return err
 	}
+	session, err := desktopagent.LoadUserSession(ctx, secrets, common.profile, endpoint.String())
+	if err != nil {
+		return err
+	}
 	var result desktopagent.InitAccountResult
 	err = desktopagent.WithProcessLock(common.lock, func() error {
 		var initErr error
-		result, initErr = desktopagent.InitAccount(ctx, syncclient.New(endpoint), desktopagent.InitAccountOptions{
+		result, initErr = desktopagent.InitAccount(ctx, syncclient.New(endpoint, syncclient.WithUserSession(session.Token)), desktopagent.InitAccountOptions{
 			Secrets: secrets, Profile: common.profile, DatabasePath: common.database,
 		})
 		return initErr
@@ -545,7 +689,7 @@ func commandRun(ctx context.Context, defaults desktopagent.Paths, arguments []st
 
 func run(ctx context.Context, arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: yunpin-sync-agent <install-probe|configure|configure-rime-bridge|prepare-account|init-account|abort-account|sync-once|run|status|resident-ready> [options]")
+		return errors.New("usage: yunpin-sync-agent <install-probe|configure|configure-server|configure-rime-bridge|register|login|logout|claim-account|prepare-account|init-account|abort-account|sync-once|run|status|resident-ready> [options]")
 	}
 	// Keep the package/install health probe ahead of DefaultPaths: even a broken
 	// or unavailable user state root must not make binary installation look like
@@ -563,8 +707,18 @@ func run(ctx context.Context, arguments []string) error {
 	switch arguments[0] {
 	case "configure":
 		return commandConfigure(defaults, arguments[1:])
+	case "configure-server":
+		return commandConfigure(defaults, arguments[1:])
 	case "configure-rime-bridge":
 		return commandConfigureRimeBridge(defaults, arguments[1:])
+	case "register":
+		return commandRegister(ctx, defaults, arguments[1:])
+	case "login":
+		return commandLogin(ctx, defaults, arguments[1:])
+	case "logout":
+		return commandLogout(ctx, defaults, arguments[1:])
+	case "claim-account":
+		return commandClaimAccount(ctx, defaults, arguments[1:])
 	case "prepare-account":
 		return commandPrepareAccount(ctx, defaults, arguments[1:])
 	case "init-account":

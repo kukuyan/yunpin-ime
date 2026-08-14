@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/kukuyan/yunpin-ime/desktopagent"
+	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
 func TestInstallProbeIsIdentifierFreeAndNeedsNoConfiguredState(t *testing.T) {
@@ -120,6 +122,38 @@ func TestConfigureRimeBridgeRequiresExplicitConfirmation(t *testing.T) {
 	err := run(context.Background(), []string{"configure-rime-bridge"})
 	if err == nil || !strings.Contains(err.Error(), "requires --confirm") {
 		t.Fatalf("Rime bridge setup crossed confirmation gate: %v", err)
+	}
+}
+
+func TestConfigureServerAliasPersistsOnlySelectedEndpoint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("desktopagent package owns the exact Windows ACL fixture; this command test covers Unix dispatch")
+	}
+	directory := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "sync.json")
+	if err := run(context.Background(), []string{
+		"configure-server", "--endpoint-config", path, "--endpoint", "https://sync.example.test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := syncclient.LoadEndpointConfig(path)
+	if err != nil || endpoint.String() != "https://sync.example.test" {
+		t.Fatalf("configured endpoint=%q err=%v", endpoint.String(), err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"token", "password", "recovery"} {
+		if strings.Contains(strings.ToLower(string(contents)), forbidden) {
+			t.Fatalf("endpoint configuration leaked %q: %s", forbidden, contents)
+		}
 	}
 }
 

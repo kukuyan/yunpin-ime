@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 const sealedBoxWireGolden = "WVBCWAEAAAAQERERERERERERERERERERERERERERERERIiIiIiIiIiIiIiIiIiIiIg"
@@ -30,6 +33,7 @@ type testDevice struct {
 	token                  string
 	rollbackToken          string
 	recoveryAuthentication string
+	userSession            string
 	publicKey              ed25519.PublicKey
 	privateKey             ed25519.PrivateKey
 	x25519Key              []byte
@@ -115,6 +119,64 @@ func TestInvalidSignatureIsRejected(t *testing.T) {
 	response := apiRequest(t, device.server, http.MethodPost, "/v1/sync", device.token, map[string]any{"cursor": 0, "ack_cursor": 0, "envelopes": []Envelope{envelope}})
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_envelope_signature") {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestUserLoginAndAccountClaimAreBoundedAndFailClosed(t *testing.T) {
+	device := newTestAccount(t)
+	defer device.server.Close()
+	password := "correct-horse-battery-staple"
+	registered := apiRequest(t, device.server, http.MethodPost, "/v1/auth/register", "", map[string]string{
+		"username": "alice.test", "password": password,
+	})
+	if registered.Code != http.StatusCreated {
+		t.Fatalf("register status=%d body=%s", registered.Code, registered.Body.String())
+	}
+	var session sessionResponse
+	decodeResponse(t, registered, &session)
+	if session.Username != "alice.test" || session.Token == "" || session.ExpiresAt.Before(time.Now()) {
+		t.Fatalf("invalid registration session: %#v", session)
+	}
+	duplicate := apiRequest(t, device.server, http.MethodPost, "/v1/auth/register", "", map[string]string{
+		"username": "ALICE.TEST", "password": password,
+	})
+	if duplicate.Code != http.StatusConflict || !strings.Contains(duplicate.Body.String(), "username_unavailable") {
+		t.Fatalf("duplicate register status=%d body=%s", duplicate.Code, duplicate.Body.String())
+	}
+	badLogin := apiRequest(t, device.server, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"username": "alice.test", "password": "wrong-password-value",
+	})
+	if badLogin.Code != http.StatusUnauthorized || !strings.Contains(badLogin.Body.String(), "invalid_credentials") {
+		t.Fatalf("bad login status=%d body=%s", badLogin.Code, badLogin.Body.String())
+	}
+	login := apiRequest(t, device.server, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"username": "ALICE.TEST", "password": password,
+	})
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	decodeResponse(t, login, &session)
+	if _, err := device.server.db.Exec(`UPDATE accounts SET user_id = NULL WHERE id = ?`, device.accountID); err != nil {
+		t.Fatal(err)
+	}
+	claim := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", session.Token,
+		map[string]string{"recovery_authentication": device.recoveryAuthentication})
+	if claim.Code != http.StatusOK {
+		t.Fatalf("claim status=%d body=%s", claim.Code, claim.Body.String())
+	}
+	wrongClaim := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", device.userSession,
+		map[string]string{"recovery_authentication": device.recoveryAuthentication})
+	if wrongClaim.Code != http.StatusConflict || !strings.Contains(wrongClaim.Body.String(), "account_claim_conflict") {
+		t.Fatalf("foreign claim status=%d body=%s", wrongClaim.Code, wrongClaim.Body.String())
+	}
+	logout := apiRequest(t, device.server, http.MethodPost, "/v1/auth/logout", session.Token, map[string]any{})
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout status=%d body=%s", logout.Code, logout.Body.String())
+	}
+	replay := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", session.Token,
+		map[string]string{"recovery_authentication": device.recoveryAuthentication})
+	if replay.Code != http.StatusUnauthorized || !strings.Contains(replay.Body.String(), "invalid_session") {
+		t.Fatalf("expired session replay status=%d body=%s", replay.Code, replay.Body.String())
 	}
 }
 
@@ -1147,7 +1209,8 @@ func newTestAccountState(t *testing.T, seal bool) testDevice {
 	deviceID := hex.EncodeToString(randomDeviceID)
 	deviceToken := base64.RawURLEncoding.EncodeToString(randomDeviceToken)
 	rollbackToken := base64.RawURLEncoding.EncodeToString(randomRollbackToken)
-	response := apiRequest(t, application, http.MethodPost, "/v1/accounts", "", map[string]any{
+	userSession := newTestUserSession(t, application)
+	response := apiRequest(t, application, http.MethodPost, "/v1/accounts", userSession, map[string]any{
 		"account_id":              accountID,
 		"device_id":               deviceID,
 		"device_token":            deviceToken,
@@ -1179,10 +1242,32 @@ func newTestAccountState(t *testing.T, seal bool) testDevice {
 		}
 	}
 	return testDevice{
-		accountID: account.AccountID, deviceID: account.DeviceID, token: account.Token, rollbackToken: rollbackToken,
+		accountID: account.AccountID, deviceID: account.DeviceID, token: account.Token, rollbackToken: rollbackToken, userSession: userSession,
 		recoveryAuthentication: recoveryAuthentication,
 		publicKey:              publicKey, privateKey: privateKey, x25519Key: xKey, databasePath: databasePath, server: application, logBuffer: logs,
 	}
+}
+
+func newTestUserSession(t *testing.T, application *Server) string {
+	t.Helper()
+	userID, err := randomID(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := randomSecret(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := application.now().UnixMilli()
+	if _, err := application.db.Exec(`INSERT INTO users(id, username, password_hash, created_at) VALUES(?, ?, ?, ?)`,
+		userID, "test-"+userID[:12], "pbkdf2-sha256$600000$MDEyMzQ1Njc4OWFiY2RlZg$MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.db.Exec(`INSERT INTO auth_sessions(token_hash, user_id, expires_at, created_at) VALUES(?, ?, ?, ?)`,
+		digest(token), userID, now+sessionLifetime.Milliseconds(), now); err != nil {
+		t.Fatal(err)
+	}
+	return token
 }
 
 func TestAccountRollbackDeletesOnlyUnusedSoleDeviceAccount(t *testing.T) {
@@ -1234,7 +1319,7 @@ func TestExpiredProvisioningGCCreatesIdempotentRollbackTombstone(t *testing.T) {
 		t.Fatalf("expired provisioning rollback status=%d body=%s", response.Code, response.Body.String())
 	}
 	// A delayed create replay must not resurrect the same remote incarnation.
-	response = apiRequest(t, device.server, http.MethodPost, "/v1/accounts", "", map[string]any{
+	response = apiRequest(t, device.server, http.MethodPost, "/v1/accounts", device.userSession, map[string]any{
 		"account_id": device.accountID, "device_id": device.deviceID, "device_token": device.token,
 		"rollback_token": device.rollbackToken, "recovery_authentication": device.recoveryAuthentication,
 		"device_name_ciphertext": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x30}, 32)),
@@ -1262,7 +1347,7 @@ func TestAccountProvisioningIsIdempotentAndNormalBearerCannotRollback(t *testing
 		"ed25519_public_key":      base64.RawURLEncoding.EncodeToString(edKey),
 		"x25519_public_key":       base64.RawURLEncoding.EncodeToString(xKey),
 	}
-	replayed := apiRequest(t, device.server, http.MethodPost, "/v1/accounts", "", payload)
+	replayed := apiRequest(t, device.server, http.MethodPost, "/v1/accounts", device.userSession, payload)
 	if replayed.Code != http.StatusCreated {
 		t.Fatalf("idempotent provisioning replay status=%d body=%s", replayed.Code, replayed.Body.String())
 	}
@@ -1279,7 +1364,7 @@ func TestAccountProvisioningIsIdempotentAndNormalBearerCannotRollback(t *testing
 		t.Fatalf("normal device bearer deleted account: status=%d body=%s", wrongCapability.Code, wrongCapability.Body.String())
 	}
 	payload["device_token"] = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0xee}, 32))
-	conflict := apiRequest(t, device.server, http.MethodPost, "/v1/accounts", "", payload)
+	conflict := apiRequest(t, device.server, http.MethodPost, "/v1/accounts", device.userSession, payload)
 	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), "provisioning_identity_conflict") {
 		t.Fatalf("conflicting provisioning replay status=%d body=%s", conflict.Code, conflict.Body.String())
 	}
@@ -1928,7 +2013,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 		FROM schema_migrations WHERE name = '001_init.sql'`).Scan(&count, &checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 || checksum != hex.EncodeToString(expected[:]) {
+	if count != 3 || checksum != hex.EncodeToString(expected[:]) {
 		t.Fatalf("migration ledger mismatch: count=%d checksum=%q", count, checksum)
 	}
 	if err := application.Close(); err != nil {
@@ -1938,7 +2023,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 2 {
+	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 3 {
 		t.Fatalf("migration reapplied: count=%d err=%v", count, err)
 	}
 	if _, err := application.db.Exec("UPDATE schema_migrations SET checksum = ? WHERE name = ?", strings.Repeat("0", 64), "001_init.sql"); err != nil {
@@ -1949,6 +2034,59 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 	}
 	if _, err := New(context.Background(), databasePath, nil); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("tampered migration ledger was accepted: %v", err)
+	}
+}
+
+func TestUserAuthMigrationPreservesExistingEncryptedAccount(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "pre-login.db")
+	database, err := sql.Open("sqlite", "file:"+databasePath+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE schema_migrations (
+  name TEXT PRIMARY KEY, checksum TEXT NOT NULL CHECK(length(checksum) = 64), applied_at INTEGER NOT NULL
+)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"001_init.sql", "002_provisioning_lifecycle.sql"} {
+		body, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(string(body)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+		sum := sha256.Sum256(body)
+		if _, err := database.Exec(`INSERT INTO schema_migrations(name, checksum, applied_at) VALUES(?, ?, 1)`, name, hex.EncodeToString(sum[:])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accountID := strings.Repeat("a", 32)
+	deviceID := strings.Repeat("b", 32)
+	if _, err := database.Exec(`INSERT INTO accounts(id, recovery_authentication_hash, created_at, provisioning_sealed_at)
+		VALUES(?, ?, 1, 1)`, accountID, bytes.Repeat([]byte{0x11}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO devices(id, account_id, name_ciphertext, token_hash, ed25519_public_key, x25519_public_key, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, 1)`, deviceID, accountID, bytes.Repeat([]byte{0x21}, 16), bytes.Repeat([]byte{0x22}, 32), bytes.Repeat([]byte{0x23}, 32), bytes.Repeat([]byte{0x24}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	application, err := New(context.Background(), databasePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer application.Close()
+	var userID sql.NullString
+	var devices, migrationCount int
+	if err := application.db.QueryRow(`SELECT user_id, (SELECT COUNT(*) FROM devices), (SELECT COUNT(*) FROM schema_migrations)
+		FROM accounts WHERE id = ?`, accountID).Scan(&userID, &devices, &migrationCount); err != nil {
+		t.Fatal(err)
+	}
+	if userID.Valid || devices != 1 || migrationCount != 3 {
+		t.Fatalf("legacy account changed by login migration: user=%#v devices=%d migrations=%d", userID, devices, migrationCount)
 	}
 }
 

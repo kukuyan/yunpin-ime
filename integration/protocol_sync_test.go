@@ -16,6 +16,7 @@ import (
 
 	"github.com/kukuyan/yunpin-ime/protocol"
 	syncserver "github.com/kukuyan/yunpin-ime/sync/server"
+	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
 type deterministicReader struct{ next byte }
@@ -58,10 +59,17 @@ func TestProtocolEnvelopeIsAcceptedAndReturnedBySyncHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer application.Close()
+	relay := httptest.NewServer(application)
+	defer relay.Close()
+	endpoint, err := syncclient.ParseEndpoint(relay.URL, syncclient.EndpointPolicy{AllowPrivateHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := integrationUserSession(t, context.Background(), endpoint)
 
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
 	deviceToken := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, 32))
-	created := request(t, application, http.MethodPost, "/v1/accounts", "", map[string]any{
+	created := request(t, application, http.MethodPost, "/v1/accounts", session.Token, map[string]any{
 		"account_id":              hex.EncodeToString(bytes.Repeat([]byte{0x65}, 16)),
 		"device_id":               hex.EncodeToString(bytes.Repeat([]byte{0x66}, 16)),
 		"device_token":            deviceToken,

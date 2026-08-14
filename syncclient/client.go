@@ -22,18 +22,61 @@ import (
 const maxResponseBytes = 2 << 20
 
 type Client struct {
-	endpoint Endpoint
-	http     *http.Client
+	endpoint         Endpoint
+	http             *http.Client
+	userSessionToken string
 }
 
 type Option func(*http.Client)
 
 func WithTransport(transport http.RoundTripper) Option {
-	return func(client *http.Client) { client.Transport = transport }
+	return func(client *http.Client) {
+		if session, ok := client.Transport.(sessionTransport); ok {
+			session.base = transport
+			client.Transport = session
+			return
+		}
+		client.Transport = transport
+	}
 }
 
 func WithTimeout(timeout time.Duration) Option {
 	return func(client *http.Client) { client.Timeout = timeout }
+}
+
+// WithUserSession attaches one protected, user-login session to account
+// registration and account-claim calls. Device synchronization continues to
+// supply its own device bearer explicitly and never uses this session.
+func WithUserSession(token string) Option {
+	return func(client *http.Client) {
+		client.Transport = sessionTransport{base: client.Transport, token: token}
+	}
+}
+
+type sessionTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (transport sessionTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if strings.ContainsAny(transport.token, " \t\r\n") || transport.token == "" {
+		return nil, errors.New("invalid user session")
+	}
+	if request.Header.Get("Authorization") != "" {
+		base := transport.base
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		return base.RoundTrip(request)
+	}
+	cloned := request.Clone(request.Context())
+	cloned.Header = request.Header.Clone()
+	cloned.Header.Set("Authorization", "Bearer "+transport.token)
+	base := transport.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(cloned)
 }
 
 func New(endpoint Endpoint, options ...Option) *Client {
@@ -143,6 +186,71 @@ type Account struct {
 	// short-lived capability for idempotently undoing a failed local pairing
 	// commit and is never used for sync authentication.
 	DeviceRollbackToken string
+}
+
+// UserSession is an opaque bearer returned by a selected YunPin relay after a
+// successful password login. Store Token only in the platform secret store;
+// it is intentionally absent from endpoint configuration and sync payloads.
+type UserSession struct {
+	Username  string
+	Token     string
+	ExpiresAt time.Time
+}
+
+type userSessionWire struct {
+	Username  string    `json:"username"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func sessionFromWire(wire userSessionWire) (UserSession, error) {
+	if wire.Username == "" || len(wire.Username) > 64 || wire.Token == "" ||
+		strings.ContainsAny(wire.Token, " \t\r\n") || wire.ExpiresAt.IsZero() {
+		return UserSession{}, errors.New("sync relay returned invalid login session")
+	}
+	return UserSession{Username: wire.Username, Token: wire.Token, ExpiresAt: wire.ExpiresAt.UTC()}, nil
+}
+
+// Register creates a self-hosted YunPin login. The password is sent only to
+// the selected relay over its configured transport and is never persisted by
+// this client.
+func (client *Client) Register(ctx context.Context, username, password string) (UserSession, error) {
+	var response userSessionWire
+	if err := client.doJSON(ctx, http.MethodPost, "/v1/auth/register", "", map[string]string{
+		"username": username, "password": password,
+	}, &response, http.StatusCreated); err != nil {
+		return UserSession{}, err
+	}
+	return sessionFromWire(response)
+}
+
+// Login exchanges the supplied password for a bounded opaque session.
+func (client *Client) Login(ctx context.Context, username, password string) (UserSession, error) {
+	var response userSessionWire
+	if err := client.doJSON(ctx, http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"username": username, "password": password,
+	}, &response, http.StatusOK); err != nil {
+		return UserSession{}, err
+	}
+	return sessionFromWire(response)
+}
+
+func (client *Client) Logout(ctx context.Context, token string) error {
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return errors.New("invalid user session")
+	}
+	return client.doJSON(ctx, http.MethodPost, "/v1/auth/logout", token, map[string]any{}, nil, http.StatusNoContent)
+}
+
+// ClaimAccount binds an existing recovery-protected account to the logged-in
+// user session configured with WithUserSession. It never uploads the human
+// recovery key, only its already-domain-separated authentication material.
+func (client *Client) ClaimAccount(ctx context.Context, accountID, recoveryAuthentication []byte) error {
+	if len(accountID) != 16 || len(recoveryAuthentication) != 32 {
+		return errors.New("account claim requires valid account and recovery authentication")
+	}
+	return client.doJSON(ctx, http.MethodPost, "/v1/accounts/"+hex.EncodeToString(accountID)+"/claim", "",
+		map[string]string{"recovery_authentication": base64.RawURLEncoding.EncodeToString(recoveryAuthentication)}, nil, http.StatusOK)
 }
 
 type PairingInvitation struct {

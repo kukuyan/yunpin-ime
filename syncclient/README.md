@@ -13,6 +13,13 @@ Ed25519 keys, decrypts locally, merges the phrase CRDT, then advances the cursor
 and acknowledges only the exact outbox version sent. Tokens and private keys
 are caller-owned and never persisted by this module.
 
+The selected relay is an endpoint-only profile setting. `Register` and
+`Login` exchange a user password for an opaque bounded session; callers keep
+that session in the platform secret store and pass it only through
+`WithUserSession` for account creation or account claim. Device bearer tokens
+continue to authorize routine encrypted sync, so a user-password session is
+not attached to phrase data uploads or stored in endpoint JSON.
+
 Desktop endpoint configuration contains no credential. A NAS endpoint such as
 `http://192.168.1.127:8787` requires the explicit private-LAN exception:
 

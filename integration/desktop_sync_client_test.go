@@ -86,7 +86,7 @@ func TestTwoHeadlessDesktopWorkersConvergeAndRetryLostResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalClient := syncclient.New(endpoint)
+	normalClient := integrationAuthenticatedClient(t, ctx, endpoint)
 	recoveryKey := bytes.Repeat([]byte{0x30}, 32)
 	recoveryAuthenticationWire, err := protocol.RecoveryAuthentication(recoveryKey)
 	if err != nil {

@@ -35,7 +35,7 @@ func TestPairingV2RejectsRelayTrustAndDeliversSignedRoster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := syncclient.New(endpoint)
+	client := integrationAuthenticatedClient(t, ctx, endpoint)
 
 	creatorKeys, err := protocol.NewDeviceKeys(bytes.NewReader(deterministicBytes(96, 1)))
 	if err != nil {
