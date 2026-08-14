@@ -23,7 +23,10 @@ import (
 )
 
 const (
-	learningThreshold         uint64 = 2
+	// Every entry in the user's Rime user dictionary is part of the sync set.
+	// Keeping a second-use threshold here silently omitted legitimate personal
+	// vocabulary from a first full-device sync.
+	learningThreshold         uint64 = 1
 	maxConsumedNativeReceipts        = 16384
 )
 

@@ -80,23 +80,23 @@ func TestLearningThresholdAndProtectedContexts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.UseCount != 1 || first.SyncEligible {
-		t.Fatalf("first selection must remain local: %#v", first)
+	if first.UseCount != 1 || !first.SyncEligible {
+		t.Fatalf("first selection must be sync eligible: %#v", first)
 	}
 	pending, err := store.PendingEventCount(ctx)
-	if err != nil || pending != 0 {
-		t.Fatalf("first selection entered outbox: pending=%d err=%v", pending, err)
+	if err != nil || pending != 1 {
+		t.Fatalf("first selection was not atomically queued: pending=%d err=%v", pending, err)
 	}
 	second, err := store.RecordSelection(ctx, phrase, LearningContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.UseCount != 2 || !second.SyncEligible {
-		t.Fatalf("second selection must become sync eligible: %#v", second)
+		t.Fatalf("second selection must remain sync eligible: %#v", second)
 	}
 	pending, err = store.PendingEventCount(ctx)
 	if err != nil || pending != 1 {
-		t.Fatalf("threshold crossing was not atomically queued: pending=%d err=%v", pending, err)
+		t.Fatalf("updated selection was not atomically queued: pending=%d err=%v", pending, err)
 	}
 	events, err := store.PendingEvents(ctx, 256)
 	if err != nil || len(events) != 1 || events[0].Phrase.UseCount != 2 {
@@ -136,8 +136,8 @@ func TestNativeSelectionReceiptIsAtomicAndIdempotent(t *testing.T) {
 		t.Fatalf("duplicate changed encrypted phrase: snapshot=%#v err=%v", snapshot, err)
 	}
 	pending, err := store.PendingEventCount(ctx)
-	if err != nil || pending != 0 {
-		t.Fatalf("first local selection crossed sync threshold: pending=%d err=%v", pending, err)
+	if err != nil || pending != 1 {
+		t.Fatalf("first native selection was not queued: pending=%d err=%v", pending, err)
 	}
 	selection.EventID = "process_nonce-00000002"
 	third, err := store.RecordNativeSelection(ctx, selection)
