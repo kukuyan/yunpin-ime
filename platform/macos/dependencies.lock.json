@@ -87,6 +87,10 @@
     {
       "path": "platform/patches/squirrel/0011-yunpin-serialize-reentrant-candidate-updates.patch",
       "sha256": "fef2091fdb4c0a4e331e190ceca6d3a31301986f439af93cf799fd183b0ec444"
+    },
+    {
+      "path": "platform/patches/squirrel/0012-yunpin-defer-rime-notifications-outside-engine.patch",
+      "sha256": "b81d4e8e71b5c798203736baad1818f773279a77ce48439a07a9414cf991905d"
     }
   ],
   "archives": [
