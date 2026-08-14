@@ -10,7 +10,7 @@ servers:
   - url: http://localhost:8080
     description: Local development
 security:
-  - bearerAuth: []
+  - deviceBearer: []
 paths:
   /healthz:
     get:
@@ -32,7 +32,8 @@ paths:
   /v1/accounts:
     post:
       operationId: createAccount
-      security: []
+      security:
+        - userSession: []
       requestBody:
         required: true
         content:
@@ -47,6 +48,87 @@ paths:
               schema:
                 $ref: "#/components/schemas/AccountCreated"
         "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/auth/register:
+    post:
+      operationId: registerUser
+      security: []
+      description: >-
+        Creates a local self-hosted YunPin login. The relay stores a salted
+        PBKDF2-SHA-256 password verifier and only a hash of the returned
+        opaque session token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPassword"
+      responses:
+        "201":
+          $ref: "#/components/responses/UserSession"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/auth/login:
+    post:
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPassword"
+      responses:
+        "200":
+          $ref: "#/components/responses/UserSession"
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/auth/logout:
+    post:
+      operationId: logoutUser
+      security:
+        - userSession: []
+      responses:
+        "204":
+          description: Session revoked.
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/accounts/{accountId}/claim:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    post:
+      operationId: claimAccount
+      security:
+        - userSession: []
+      description: >-
+        Binds an existing recovery-protected account to the logged-in user.
+        The human recovery key never crosses the network; the client sends
+        only its domain-separated authentication material.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [recovery_authentication]
+              properties:
+                recovery_authentication:
+                  $ref: "#/components/schemas/SecretInput"
+      responses:
+        "200":
+          description: Account is now bound to the current user.
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
   /v1/accounts/{accountId}/recover:
     parameters:
@@ -90,7 +172,7 @@ paths:
     delete:
       operationId: rollbackAccount
       security:
-        - bearerAuth: []
+        - deviceBearer: []
       description: >-
         Roll back a newly provisioned account using its separate short-lived
         rollback capability, never the long-term device bearer token. The
@@ -177,7 +259,7 @@ paths:
     delete:
       operationId: rollbackCurrentDevice
       security:
-        - bearerAuth: []
+        - deviceBearer: []
       description: >-
         Roll back an exact joining tuple after a failed local encrypted database
         or Keychain/DPAPI commit. The bearer is the dedicated rollback
@@ -584,10 +666,14 @@ paths:
           $ref: "#/components/responses/Error"
 components:
   securitySchemes:
-    bearerAuth:
+    deviceBearer:
       type: http
       scheme: bearer
       bearerFormat: opaque-device-token
+    userSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-user-session
   parameters:
     AccountId:
       name: accountId
@@ -614,6 +700,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    UserSession:
+      description: Opaque login session. Store the token only in the platform secret store.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UserSession"
   schemas:
     HexId:
       type: string
@@ -626,6 +718,34 @@ components:
       allOf:
         - $ref: "#/components/schemas/Base64Url"
       writeOnly: true
+    UserPassword:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{3,64}$"
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 12
+          maxLength: 256
+    UserSession:
+      type: object
+      additionalProperties: false
+      required: [username, token, expires_at]
+      properties:
+        username:
+          type: string
+        token:
+          allOf:
+            - $ref: "#/components/schemas/OneTimeSecret"
+          description: Opaque 32-byte login session; never include it in endpoint configuration.
+        expires_at:
+          type: string
+          format: date-time
     OneTimeSecret:
       allOf:
         - $ref: "#/components/schemas/Base64Url"

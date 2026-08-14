@@ -81,6 +81,7 @@ type Server struct {
 	logger             *log.Logger
 	now                func() time.Time
 	limiter            *ipLimiter
+	authLimiter        *ipLimiter
 	handler            http.Handler
 	pairingLifecycleMu sync.Mutex
 }
@@ -96,7 +97,10 @@ type deviceIdentity struct {
 
 type contextKey string
 
-const identityKey contextKey = "yunpin-device"
+const (
+	identityKey     contextKey = "yunpin-device"
+	userIdentityKey contextKey = "yunpin-user"
+)
 
 type ipLimiter struct {
 	mu        sync.Mutex
@@ -146,6 +150,11 @@ func New(ctx context.Context, databasePath string, logOutput io.Writer) (*Server
 			entries: make(map[string]rateEntry),
 			limit:   requestsPerWindow,
 			window:  rateWindow,
+		},
+		authLimiter: &ipLimiter{
+			entries: make(map[string]rateEntry),
+			limit:   maxAuthAttempts,
+			window:  10 * time.Minute,
 		},
 	}
 	if err := s.initialize(ctx); err != nil {
@@ -235,8 +244,21 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/healthz" && r.Method == http.MethodGet:
 		s.health(w, r)
+	case path == "/v1/auth/register" && r.Method == http.MethodPost:
+		s.registerUser(w, r)
+	case path == "/v1/auth/login" && r.Method == http.MethodPost:
+		s.loginUser(w, r)
+	case path == "/v1/auth/logout" && r.Method == http.MethodPost:
+		s.logoutUser(w, r)
 	case path == "/v1/accounts" && r.Method == http.MethodPost:
-		s.createAccount(w, r)
+		s.requireUserAuth(s.createAccount)(w, r)
+	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/claim") && r.Method == http.MethodPost:
+		parts := strings.Split(path, "/")
+		if len(parts) != 5 {
+			notFound(w)
+			return
+		}
+		s.requireUserAuth(func(w http.ResponseWriter, r *http.Request) { s.claimAccount(w, r, parts[3]) })(w, r)
 	case strings.HasPrefix(path, "/v1/accounts/") && r.Method == http.MethodDelete:
 		parts := strings.Split(path, "/")
 		if len(parts) != 4 {
@@ -680,6 +702,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_rollback_capability")
 		return
 	}
+	user := mustUserIdentity(r)
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -703,8 +726,8 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	accountCreated := errors.Is(err, sql.ErrNoRows)
 	if accountCreated {
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO accounts(
-			id, recovery_authentication_hash, created_at, provisioning_rollback_hash, provisioning_expires_at)
-			VALUES(?, ?, ?, ?, ?)`, input.AccountID, accountHash, now, digest(input.RollbackToken), now+provisioningLife.Milliseconds())
+			id, recovery_authentication_hash, created_at, provisioning_rollback_hash, provisioning_expires_at, user_id)
+			VALUES(?, ?, ?, ?, ?, ?)`, input.AccountID, accountHash, now, digest(input.RollbackToken), now+provisioningLife.Milliseconds(), user.ID)
 	} else if err == nil && !constantTimeEqual(existingAccountHash, accountHash) {
 		writeError(w, http.StatusConflict, "provisioning_identity_conflict")
 		return
@@ -717,10 +740,15 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		var rollbackHash []byte
 		var sealed sql.NullInt64
 		var expires sql.NullInt64
+		var accountUser sql.NullString
 		if err := tx.QueryRowContext(r.Context(), `SELECT provisioning_rollback_hash,
-			provisioning_expires_at, provisioning_sealed_at FROM accounts WHERE id = ?`, input.AccountID).
-			Scan(&rollbackHash, &expires, &sealed); err != nil || sealed.Valid || !expires.Valid ||
+			provisioning_expires_at, provisioning_sealed_at, user_id FROM accounts WHERE id = ?`, input.AccountID).
+			Scan(&rollbackHash, &expires, &sealed, &accountUser); err != nil || sealed.Valid || !expires.Valid ||
 			expires.Int64 <= now || !constantTimeEqual(rollbackHash, digest(input.RollbackToken)) {
+			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+			return
+		}
+		if !accountUser.Valid || accountUser.String != user.ID {
 			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
 			return
 		}
@@ -2198,6 +2226,10 @@ func routeLabel(path string) string {
 	switch {
 	case path == "/healthz":
 		return "/healthz"
+	case strings.HasPrefix(path, "/v1/auth/"):
+		return "/v1/auth"
+	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/claim"):
+		return "/v1/accounts/:id/claim"
 	case path == "/v1/accounts":
 		return "/v1/accounts"
 	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/recover"):
