@@ -52,7 +52,11 @@ const (
 	// normal account APIs remain blocked until the account is explicitly sealed.
 	provisioningLife  = 7 * 24 * time.Hour
 	rateWindow        = time.Minute
-	requestsPerWindow = 240
+	// A first device may legitimately replay an entire personal dictionary.
+	// Keep login throttling separate, but allow the trusted sync API to drain a
+	// full local outbox without turning a one-time import into a multi-minute
+	// stop-and-wait loop.
+	requestsPerWindow = 4096
 )
 
 var canonicalCBOR cbor.EncMode
