@@ -11,7 +11,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/kukuyan/yunpin-ime/protocol"
 	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
@@ -142,9 +141,8 @@ func LogoutUser(ctx context.Context, client *syncclient.Client, secrets SecretSt
 }
 
 // ClaimCurrentAccount binds the local credential's account to the current
-// user session. The recovery key is decoded only in memory and only its
-// domain-separated authentication material reaches the selected relay.
-func ClaimCurrentAccount(ctx context.Context, client *syncclient.Client, secrets SecretStore, profile, endpoint, recoveryText string) error {
+// user session using the device already held in the OS secret store.
+func ClaimCurrentAccount(ctx context.Context, client *syncclient.Client, secrets SecretStore, profile, endpoint string) error {
 	if _, err := LoadUserSession(ctx, secrets, profile, endpoint); err != nil {
 		return err
 	}
@@ -158,15 +156,5 @@ func ClaimCurrentAccount(ctx context.Context, client *syncclient.Client, secrets
 		return err
 	}
 	defer bundle.Zero()
-	recoveryKey, err := protocol.DecodeRecoveryKey(recoveryText)
-	if err != nil {
-		return errors.New("invalid recovery key")
-	}
-	defer zeroBytes(recoveryKey)
-	_, recoveryAuthentication, err := protocol.DeriveRecoveryKeys(recoveryKey)
-	if err != nil {
-		return err
-	}
-	defer zeroBytes(recoveryAuthentication)
-	return client.ClaimAccount(ctx, bundle.AccountID[:], recoveryAuthentication)
+	return client.ClaimAccount(ctx, bundle.AccountID[:], bundle.DeviceID[:], bundle.DeviceToken)
 }

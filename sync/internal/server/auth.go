@@ -247,19 +247,25 @@ func (s *Server) claimAccount(w http.ResponseWriter, r *http.Request, accountID 
 	}
 	identity := mustUserIdentity(r)
 	var input struct {
-		RecoveryAuthentication string `json:"recovery_authentication"`
+		DeviceID    string `json:"device_id"`
+		DeviceToken string `json:"device_token"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	recoveryAuthentication, err := decodeSized(input.RecoveryAuthentication, 32, 32)
+	if !validID(input.DeviceID) {
+		writeError(w, http.StatusUnauthorized, "invalid_current_device")
+		return
+	}
+	_, err := decodeCanonicalSecret(input.DeviceToken, 32)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid_recovery_authentication")
+		writeError(w, http.StatusUnauthorized, "invalid_current_device")
 		return
 	}
 	result, err := s.db.ExecContext(r.Context(), `UPDATE accounts SET user_id = ?
-		WHERE id = ? AND recovery_authentication_hash = ? AND (user_id IS NULL OR user_id = ?)`,
-		identity.ID, accountID, digestBytes(recoveryAuthentication), identity.ID)
+		WHERE id = ? AND (user_id IS NULL OR user_id = ?)
+		  AND EXISTS (SELECT 1 FROM devices WHERE id = ? AND account_id = ? AND token_hash = ? AND revoked_at IS NULL)`,
+		identity.ID, accountID, identity.ID, input.DeviceID, accountID, digest(input.DeviceToken))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return

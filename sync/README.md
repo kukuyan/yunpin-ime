@@ -48,7 +48,7 @@ The Dockerfile exposes explicit `test` and `runtime` targets. The complete HTTP 
 | `DELETE` | `/v1/devices/{id}` | bearer device token | Reserved; fail-closed until signed roster replacement exists |
 | `GET`, `PUT` | `/v1/keyring` | bearer device token | Fetch or publish opaque key epochs |
 
-Device IDs and tokens are generated client-side; the relay stores only token SHA-256 digests. The client creates the 256-bit human recovery key, presents it as checksummed `yprec1…` text/QR, and derives `recovery_authentication` with HKDF-SHA-256 domain `yunpin-recovery-authentication-v1`. Only the SHA-256 of that 32-byte authentication output is stored; the human recovery key and the recovery encryption key are never sent to or derived by the relay.
+Device IDs and tokens are generated client-side; the relay stores only token SHA-256 digests. Human account login is separate from device credentials and never requires a recovery prompt during ordinary setup, claiming, or synchronization.
 
 ## User login and selectable relay
 
@@ -61,12 +61,12 @@ The relay stores a salted PBKDF2-SHA-256 verifier and hashes every opaque
 30-day session. The session itself is held only in macOS Keychain or
 current-user Windows DPAPI.
 
-Daily encrypted synchronization still authenticates with the per-device
-bearer and signed roster; it does not require a long-lived user-password
-session. Existing pre-login accounts are adopted once with
-`claim-account --confirm-claim-existing-account`: the recovery key is entered
-locally, the client derives domain-separated authentication material, and the
-human recovery key never leaves the device.
+Daily synchronization authenticates with the per-device bearer and signed
+roster; it does not require a long-lived user-password session. Existing
+pre-login accounts are adopted once with
+`claim-account --confirm-claim-existing-account`: the already protected local
+active device proves the claim while the logged-in user session selects the
+owner. No recovery key, password, or extra terminal input is requested.
 
 Device display names are supplied and returned as client-encrypted `device_name_ciphertext`, never plaintext. Relay device listings are operational metadata and are never a trust root. Each credential persists the creator-signed, versioned roster delivered inside the encrypted pairing package; private keys never leave DPAPI/Credential Manager or Apple Keychain.
 

@@ -159,13 +159,18 @@ func TestUserLoginAndAccountClaimAreBoundedAndFailClosed(t *testing.T) {
 	if _, err := device.server.db.Exec(`UPDATE accounts SET user_id = NULL WHERE id = ?`, device.accountID); err != nil {
 		t.Fatal(err)
 	}
+	invalidCurrentDevice := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", session.Token,
+		map[string]string{"device_id": device.deviceID, "device_token": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))})
+	if invalidCurrentDevice.Code != http.StatusConflict || !strings.Contains(invalidCurrentDevice.Body.String(), "account_claim_conflict") {
+		t.Fatalf("invalid current device claim status=%d body=%s", invalidCurrentDevice.Code, invalidCurrentDevice.Body.String())
+	}
 	claim := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", session.Token,
-		map[string]string{"recovery_authentication": device.recoveryAuthentication})
+		map[string]string{"device_id": device.deviceID, "device_token": device.token})
 	if claim.Code != http.StatusOK {
 		t.Fatalf("claim status=%d body=%s", claim.Code, claim.Body.String())
 	}
 	wrongClaim := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", device.userSession,
-		map[string]string{"recovery_authentication": device.recoveryAuthentication})
+		map[string]string{"device_id": device.deviceID, "device_token": device.token})
 	if wrongClaim.Code != http.StatusConflict || !strings.Contains(wrongClaim.Body.String(), "account_claim_conflict") {
 		t.Fatalf("foreign claim status=%d body=%s", wrongClaim.Code, wrongClaim.Body.String())
 	}
@@ -174,7 +179,7 @@ func TestUserLoginAndAccountClaimAreBoundedAndFailClosed(t *testing.T) {
 		t.Fatalf("logout status=%d body=%s", logout.Code, logout.Body.String())
 	}
 	replay := apiRequest(t, device.server, http.MethodPost, "/v1/accounts/"+device.accountID+"/claim", session.Token,
-		map[string]string{"recovery_authentication": device.recoveryAuthentication})
+		map[string]string{"device_id": device.deviceID, "device_token": device.token})
 	if replay.Code != http.StatusUnauthorized || !strings.Contains(replay.Body.String(), "invalid_session") {
 		t.Fatalf("expired session replay status=%d body=%s", replay.Code, replay.Body.String())
 	}

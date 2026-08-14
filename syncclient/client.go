@@ -242,15 +242,14 @@ func (client *Client) Logout(ctx context.Context, token string) error {
 	return client.doJSON(ctx, http.MethodPost, "/v1/auth/logout", token, map[string]any{}, nil, http.StatusNoContent)
 }
 
-// ClaimAccount binds an existing recovery-protected account to the logged-in
-// user session configured with WithUserSession. It never uploads the human
-// recovery key, only its already-domain-separated authentication material.
-func (client *Client) ClaimAccount(ctx context.Context, accountID, recoveryAuthentication []byte) error {
-	if len(accountID) != 16 || len(recoveryAuthentication) != 32 {
-		return errors.New("account claim requires valid account and recovery authentication")
+// ClaimAccount binds an existing account to the logged-in user session using
+// the current device already protected by the OS secret store.
+func (client *Client) ClaimAccount(ctx context.Context, accountID, deviceID, deviceToken []byte) error {
+	if len(accountID) != 16 || len(deviceID) != 16 || len(deviceToken) != 32 {
+		return errors.New("account claim requires valid current device")
 	}
 	return client.doJSON(ctx, http.MethodPost, "/v1/accounts/"+hex.EncodeToString(accountID)+"/claim", "",
-		map[string]string{"recovery_authentication": base64.RawURLEncoding.EncodeToString(recoveryAuthentication)}, nil, http.StatusOK)
+		map[string]string{"device_id": hex.EncodeToString(deviceID), "device_token": base64.RawURLEncoding.EncodeToString(deviceToken)}, nil, http.StatusOK)
 }
 
 type PairingInvitation struct {

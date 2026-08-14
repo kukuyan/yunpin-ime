@@ -44,15 +44,15 @@ absolute HTTPS relay URL, or an explicitly opted-in private-LAN HTTP literal.
 The selected endpoint JSON intentionally contains no account or token.
 
 Before `init-account`, run `register --username <name>` (first use) or
-`login --username <name>` (another desktop). Passwords and recovery keys are
-read only from an interactive terminal, never flags, files, shell history, or
-agent output. The opaque login session is endpoint-bound and saved only in the
-current user's Keychain/DPAPI secret store. `claim-account
+`login --username <name>` (another desktop). Passwords are read only from an
+interactive terminal, never flags, files, shell history, or agent output. The
+opaque login session is endpoint-bound and saved only in the current user's
+Keychain/DPAPI secret store. `claim-account
 --confirm-claim-existing-account` adopts an already provisioned account using
-the locally entered recovery key; only its domain-separated authentication
-material reaches the relay. Normal `sync-once` and resident `run` continue to
-use the independent device credential, so password-session expiry cannot stop
-background encrypted sync.
+the active device credential already protected by that same OS store; it never
+asks for recovery material or any additional terminal input. Normal
+`sync-once` and resident `run` continue to use the independent device
+credential, so password-session expiry cannot stop background sync.
 
 ## Two-device pairing preview
 
