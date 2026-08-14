@@ -73,7 +73,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(11, len(patches))
+        self.assertEqual(12, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -518,6 +518,45 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertLess(
             show_panel.index("guard !Self.rimeUpdateWasReentered"),
             show_panel.index("panel.update("),
+        )
+
+    def test_rime_notifications_leave_engine_stack_before_ui_or_rime_calls(self) -> None:
+        delegate = (
+            self.prepared / "sources" / "SquirrelApplicationDelegate.swift"
+        ).read_text(encoding="utf-8")
+        callback = delegate[
+            delegate.index("private func notificationHandler(") : delegate.index(
+                "private extension SquirrelApplicationDelegate"
+            )
+        ]
+        deferred = delegate[
+            delegate.index("  func handleRimeNotification(") : delegate.index(
+                "  func showStatusMessage("
+            )
+        ]
+
+        # The synchronous librime callback may only own its transient C values
+        # and enqueue them. It must not touch AppKit, IMK, or re-enter Rime.
+        self.assertLess(callback.index("String(cString:"), callback.index("DispatchQueue.main.async"))
+        for forbidden in (
+            "showStatusMessage(",
+            "showMessage(",
+            "get_state_label_abbreviated",
+            "find_session(",
+            "panel?",
+        ):
+            self.assertNotIn(forbidden, callback)
+
+        self.assertIn("guard Thread.isMainThread", deferred)
+        self.assertLess(deferred.index("find_session(sessionId)"), deferred.index("get_state_label_abbreviated"))
+        self.assertIn("showStatusMessage(", deferred)
+
+        subprocess.run(
+            ["/usr/bin/xcrun", "swift", str(MACOS_DIR / "tests" / "notification_deferral_harness.swift")],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
 
     def test_original_artwork_replaces_upstream_visible_assets(self) -> None:

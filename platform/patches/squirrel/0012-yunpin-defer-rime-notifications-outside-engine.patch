@@ -1,0 +1,137 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: Defer Rime notifications outside engine mutation
+
+librime invokes its notification handler synchronously from ProcessKey and
+SetOption while the engine graph is still mutating.  Entering AppKit from that
+callback can synchronously re-enter InputMethodKit and start another Rime key
+operation on the same stack.  Copy the callback's transient C strings and
+defer every UI or Rime action to the next main-run-loop turn.  Drop option
+notifications whose pointer-derived session ID is no longer live.
+
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+index b119867..5e67e3a 100644
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -400,51 +400,81 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+ }
+ 
+ private func notificationHandler(contextObject: UnsafeMutableRawPointer?, sessionId: RimeSessionId, messageTypeC: UnsafePointer<CChar>?, messageValueC: UnsafePointer<CChar>?) {
+-  let delegate: SquirrelApplicationDelegate = Unmanaged<SquirrelApplicationDelegate>.fromOpaque(contextObject!).takeUnretainedValue()
+-
++  guard let contextObject else { return }
++  let delegate: SquirrelApplicationDelegate = Unmanaged<SquirrelApplicationDelegate>.fromOpaque(contextObject).takeUnretainedValue()
+   let messageType = messageTypeC.map { String(cString: $0) }
+   let messageValue = messageValueC.map { String(cString: $0) }
+-  if messageType == "deploy" {
+-    switch messageValue {
+-    case "start":
+-      SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_start", comment: ""))
+-    case "success":
+-      SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_success", comment: ""))
+-    case "failure":
+-      SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_failure", comment: ""))
+-    default:
+-      break
+-    }
+-    return
+-  }
+-  // off
+-  if !delegate.enableNotifications {
+-    return
+-  }
+-
+-  if messageType == "schema", let messageValue = messageValue, let schemaName = try? /^[^\/]*\/(.*)$/.firstMatch(in: messageValue)?.output.1 {
+-    delegate.showStatusMessage(msgTextLong: String(schemaName), msgTextShort: String(schemaName))
+-    return
+-  } else if messageType == "option" {
+-    let state = messageValue?.first != "!"
+-    let optionName = if state {
+-      messageValue
+-    } else {
+-      String(messageValue![messageValue!.index(after: messageValue!.startIndex)...])
+-    }
+-    if let optionName = optionName {
+-      optionName.withCString { name in
+-        let stateLabelLong = delegate.rimeAPI.get_state_label_abbreviated(sessionId, name, state, false)
+-        let stateLabelShort = delegate.rimeAPI.get_state_label_abbreviated(sessionId, name, state, true)
+-        let longLabel = stateLabelLong.str.map { String(cString: $0) }
+-        let shortLabel = stateLabelShort.str.map { String(cString: $0) }
+-        delegate.showStatusMessage(msgTextLong: longLabel, msgTextShort: shortLabel)
+-      }
+-    }
++
++  // librime invokes this C callback synchronously from inside ProcessKey and
++  // SetOption while its engine graph is still mutating. Never enter AppKit,
++  // InputMethodKit, or another Rime API on that stack. Copy the transient C
++  // strings above, then cross an asynchronous main-run-loop boundary.
++  DispatchQueue.main.async { [weak delegate] in
++    delegate?.handleRimeNotification(
++      sessionId: sessionId,
++      messageType: messageType,
++      messageValue: messageValue
++    )
+   }
+ }
+ 
+ private extension SquirrelApplicationDelegate {
++  func handleRimeNotification(sessionId: RimeSessionId, messageType: String?, messageValue: String?) {
++    guard Thread.isMainThread else {
++      DispatchQueue.main.async { [weak self] in
++        self?.handleRimeNotification(
++          sessionId: sessionId,
++          messageType: messageType,
++          messageValue: messageValue
++        )
++      }
++      return
++    }
++
++    if messageType == "deploy" {
++      switch messageValue {
++      case "start":
++        SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_start", comment: ""))
++      case "success":
++        SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_success", comment: ""))
++      case "failure":
++        SquirrelApplicationDelegate.showMessage(msgText: NSLocalizedString("deploy_failure", comment: ""))
++      default:
++        break
++      }
++      return
++    }
++    // off
++    if !enableNotifications {
++      return
++    }
++
++    if messageType == "schema", let messageValue = messageValue, let schemaName = try? /^[^\/]*\/(.*)$/.firstMatch(in: messageValue)?.output.1 {
++      showStatusMessage(msgTextLong: String(schemaName), msgTextShort: String(schemaName))
++      return
++    } else if messageType == "option" {
++      // The originating session may have been destroyed before this deferred
++      // notification is delivered. Drop it instead of resolving labels through
++      // a stale pointer-derived RimeSessionId.
++      guard sessionId != 0, rimeAPI.find_session(sessionId) else { return }
++      let state = messageValue?.first != "!"
++      let optionName = if state {
++        messageValue
++      } else {
++        String(messageValue![messageValue!.index(after: messageValue!.startIndex)...])
++      }
++      if let optionName = optionName {
++        optionName.withCString { name in
++          let stateLabelLong = rimeAPI.get_state_label_abbreviated(sessionId, name, state, false)
++          let stateLabelShort = rimeAPI.get_state_label_abbreviated(sessionId, name, state, true)
++          let longLabel = stateLabelLong.str.map { String(cString: $0) }
++          let shortLabel = stateLabelShort.str.map { String(cString: $0) }
++          showStatusMessage(msgTextLong: longLabel, msgTextShort: shortLabel)
++        }
++      }
++    }
++  }
++
+   func showStatusMessage(msgTextLong: String?, msgTextShort: String?) {
+     if !(msgTextLong ?? "").isEmpty || !(msgTextShort ?? "").isEmpty {
+       panel?.updateStatus(long: msgTextLong ?? "", short: msgTextShort ?? "")
