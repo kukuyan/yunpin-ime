@@ -69,6 +69,61 @@ else
   rmdir "$temporary"
 fi
 
+# The upstream librime release archive carries external C++ plugins that were
+# built by an older Xcode toolchain.  Loading those dylibs into a freshly built
+# YunPin librime mixes two libc++ ABIs and corrupts session teardown.  Stage the
+# exact source revisions recorded by the release's version-info.txt so the
+# plugins can be rebuilt together with the YunPin core.
+while IFS=$'\t' read -r name plugin commit; do
+  plugin_dir="$source_dir/librime/plugins/$plugin"
+  marker="$plugin_dir/.yunpin-source-commit"
+  if [[ -d "$plugin_dir" ]]; then
+    [[ -f "$marker" && "$(<"$marker")" == "$commit" ]] || die "unexpected existing Rime plugin source: $plugin_dir"
+    continue
+  fi
+  temporary="$(mktemp -d "${TMPDIR:-/tmp}/yunpin-rime-plugin.XXXXXX")"
+  tar -xzf "$cache_dir/$name" -C "$temporary" --strip-components 1
+  [[ -f "$temporary/CMakeLists.txt" && -f "$temporary/LICENSE" ]] || die "Rime plugin source archive is incomplete: $name"
+  printf '%s\n' "$commit" > "$temporary/.yunpin-source-commit"
+  mkdir -p "$(dirname "$plugin_dir")"
+  mv "$temporary" "$plugin_dir"
+done < <(/usr/bin/python3 - "$MACOS_DIR/dependencies.lock.json" <<'PY'
+import json
+import sys
+
+for archive in json.load(open(sys.argv[1], encoding="utf-8"))["archives"]:
+    if "rime_plugin" in archive:
+        print(archive["name"], archive["rime_plugin"], archive["commit"], sep="\t")
+PY
+)
+
+while IFS=$'\t' read -r name plugin commit; do
+  thirdparty_dir="$source_dir/librime/plugins/$plugin/thirdparty"
+  marker="$thirdparty_dir/.yunpin-source-commit"
+  if [[ -d "$thirdparty_dir" ]]; then
+    [[ -f "$marker" && "$(<"$marker")" == "$commit" ]] || die "unexpected existing Rime plugin third-party source: $thirdparty_dir"
+    continue
+  fi
+  temporary="$(mktemp -d "${TMPDIR:-/tmp}/yunpin-rime-plugin-thirdparty.XXXXXX")"
+  tar -xzf "$cache_dir/$name" -C "$temporary" --strip-components 1
+  [[ -f "$temporary/lua5.4/lua.h" && -f "$temporary/lua5.4/lapi.c" ]] || die "Rime plugin third-party source archive is incomplete: $name"
+  printf '%s\n' "$commit" > "$temporary/.yunpin-source-commit"
+  mv "$temporary" "$thirdparty_dir"
+done < <(/usr/bin/python3 - "$MACOS_DIR/dependencies.lock.json" <<'PY'
+import json
+import sys
+
+for archive in json.load(open(sys.argv[1], encoding="utf-8"))["archives"]:
+    if "rime_plugin_thirdparty" in archive:
+        print(
+            archive["name"],
+            archive["rime_plugin_thirdparty"],
+            archive["commit"],
+            sep="\t",
+        )
+PY
+)
+
 while IFS=$'\t' read -r name package commit; do
   package_dir="$source_dir/plum/package/rime/$package"
   marker="$package_dir/.yunpin-source-commit"

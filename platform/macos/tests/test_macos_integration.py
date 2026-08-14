@@ -60,6 +60,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         for archive in lock["archives"]:
             self.assertTrue(
                 archive["url"].startswith("https://github.com/")
+                or archive["url"].startswith("https://codeload.github.com/")
                 or archive["url"].startswith("https://archives.boost.io/")
             )
             self.assertEqual(64, len(archive["sha256"]))
@@ -678,6 +679,75 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("apply --reverse --check", stage)
         self.assertIn('git -C "$source_dir/librime" diff --quiet', stage)
         self.assertIn("tracked changes outside the locked patch series", stage)
+
+    def test_external_rime_plugins_are_rebuilt_from_locked_sources(self) -> None:
+        lock = json.loads((MACOS_DIR / "dependencies.lock.json").read_text(encoding="utf-8"))
+        plugin_sources = {
+            row.get("rime_plugin"): row
+            for row in lock["archives"]
+            if "rime_plugin" in row
+        }
+        self.assertEqual({"lua", "octagram", "predict"}, set(plugin_sources))
+        self.assertEqual(
+            "68f9c364a2d25a04c7d4794981d7c796b05ab627",
+            plugin_sources["lua"]["commit"],
+        )
+        thirdparty = [
+            row for row in lock["archives"] if "rime_plugin_thirdparty" in row
+        ]
+        self.assertEqual(1, len(thirdparty))
+        self.assertEqual("lua", thirdparty[0]["rime_plugin_thirdparty"])
+        self.assertEqual(
+            "fa40fadd8af1e5b1fbd55703ccbd54476956d74c",
+            thirdparty[0]["commit"],
+        )
+
+        fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(".yunpin-source-commit", fetch)
+        self.assertIn('archive["rime_plugin"]', fetch)
+        self.assertIn('archive["rime_plugin_thirdparty"]', fetch)
+
+        build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RIME_PLUGINS='lua octagram predict'", build)
+        self.assertIn('-DBUILD_MERGED_PLUGINS=OFF', build)
+        self.assertIn('-DENABLE_EXTERNAL_PLUGINS=ON', build)
+        self.assertIn('plugin_build_dir="$librime_dir/build-yunpin-runtime-plugins"', build)
+        self.assertIn("expected_runtime_plugins='librime-lua.dylib librime-octagram.dylib librime-predict.dylib '", build)
+        self.assertIn("xcrun vtool -show-build", build)
+        self.assertIn("install -m 755", build)
+
+        notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        for component in (
+            "librime-lua",
+            "librime-octagram",
+            "librime-predict",
+            "Lua 5.4.8",
+        ):
+            self.assertIn(component, notices)
+
+    def test_final_app_runs_real_plugin_candidate_and_lifecycle_probe(self) -> None:
+        build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        runtime = (MACOS_DIR / "scripts" / "test-rime-plugin-runtime.sh").read_text(
+            encoding="utf-8"
+        )
+        probe = (MACOS_DIR / "tests" / "rime_public_candidate_probe.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('scripts/test-rime-plugin-runtime.sh" "$app" "$source_dir"', build)
+        self.assertIn("DYLD_PRINT_LIBRARIES=1", runtime)
+        self.assertIn("librime-lua.dylib", runtime)
+        self.assertIn("librime-octagram.dylib", runtime)
+        self.assertIn("librime-predict.dylib", runtime)
+        self.assertIn("English-only public candidate page", runtime)
+        self.assertIn("constexpr int kLifecycleSessions = 128", probe)
+        for public_input in ("s", "sh", "shu", "shuru", "ceshi", "wendingxing"):
+            self.assertIn(f'"{public_input}"', probe)
 
     def test_merged_librime_build_has_bounded_parallelism(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(

@@ -29,6 +29,8 @@ tar -C "$source_dir" \
   --exclude='librime/dist' \
   --exclude='librime/build-yunpin' \
   --exclude='librime/dist-yunpin' \
+  --exclude='librime/build-yunpin-runtime-plugins' \
+  --exclude='librime/dist-yunpin-runtime-plugins' \
   -cf - . | tar -C "$staging/YunPin-IME/Squirrel" -xf -
 
 # Export only committed files.  A recursive worktree copy also picks up ignored

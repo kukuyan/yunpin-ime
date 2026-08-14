@@ -82,6 +82,33 @@ if [[ "$require_universal" -eq 1 ]]; then
   librime_architectures="$(lipo -archs "$bundled_librime")"
   [[ " $librime_architectures " == *" arm64 "* && " $librime_architectures " == *" x86_64 "* ]] || die "bundled librime is not universal: $librime_architectures"
 fi
+
+plugin_dir="$app/Contents/Frameworks/rime-plugins"
+expected_plugins='librime-lua.dylib librime-octagram.dylib librime-predict.dylib '
+actual_plugins="$(find "$plugin_dir" -maxdepth 1 -type f -name '*.dylib' -exec basename {} \; | LC_ALL=C sort | tr '\n' ' ')"
+[[ "$actual_plugins" == "$expected_plugins" ]] ||
+  die "bundled Rime plugin set is incomplete or unexpected: $actual_plugins"
+for plugin in librime-lua.dylib librime-octagram.dylib librime-predict.dylib; do
+  bundled_plugin="$plugin_dir/$plugin"
+  otool -L "$bundled_plugin" | grep -F '@rpath/librime.1.dylib' >/dev/null ||
+    die "bundled Rime plugin does not bind to the packaged librime ABI: $plugin"
+  plugin_minos="$(xcrun vtool -show-build "$bundled_plugin" | awk '$1 == "minos" { print $2 }' | LC_ALL=C sort -u)"
+  [[ "$plugin_minos" == '13.0' ]] ||
+    die "bundled Rime plugin has an unexpected deployment target: $plugin ($plugin_minos)"
+  if [[ "$require_universal" -eq 1 ]]; then
+    plugin_architectures="$(lipo -archs "$bundled_plugin")"
+    [[ " $plugin_architectures " == *" arm64 "* && " $plugin_architectures " == *" x86_64 "* ]] ||
+      die "bundled Rime plugin is not universal: $plugin ($plugin_architectures)"
+  fi
+done
+for license in \
+  librime-lua-BSD-3-Clause-LICENSE \
+  Lua-5.4.8-Copyright-Notice.h \
+  librime-octagram-GPL-3.0-LICENSE \
+  librime-predict-BSD-3-Clause-LICENSE; do
+  [[ -f "$shared_support/licenses/$license" ]] ||
+    die "rebuilt Rime plugin license is missing: $license"
+done
 /usr/bin/python3 - "$shared_support/yunpin-preview.json" <<'PY'
 import json
 import sys
