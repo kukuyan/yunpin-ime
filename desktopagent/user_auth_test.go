@@ -3,7 +3,10 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -60,5 +63,45 @@ func TestMalformedOrExpiredUserSessionFailsClosed(t *testing.T) {
 	}
 	if _, err := LoadUserSession(context.Background(), store, "default", "https://sync.invalid"); !errors.Is(err, ErrUserLoginRequired) {
 		t.Fatalf("unknown-field session was accepted: %v", err)
+	}
+}
+
+func TestClaimCurrentAccountDecodesStoredCanonicalDeviceToken(t *testing.T) {
+	store := &memorySecretStore{values: make(map[string][]byte)}
+	bundle := testCredentials()
+	bundle.DeviceToken = []byte(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7e}, 32)))
+	encoded, err := EncodeCredentialBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), "default", encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), "default.user-session", []byte(`{"version":1,"endpoint":"https://sync.invalid","username":"alice","token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","expires_at_unix_ms":4102444800000}`)); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/accounts/"+hex.EncodeToString(bundle.AccountID[:])+"/claim" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			DeviceID string `json:"device_id"`
+			DeviceToken string `json:"device_token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.DeviceID != hex.EncodeToString(bundle.DeviceID[:]) || body.DeviceToken != string(bundle.DeviceToken) {
+			t.Fatalf("claim did not preserve canonical device capability")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	endpoint, err := syncclient.ParseEndpoint(server.URL, syncclient.EndpointPolicy{AllowPrivateHTTP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ClaimCurrentAccount(context.Background(), syncclient.New(endpoint, syncclient.WithUserSession("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")), store, "default", "https://sync.invalid"); err != nil {
+		t.Fatalf("claim current account: %v", err)
 	}
 }
