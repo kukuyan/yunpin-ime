@@ -5,6 +5,7 @@ package desktopagent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,5 +157,17 @@ func ClaimCurrentAccount(ctx context.Context, client *syncclient.Client, secrets
 		return err
 	}
 	defer bundle.Zero()
-	return client.ClaimAccount(ctx, bundle.AccountID[:], bundle.DeviceID[:], bundle.DeviceToken)
+	// Credential bundles persist the device token in its canonical textual
+	// representation. ClaimAccount deliberately receives the 32 raw bytes and
+	// encodes them once for the wire; passing the stored text directly made every
+	// valid existing-device claim fail its length check before reaching the relay.
+	if !validCanonicalToken(string(bundle.DeviceToken)) {
+		return errors.New("local YunPin credential has an invalid device token")
+	}
+	deviceToken, err := base64.RawURLEncoding.DecodeString(string(bundle.DeviceToken))
+	if err != nil {
+		return errors.New("local YunPin credential has an invalid device token")
+	}
+	defer zeroBytes(deviceToken)
+	return client.ClaimAccount(ctx, bundle.AccountID[:], bundle.DeviceID[:], deviceToken)
 }
