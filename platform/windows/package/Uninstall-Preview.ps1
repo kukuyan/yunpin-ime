@@ -122,6 +122,11 @@ if (-not (Test-Path $setup -PathType Leaf)) {
     throw "Installed YunPin preview runtime was not found at $current"
 }
 
+$syncUninstaller = Join-Path $InstallRoot "support\sync-agent\Uninstall-SyncAgent.ps1"
+if (Test-Path $syncUninstaller -PathType Leaf) {
+    & $syncUninstaller
+}
+
 if (Test-Path $server -PathType Leaf) {
     & $server "/quit" | Out-Null
 }
@@ -143,4 +148,4 @@ $state = [ordered]@{
 $state | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallRoot "uninstall-state.json") -Encoding UTF8
 
 Write-Host "YunPin preview unregistered. Runtime retained at: $retired"
-Write-Host "User dictionaries were not removed."
+Write-Host "User dictionaries and private sync state were not removed."

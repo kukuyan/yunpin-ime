@@ -16,6 +16,18 @@
       {
         "path": "platform/patches/weasel/0003-yunpin-expression-search-and-favorite.patch",
         "sha256": "02f8c9f48ef4ae3d6285b06c4dea176358f0a142e60810a2a03327a16b689754"
+      },
+      {
+        "path": "platform/patches/weasel/0004-yunpin-start-native-event-spooler.patch",
+        "sha256": "83a9ad8ea662d87bc9772b249be9f427234179a2f6473ca44068dbe51956cde5"
+      },
+      {
+        "path": "platform/patches/weasel/0005-yunpin-defer-userdb-sync-while-composing.patch",
+        "sha256": "e9239361a5a52894ddd6c9fe895d1b4a35dd28b7708318fd94feb4f54908cc47"
+      },
+      {
+        "path": "platform/patches/weasel/0006-yunpin-preserve-session-identity-across-maintenance.patch",
+        "sha256": "a60fb96bf4ed34ecfeec1f4e5017b3d3f6ef48f549d2291594c791319c887b84"
       }
     ]
   },
@@ -27,6 +39,10 @@
       {
         "path": "platform/patches/librime-1.17/0001-configurable-corrector-component.patch",
         "sha256": "9d5c6b44e6a271f44589b942aa141676bc7a1430b9595e8b120f1ef5b21332b2"
+      },
+      {
+        "path": "platform/patches/librime-1.17/0002-disconnect-engine-notifiers-before-context-destruction.patch",
+        "sha256": "080300ed2c2ddd742f637ead1d43a71f872e8201dddb5e16172dd540d634e5de"
       }
     ],
     "dependencies": {

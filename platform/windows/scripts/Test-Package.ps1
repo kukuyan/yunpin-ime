@@ -67,8 +67,53 @@ function Get-PeMachine {
     }
 }
 
+function Invoke-AgentCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Executable
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = $Arguments -join " "
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw "Failed to start sync agent: $Executable" }
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return [pscustomobject]@{
+            Output = (($stdout + $stderr).Trim())
+            ExitCode = $process.ExitCode
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 $BundleRoot = [IO.Path]::GetFullPath($BundleRoot)
 Assert-BundleManifest -Root $BundleRoot
+$privateE2ENames = @(
+    "Private-Snapshot-E2E.Common.ps1",
+    "Enable-Private-Snapshot-E2E.ps1",
+    "Disable-Private-Snapshot-E2E.ps1"
+)
+foreach ($privateE2EName in $privateE2ENames) {
+    $leaks = @(Get-ChildItem -LiteralPath $BundleRoot -File -Recurse | Where-Object {
+        $_.Name -ceq $privateE2EName
+    })
+    if ($leaks.Count -ne 0) {
+        throw "Private E2E activation script entered the public runtime: $privateE2EName"
+    }
+    if (Select-String -LiteralPath (Join-Path $BundleRoot "MANIFEST.sha256") `
+        -SimpleMatch -Pattern $privateE2EName -Quiet) {
+        throw "Public runtime manifest references a private E2E activation script: $privateE2EName"
+    }
+}
 $runtime = Join-Path $BundleRoot "runtime"
 $expectedMachines = [ordered]@{
     "yunpin.dll" = 0x014c
@@ -87,6 +132,44 @@ foreach ($entry in $expectedMachines.GetEnumerator()) {
     if ($machine -ne $entry.Value) {
         throw ("Wrong PE machine for {0}: expected 0x{1:x4}, observed 0x{2:x4}" -f $entry.Key, $entry.Value, $machine)
     }
+}
+
+$syncAgentRoot = Join-Path $BundleRoot "sync-agent"
+$syncAgent = Join-Path $syncAgentRoot "yunpin-sync-agent.exe"
+if (-not (Test-Path $syncAgent -PathType Leaf)) {
+    throw "Public sync agent is missing"
+}
+if ((Get-PeMachine -Path $syncAgent) -ne 0x8664) {
+    throw "Public sync agent is not an x64 PE executable"
+}
+foreach ($supportFile in @(
+    "Install-SyncAgent.ps1", "Verify-SyncAgent.ps1",
+    "Enable-SyncAgent.ps1", "Uninstall-SyncAgent.ps1", "README.md"
+)) {
+    if (-not (Test-Path (Join-Path $syncAgentRoot $supportFile) -PathType Leaf)) {
+        throw "Public sync-agent support file is missing: $supportFile"
+    }
+}
+foreach ($privateArtifactFile in @("BUILD-METADATA.json", "SHA256SUMS")) {
+    if (Test-Path (Join-Path $syncAgentRoot $privateArtifactFile)) {
+        throw "Private E2E artifact metadata entered the public package: $privateArtifactFile"
+    }
+}
+if (-not (Test-Path (Join-Path $BundleRoot "licenses\YunPin-Sync-Agent-Go\LICENSES.json") -PathType Leaf)) {
+    throw "Public sync-agent license-text bundle is missing"
+}
+$probe = Invoke-AgentCapture -Executable $syncAgent -Arguments @("install-probe")
+if ($probe.ExitCode -ne 0) {
+    throw "Public sync agent install-probe failed"
+}
+$privateCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")
+if ($privateCommand.ExitCode -eq 0 -or $privateCommand.Output -cne "yunpin-sync-agent: unknown command") {
+    throw "Public Windows package exposes a private pairing command"
+}
+$privateBaselineCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("e2e-init-empty-baseline")
+if ($privateBaselineCommand.ExitCode -eq 0 -or
+    $privateBaselineCommand.Output -cne "yunpin-sync-agent: unknown command") {
+    throw "Public Windows package exposes the private empty-baseline E2E command"
 }
 
 $setupBinaryText = [Text.Encoding]::Unicode.GetString(
@@ -149,7 +232,11 @@ if ($installer -notmatch 'AcceptUnsignedDevelopmentBuild' -or $installer -notmat
     throw "Development installer lacks explicit unsigned-build acceptance or manifest verification"
 }
 $metadata = Get-Content -LiteralPath (Join-Path $BundleRoot "BUILD-METADATA.json") -Raw | ConvertFrom-Json
-if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or $metadata.mergedPlugin -ne "librime-yunpin") {
+if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or
+    $metadata.mergedPlugin -ne "librime-yunpin" -or
+    $metadata.syncAgent.build -cne "public-default-tag" -or
+    $metadata.syncAgent.privatePairingCommands -ne $false -or
+    $metadata.syncAgent.residentDefault -cne "disabled") {
     throw "Unexpected package metadata"
 }
 

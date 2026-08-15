@@ -1,0 +1,482 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Wed, 12 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Refresh the private Rime userdb snapshot on demand
+
+Restore only Rime's local maintenance snapshot hook.  The desktop sync agent
+supplies a random request nonce and waits for a fixed, private acknowledgement
+written only after librime's maintenance thread has joined.  Maintenance is
+deferred while any registered controller is composing, chording, re-entrant,
+or recently active.  Idle controllers invalidate their session IDs before
+librime cleanup.  Deploy and finalize paths likewise invalidate every live
+controller-owned session ID before global teardown, so allocator address reuse
+cannot cross controller ownership.  No path, relay credential, endpoint, or
+network operation enters the input method.
+---
+ sources/Main.swift                         |  18 ++-
+ sources/SquirrelApplicationDelegate.swift | 182 +++++++++++++++++++++++++++++-
+ sources/SquirrelInputController.swift      |  96 +++++++++++++++-
+ 3 files changed, 281 insertions(+), 15 deletions(-)
+
+diff --git a/sources/Main.swift b/sources/Main.swift
+index fca61e5..094fb31 100644
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -20,6 +20,16 @@ struct SquirrelApp {
+   }
+   static let logDir = FileManager.default.temporaryDirectory.appending(component: "yunpin.ime", directoryHint: .isDirectory)
+ 
++  static func validMaintenanceNonce(_ value: String) -> Bool {
++    guard value.utf8.count == 32 else {
++      return false
++    }
++    for byte in value.utf8 where !((48...57).contains(byte) || (97...102).contains(byte)) {
++      return false
++    }
++    return true
++  }
++
+   // swiftlint:disable:next cyclomatic_complexity
+   static func main() {
+     let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+@@ -85,7 +95,11 @@ struct SquirrelApp {
+           _ = rimeAPI.deploy()
+           return true
+         case "--sync":
+-          print("YunPin encrypted sync is not connected in this development preview.")
++          guard args.count == 3, validMaintenanceNonce(args[2]) else {
++            fputs("YunPin --sync requires one private maintenance request nonce.\n", stderr)
++            exit(64)
++          }
++          DistributedNotificationCenter.default().postNotificationName(.init("YunPinSyncNotification"), object: args[2], deliverImmediately: true)
+           return true
+         case "--help":
+           print(helpDoc)
+@@ -145,7 +159,7 @@ Supported arguments:
+ Perform actions:
+   --quit                     quit all Squirrel process
+   --reload                   deploy
+-  --sync                     report encrypted-sync preview status
++  --sync <request nonce>     refresh the private local Rime userdb snapshot
+   --build                    build all schemas in current directory
+ Install YunPin:
+   --install, --register-input-source    register input source
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+index b7cad06..b119867 100644
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -8,6 +8,7 @@
+ import UserNotifications
+ import Sparkle
+ import AppKit
++import Darwin
+ 
+ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUStandardUserDriverDelegate, UNUserNotificationCenterDelegate {
+   static let rimeWikiURL = URL(string: "https://github.com/kukuyan/yunpin-ime")!
+@@ -15,6 +16,9 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+   static let notificationIdentifier = "YunPinNotification"
+ 
+   let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
++  private let rimeSyncCompletionQueue = DispatchQueue(label: "io.github.kukuyan.inputmethod.YunPin.rime-sync-completion")
++  private let rimeSyncStateLock = NSLock()
++  private var rimeSyncInFlight = false
+   var config: SquirrelConfig?
+   var panel: SquirrelPanel?
+   var enableNotifications = false
+@@ -65,14 +69,157 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+   }
+ 
+   func deploy() {
++    guard Thread.isMainThread else {
++      DispatchQueue.main.async { [weak self] in
++        self?.deploy()
++      }
++      return
++    }
+     print("Start maintenance...")
+-    self.shutdownRime()
++    guard self.shutdownRime() else {
++      print("Rime maintenance was refused because controller sessions could not be invalidated safely.")
++      return
++    }
+     self.startRime(fullCheck: true)
+     self.loadSettings()
+   }
+ 
+-  func syncUserData() {
+-    print("YunPin encrypted sync is not connected in this development preview.")
++  private func writeMaintenanceAcknowledgement(_ nonce: String, busy: Bool = false) -> Bool {
++    let directoryURL = FileManager.default.homeDirectoryForCurrentUser
++      .appendingPathComponent("Library", isDirectory: true)
++      .appendingPathComponent("Application Support", isDirectory: true)
++      .appendingPathComponent("YunPin", isDirectory: true)
++      .appendingPathComponent("Sync", isDirectory: true)
++    let directoryFD = open(directoryURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
++    guard directoryFD >= 0 else {
++      return false
++    }
++    defer { close(directoryFD) }
++
++    var directoryMetadata = stat()
++    guard fstat(directoryFD, &directoryMetadata) == 0,
++          (directoryMetadata.st_mode & S_IFMT) == S_IFDIR,
++          directoryMetadata.st_uid == geteuid(),
++          (directoryMetadata.st_mode & 0o777) == 0o700 else {
++      return false
++    }
++
++    let acknowledgementName = "rime-maintenance.ack"
++    var existingMetadata = stat()
++    if fstatat(directoryFD, acknowledgementName, &existingMetadata, AT_SYMLINK_NOFOLLOW) == 0 {
++      guard (existingMetadata.st_mode & S_IFMT) == S_IFREG,
++            existingMetadata.st_uid == geteuid(),
++            (existingMetadata.st_mode & 0o777) == 0o600 else {
++        return false
++      }
++    } else if errno != ENOENT {
++      return false
++    }
++
++    let temporaryName = ".rime-maintenance.ack.\(nonce).tmp"
++    let temporaryFD = openat(directoryFD, temporaryName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
++    guard temporaryFD >= 0 else {
++      return false
++    }
++    var renamed = false
++    defer {
++      close(temporaryFD)
++      if !renamed {
++        _ = unlinkat(directoryFD, temporaryName, 0)
++      }
++    }
++
++    var temporaryMetadata = stat()
++    guard fchmod(temporaryFD, 0o600) == 0,
++          fstat(temporaryFD, &temporaryMetadata) == 0,
++          (temporaryMetadata.st_mode & S_IFMT) == S_IFREG,
++          temporaryMetadata.st_uid == geteuid(),
++          (temporaryMetadata.st_mode & 0o777) == 0o600 else {
++      return false
++    }
++
++    let bytes = Array("\(busy ? "busy:" : "")\(nonce)\n".utf8)
++    let wroteAll = bytes.withUnsafeBytes { rawBuffer -> Bool in
++      guard let baseAddress = rawBuffer.baseAddress else {
++        return false
++      }
++      var offset = 0
++      while offset < rawBuffer.count {
++        let count = Darwin.write(temporaryFD, baseAddress.advanced(by: offset), rawBuffer.count - offset)
++        if count <= 0 {
++          return false
++        }
++        offset += count
++      }
++      return true
++    }
++    guard wroteAll, fsync(temporaryFD) == 0,
++          renameat(directoryFD, temporaryName, directoryFD, acknowledgementName) == 0 else {
++      return false
++    }
++    renamed = true
++    guard fsync(directoryFD) == 0 else {
++      _ = unlinkat(directoryFD, acknowledgementName, 0)
++      _ = fsync(directoryFD)
++      return false
++    }
++    return true
++  }
++
++  func syncUserData(requestNonce: String) {
++    guard SquirrelApp.validMaintenanceNonce(requestNonce) else {
++      print("Rejected invalid private Rime maintenance request.")
++      return
++    }
++    guard Thread.isMainThread else {
++      DispatchQueue.main.async { [weak self] in
++        self?.syncUserData(requestNonce: requestNonce)
++      }
++      return
++    }
++    guard SquirrelInputController.prepareForUserDataMaintenance() else {
++      print("Deferred private Rime maintenance while input is active or recently used.")
++      if !writeMaintenanceAcknowledgement(requestNonce, busy: true) {
++        print("Rime maintenance busy acknowledgement could not be committed.")
++      }
++      return
++    }
++    rimeSyncStateLock.lock()
++    guard !rimeSyncInFlight else {
++      rimeSyncStateLock.unlock()
++      print("Rejected overlapping private Rime maintenance request.")
++      if !writeMaintenanceAcknowledgement(requestNonce, busy: true) {
++        print("Rime maintenance busy acknowledgement could not be committed.")
++      }
++      return
++    }
++    rimeSyncInFlight = true
++    rimeSyncStateLock.unlock()
++
++    print("Refreshing private local Rime user data snapshot.")
++    guard rimeAPI.sync_user_data() else {
++      rimeSyncStateLock.lock()
++      rimeSyncInFlight = false
++      rimeSyncStateLock.unlock()
++      print("Rime user data snapshot refresh could not start.")
++      return
++    }
++    rimeSyncCompletionQueue.async { [weak self] in
++      guard let self else { return }
++      defer {
++        self.rimeSyncStateLock.lock()
++        self.rimeSyncInFlight = false
++        self.rimeSyncStateLock.unlock()
++      }
++      self.rimeAPI.join_maintenance_thread()
++      if !self.writeMaintenanceAcknowledgement(requestNonce) {
++        print("Rime user data snapshot acknowledgement could not be committed.")
++      }
++    }
++  }
++
++  func waitForRimeSyncCompletion() {
++    rimeSyncCompletionQueue.sync {}
+   }
+ 
+   func openLogFolder() {
+@@ -240,10 +387,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
+ 
+     let notifCenter = DistributedNotificationCenter.default()
+     notifCenter.addObserver(forName: .init("YunPinReloadNotification"), object: nil, queue: nil, using: rimeNeedsReload)
++    notifCenter.addObserver(forName: .init("YunPinSyncNotification"), object: nil, queue: nil, using: rimeNeedsSync)
+   }
+ 
+   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+     print("YunPin is quitting.")
++    waitForRimeSyncCompletion()
+     rimeAPI.cleanup_all_sessions()
+     return .terminateNow
+   }
+@@ -302,15 +451,27 @@ private extension SquirrelApplicationDelegate {
+     }
+   }
+ 
+-  func shutdownRime() {
++  func shutdownRime() -> Bool {
++    guard Thread.isMainThread else { return false }
++    waitForRimeSyncCompletion()
++    guard SquirrelInputController.invalidateAllSessionsForRimeShutdown() else {
++      return false
++    }
+     config?.close()
+     YunPinStopNativeSelectionSpoolerV1()
+     rimeAPI.finalize()
++    return true
+   }
+ 
+-  func workspaceWillPowerOff(_: Notification) {
++  func workspaceWillPowerOff(_ notification: Notification) {
++    guard Thread.isMainThread else {
++      DispatchQueue.main.async { [weak self] in
++        self?.workspaceWillPowerOff(notification)
++      }
++      return
++    }
+     print("Finalizing before logging out.")
+-    self.shutdownRime()
++    _ = self.shutdownRime()
+   }
+ 
+   func rimeNeedsReload(_: Notification) {
+@@ -318,9 +479,12 @@ private extension SquirrelApplicationDelegate {
+     self.deploy()
+   }
+ 
+-  func rimeNeedsSync(_: Notification) {
+-    print("Sync rime on demand.")
+-    self.syncUserData()
++  func rimeNeedsSync(_ notification: Notification) {
++    guard let requestNonce = notification.object as? String else {
++      print("Rejected Rime maintenance request without a nonce.")
++      return
++    }
++    self.syncUserData(requestNonce: requestNonce)
+   }
+ 
+   func createDirIfNotExist(path: URL) {
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index 6952833..1341a0f 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -5,6 +5,7 @@
+ //  Created by Leo Liu on 5/7/24.
+ //
+ 
++import Foundation
+ import InputMethodKit
+ 
+ // Owns the Rime session independently from the IMK controller.  IMK may
+@@ -17,6 +18,10 @@ private final class RimeSessionLifetime {
+   private var operationDepth: UInt = 0
+   private var destroyRequested = false
+ 
++  var operationInProgress: Bool {
++    operationDepth != 0
++  }
++
+   func install(_ newSession: RimeSessionId) {
+     precondition(operationDepth == 0)
+     if session != 0, session != newSession {
+@@ -75,6 +80,11 @@ private final class RimeSessionLifetime {
+ final class SquirrelInputController: IMKInputController {
+   private static let keyRollOver = 50
+   private static var unknownAppCnt: UInt = 0
++  private static let maintenanceStateLock = NSLock()
++  private static let liveControllers = NSHashTable<SquirrelInputController>.weakObjects()
++  private static var lastInputActivityUptime: TimeInterval = 0
++  private static let maintenanceIdleInterval: TimeInterval = 5
++  private static var controllerCallbacksAreMainThreadOnly = true
+ 
+   private weak var client: IMKTextInput?
+   private let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+@@ -95,9 +105,76 @@ final class SquirrelInputController: IMKInputController {
+   private var chordDuration: TimeInterval = 0
+   private var currentApp: String = ""
+ 
++  private static func recordInputActivity() {
++    maintenanceStateLock.lock()
++    if !Thread.isMainThread {
++      controllerCallbacksAreMainThreadOnly = false
++    }
++    lastInputActivityUptime = ProcessInfo.processInfo.systemUptime
++    maintenanceStateLock.unlock()
++  }
++
++  static func prepareForUserDataMaintenance() -> Bool {
++    guard Thread.isMainThread else { return false }
++    maintenanceStateLock.lock()
++    let idleFor = ProcessInfo.processInfo.systemUptime - lastInputActivityUptime
++    let controllers = liveControllers.allObjects
++    let registryIsSafe = controllerCallbacksAreMainThreadOnly
++    maintenanceStateLock.unlock()
++    guard registryIsSafe, idleFor >= maintenanceIdleInterval else { return false }
++
++    for controller in controllers {
++      guard !controller.sessionLifetime.operationInProgress,
++            controller.chordKeyCount == 0,
++            controller.chordTimer?.isValid != true,
++            controller.preedit.isEmpty else {
++        return false
++      }
++      let session = controller.session
++      if session == 0 {
++        continue
++      }
++      if !controller.rimeAPI.find_session(session) {
++        controller.sessionLifetime.requestDestroy()
++        continue
++      }
++      var context = RimeContext_stdbool.rimeStructInit()
++      guard controller.rimeAPI.get_context(session, &context) else {
++        return false
++      }
++      let composing = context.composition.preedit != nil
++      _ = controller.rimeAPI.free_context(&context)
++      if composing {
++          return false
++      }
++    }
++    for controller in controllers {
++      controller.clearChord()
++      controller.sessionLifetime.requestDestroy()
++      guard controller.session == 0 else { return false }
++    }
++    return true
++  }
++
++  static func invalidateAllSessionsForRimeShutdown() -> Bool {
++    guard Thread.isMainThread else { return false }
++    maintenanceStateLock.lock()
++    let controllers = liveControllers.allObjects
++    let registryIsSafe = controllerCallbacksAreMainThreadOnly
++    maintenanceStateLock.unlock()
++    guard registryIsSafe else { return false }
++
++    for controller in controllers {
++      controller.clearChord()
++      controller.sessionLifetime.requestDestroy()
++    }
++    return controllers.allSatisfy { $0.session == 0 }
++  }
++
+   // swiftlint:disable:next cyclomatic_complexity
+   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
+     guard let event = event else { return false }
++    Self.recordInputActivity()
+     let modifiers = event.modifierFlags
+     let changes = lastModifiers.symmetricDifference(modifiers)
+ 
+@@ -234,6 +311,7 @@ final class SquirrelInputController: IMKInputController {
+   }
+ 
+   override func activateServer(_ sender: Any!) {
++    Self.recordInputActivity()
+     self.client ?= sender as? IMKTextInput
+     // print("[DEBUG] activateServer:")
+     var keyboardLayout = NSApp.squirrelAppDelegate.config?.getString("keyboard_layout") ?? ""
+@@ -254,6 +332,12 @@ final class SquirrelInputController: IMKInputController {
+     self.client = client as? IMKTextInput
+     // print("[DEBUG] initWithServer: \(server ?? .init()) delegate: \(delegate ?? "nil") client:\(client ?? "nil")")
+     super.init(server: server, delegate: delegate, client: client)
++    Self.maintenanceStateLock.lock()
++    if !Thread.isMainThread {
++      Self.controllerCallbacksAreMainThreadOnly = false
++    }
++    Self.liveControllers.add(self)
++    Self.maintenanceStateLock.unlock()
+     createSession()
+   }
+ 
+@@ -280,6 +364,7 @@ final class SquirrelInputController: IMKInputController {
+    to clean up if that is necessary.
+    */
+   override func commitComposition(_ sender: Any!) {
++    Self.recordInputActivity()
+     self.client ?= sender as? IMKTextInput
+     // print("[DEBUG] commitComposition: \(sender ?? "nil")")
+     //  commit raw input
+@@ -317,10 +402,6 @@ final class SquirrelInputController: IMKInputController {
+     NSApp.squirrelAppDelegate.deploy()
+   }
+ 
+-  @objc func syncUserData() {
+-    NSApp.squirrelAppDelegate.syncUserData()
+-  }
+-
+   @objc func openLogFolder() {
+     NSApp.squirrelAppDelegate.openLogFolder()
+   }
+@@ -338,6 +419,12 @@ final class SquirrelInputController: IMKInputController {
+   }
+ 
+   deinit {
++    Self.maintenanceStateLock.lock()
++    if !Thread.isMainThread {
++      Self.controllerCallbacksAreMainThreadOnly = false
++    }
++    Self.liveControllers.remove(self)
++    Self.maintenanceStateLock.unlock()
+     destroySession()
+   }
+ }
+@@ -484,6 +571,7 @@ private extension SquirrelInputController {
+ 
+   // swiftlint:disable:next cyclomatic_complexity
+   func rimeUpdate() {
++    Self.recordInputActivity()
+     // print("[DEBUG] rimeUpdate")
+     // Client calls below can synchronously re-enter InputMethodKit and release
+     // this controller.  Hold the session lifetime independently and defer any
+

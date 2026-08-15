@@ -13,8 +13,10 @@ fi
 app="${1:-${REPO_ROOT}/build/macos/DerivedData/Build/Products/Release/YunPin.app}"
 plist="$app/Contents/Info.plist"
 executable="$app/Contents/MacOS/YunPin"
+sync_agent="$app/Contents/MacOS/yunpin-sync-agent"
 
 [[ -x "$executable" ]] || die "missing YunPin executable: $executable"
+[[ -x "$sync_agent" ]] || die "missing public sync agent: $sync_agent"
 plutil -lint "$plist" >/dev/null
 [[ "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected bundle identifier"
 [[ "$(plutil -extract TISInputSourceID raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected input-source identifier"
@@ -27,6 +29,8 @@ fi
 architectures="$(lipo -archs "$executable")"
 if [[ "$require_universal" -eq 1 ]]; then
   [[ " $architectures " == *" arm64 "* && " $architectures " == *" x86_64 "* ]] || die "YunPin executable is not universal: $architectures"
+  sync_architectures="$(lipo -archs "$sync_agent")"
+  [[ " $sync_architectures " == *" arm64 "* && " $sync_architectures " == *" x86_64 "* ]] || die "public sync agent is not universal: $sync_architectures"
 fi
 
 shared_support="$app/Contents/SharedSupport"
@@ -41,6 +45,30 @@ for required in \
   [[ -f "$required" ]] || die "missing packaged resource: $required"
 done
 
+sync_support="$shared_support/SyncAgent"
+for required in \
+  "$sync_support/Install-LaunchAgent.sh" \
+  "$sync_support/Verify-LaunchAgent.sh" \
+  "$sync_support/Enable-LaunchAgent.sh" \
+  "$sync_support/Uninstall-LaunchAgent.sh" \
+  "$sync_support/README.md"; do
+  [[ -f "$required" && ! -L "$required" ]] || die "missing public sync-agent support file: $required"
+done
+[[ -f "$shared_support/licenses/YunPin-Sync-Agent-Go/LICENSES.json" ]] ||
+  die "public sync agent license-text bundle is missing"
+[[ ! -e "$sync_support/BUILD-METADATA.json" && ! -e "$sync_support/SHA256SUMS" ]] ||
+  die "private E2E artifact metadata entered the public app bundle"
+
+codesign --verify --strict "$sync_agent" >/dev/null 2>&1 ||
+  die "public sync agent does not have a valid signature"
+"$sync_agent" install-probe >/dev/null || die "public sync agent install-probe failed"
+set +e
+private_command_output="$("$sync_agent" pairing-invite 2>&1)"
+private_command_status=$?
+set -e
+[[ "$private_command_status" -ne 0 && "$private_command_output" == "yunpin-sync-agent: unknown command" ]] ||
+  die "public app bundle exposes a private pairing command"
+
 [[ -d "$shared_support/cn_dicts" && -d "$shared_support/lua" && -d "$shared_support/opencc" ]] || die "Rime Ice runtime directories are incomplete"
 codesign --verify --deep --strict "$app" >/dev/null 2>&1 || \
   die "YunPin app does not have a valid strict deep signature"
@@ -49,10 +77,38 @@ otool -L "$executable" | grep -Fq '@rpath/librime.1.dylib' || die "YunPin execut
 bundled_librime="$app/Contents/Frameworks/librime.1.dylib"
 [[ -f "$bundled_librime" ]] || die "YunPin app does not bundle librime"
 nm -gU "$bundled_librime" | grep -F 'rime_require_module_yunpin' >/dev/null || die "bundled librime does not contain the YunPin module"
+nm -gU "$bundled_librime" | grep -F 'YunPinStartNativeSelectionSpoolerV1' >/dev/null || die "bundled librime does not contain the YunPin native spooler"
 if [[ "$require_universal" -eq 1 ]]; then
   librime_architectures="$(lipo -archs "$bundled_librime")"
   [[ " $librime_architectures " == *" arm64 "* && " $librime_architectures " == *" x86_64 "* ]] || die "bundled librime is not universal: $librime_architectures"
 fi
+
+plugin_dir="$app/Contents/Frameworks/rime-plugins"
+expected_plugins='librime-lua.dylib librime-octagram.dylib librime-predict.dylib '
+actual_plugins="$(find "$plugin_dir" -maxdepth 1 -type f -name '*.dylib' -exec basename {} \; | LC_ALL=C sort | tr '\n' ' ')"
+[[ "$actual_plugins" == "$expected_plugins" ]] ||
+  die "bundled Rime plugin set is incomplete or unexpected: $actual_plugins"
+for plugin in librime-lua.dylib librime-octagram.dylib librime-predict.dylib; do
+  bundled_plugin="$plugin_dir/$plugin"
+  otool -L "$bundled_plugin" | grep -F '@rpath/librime.1.dylib' >/dev/null ||
+    die "bundled Rime plugin does not bind to the packaged librime ABI: $plugin"
+  plugin_minos="$(xcrun vtool -show-build "$bundled_plugin" | awk '$1 == "minos" { print $2 }' | LC_ALL=C sort -u)"
+  [[ "$plugin_minos" == '13.0' ]] ||
+    die "bundled Rime plugin has an unexpected deployment target: $plugin ($plugin_minos)"
+  if [[ "$require_universal" -eq 1 ]]; then
+    plugin_architectures="$(lipo -archs "$bundled_plugin")"
+    [[ " $plugin_architectures " == *" arm64 "* && " $plugin_architectures " == *" x86_64 "* ]] ||
+      die "bundled Rime plugin is not universal: $plugin ($plugin_architectures)"
+  fi
+done
+for license in \
+  librime-lua-BSD-3-Clause-LICENSE \
+  Lua-5.4.8-Copyright-Notice.h \
+  librime-octagram-GPL-3.0-LICENSE \
+  librime-predict-BSD-3-Clause-LICENSE; do
+  [[ -f "$shared_support/licenses/$license" ]] ||
+    die "rebuilt Rime plugin license is missing: $license"
+done
 /usr/bin/python3 - "$shared_support/yunpin-preview.json" <<'PY'
 import json
 import sys

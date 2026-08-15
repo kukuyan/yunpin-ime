@@ -10,7 +10,7 @@ servers:
   - url: http://localhost:8080
     description: Local development
 security:
-  - bearerAuth: []
+  - deviceBearer: []
 paths:
   /healthz:
     get:
@@ -32,7 +32,8 @@ paths:
   /v1/accounts:
     post:
       operationId: createAccount
-      security: []
+      security:
+        - userSession: []
       requestBody:
         required: true
         content:
@@ -41,12 +42,96 @@ paths:
               $ref: "#/components/schemas/AccountRegistration"
       responses:
         "201":
-          description: Account and first device created. Secrets are returned once.
+          description: Client-provisioned account and device identity accepted idempotently.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AccountCreated"
         "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/auth/register:
+    post:
+      operationId: registerUser
+      security: []
+      description: >-
+        Creates a local self-hosted YunPin login. The relay stores a salted
+        PBKDF2-SHA-256 password verifier and only a hash of the returned
+        opaque session token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPassword"
+      responses:
+        "201":
+          $ref: "#/components/responses/UserSession"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/auth/login:
+    post:
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPassword"
+      responses:
+        "200":
+          $ref: "#/components/responses/UserSession"
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/auth/logout:
+    post:
+      operationId: logoutUser
+      security:
+        - userSession: []
+      responses:
+        "204":
+          description: Session revoked.
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/accounts/{accountId}/claim:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    post:
+      operationId: claimAccount
+      security:
+        - userSession: []
+      description: >-
+        Binds an existing account to the logged-in user. The request must
+        prove possession of the account's current active device credential,
+        which is already protected by the local OS credential store. It does
+        not accept a recovery key, password, or recovery-derived value.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [device_id, device_token]
+              properties:
+                device_id:
+                  $ref: "#/components/schemas/ID"
+                device_token:
+                  $ref: "#/components/schemas/SecretInput"
+      responses:
+        "200":
+          description: Account is now bound to the current user.
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
   /v1/accounts/{accountId}/recover:
     parameters:
@@ -54,12 +139,16 @@ paths:
     post:
       operationId: recoverAccount
       security: []
+      description: >-
+        Reserved for a future signed roster-chain recovery flow. The fixed
+        Mac-plus-R0W preview returns HTTP 409 and never creates a recovery
+        device from relay metadata alone.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AccountRegistration"
+              $ref: "#/components/schemas/RecoveryRegistration"
       responses:
         "201":
           description: Recovery device created.
@@ -80,9 +169,35 @@ paths:
           $ref: "#/components/responses/Error"
         "401":
           $ref: "#/components/responses/Error"
-  /v1/pairings:
+  /v1/accounts/{accountId}:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
+    delete:
+      operationId: rollbackAccount
+      security:
+        - deviceBearer: []
+      description: >-
+        Roll back a newly provisioned account using its separate short-lived
+        rollback capability, never the long-term device bearer token. The
+        account must remain unsealed, contain one device, and have no pairing
+        or vocabulary envelope.
+      responses:
+        "204":
+          description: The unused account was removed.
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/accounts/{accountId}/seal:
+    parameters:
+      - $ref: "#/components/parameters/AccountId"
     post:
-      operationId: createPairing
+      operationId: sealAccount
+      description: >-
+        Permanently disables account rollback after the first device has
+        committed its encrypted local database and OS credential.
       requestBody:
         required: false
         content:
@@ -91,6 +206,36 @@ paths:
               type: object
               additionalProperties: false
       responses:
+        "204":
+          description: Provisioning was sealed idempotently.
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/pairings:
+    post:
+      operationId: createPairing
+      description: >-
+        Creates the original ten-minute invitation. An exact replay is
+        idempotent only while expires_at remains in the future and the
+        persisted state is created, joined, or approved; after invitation
+        expiry or claim it fails with pairing_invitation_conflict.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [pairing_id, pairing_verifier]
+              properties:
+                pairing_id:
+                  $ref: "#/components/schemas/HexId"
+                pairing_verifier:
+                  $ref: "#/components/schemas/SecretInput"
+      responses:
         "201":
           description: One-time pairing created for ten minutes.
           content:
@@ -98,20 +243,69 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [pairing_id, pairing_secret, creator_x25519_public_key, expires_at]
+                required: [pairing_id, expires_at]
                 properties:
                   pairing_id:
                     $ref: "#/components/schemas/HexId"
-                  pairing_secret:
-                    $ref: "#/components/schemas/OneTimeSecret"
-                  creator_x25519_public_key:
-                    allOf:
-                      - $ref: "#/components/schemas/Base64Url"
-                    description: Creator public key included in the one-time pairing QR.
                   expires_at:
                     type: string
                     format: date-time
         "401":
+          $ref: "#/components/responses/Error"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/devices/current:
+    delete:
+      operationId: rollbackCurrentDevice
+      security:
+        - deviceBearer: []
+      description: >-
+        Roll back an exact joining tuple after a failed local encrypted database
+        or Keychain/DPAPI commit. The bearer is the dedicated rollback
+        capability, not the normal device token (which does not exist yet in
+        joined or approved state). account_id, device_id, pairing_id, and the
+        capability must all match. Joined and approved reservations have no
+        device row and are removed with a permanent hash-only tombstone. A
+        claimed rollback additionally requires another active peer, exactly one
+        matching claimed pairing, and no envelope, keyring, or pairing written
+        by the joining device before removing that quarantined device. A pairing
+        with ready_at or finalized_at returns HTTP 409
+        device_rollback_after_ready without mutation. Only a pre-ready matching
+        row or an exact tombstone retry can return 204; absent rows and
+        conflicting tuples/capabilities fail closed with
+        device_rollback_not_safe. The tombstone also permanently prevents
+        pairing and device identity reuse.
+      parameters:
+        - name: account_id
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/HexId"
+        - name: device_id
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/HexId"
+        - name: pairing_id
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/HexId"
+      responses:
+        "204":
+          description: >-
+            The exact joined/approved reservation, or the pre-ready claimed
+            pairing and quarantined device, was removed; or an exact tombstone
+            retry was accepted.
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
   /v1/pairings/{pairingId}:
     parameters:
@@ -120,8 +314,11 @@ paths:
       operationId: getPairing
       description: >-
         Returns pairing state to the authenticated creating device. After join,
-        the pending device's encrypted display name and public keys are exposed
-        so the creator can derive the X25519 pairing box before approval.
+        the client-generated joining device ID, encrypted display name, public
+        keys, and PSK-authenticated transcript proof are exposed so the creator
+        can verify the peer before encrypting the pairing package. expires_at
+        and expired describe only the original invitation; claim_expires_at and
+        ready_expires_at are the later independent deadlines.
       responses:
         "200":
           description: Pairing state and pending public material.
@@ -133,9 +330,18 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
     put:
       operationId: joinPairing
       security: []
+      description: >-
+        Submits the joining identity during the original ten-minute invitation.
+        A byte-identical retry remains idempotent after approval, claim, ready,
+        or finalization and returns state joined; conflicting material returns
+        pairing_join_conflict.
       requestBody:
         required: true
         content:
@@ -145,26 +351,65 @@ paths:
                 - $ref: "#/components/schemas/DeviceRegistrationFields"
                 - type: object
                   properties:
-                    pairing_secret:
+                    pairing_verifier:
+                      $ref: "#/components/schemas/SecretInput"
+                    device_id:
+                      $ref: "#/components/schemas/HexId"
+                    join_proof:
+                      $ref: "#/components/schemas/SecretInput"
+                    rollback_token:
                       $ref: "#/components/schemas/SecretInput"
               unevaluatedProperties: false
-              required: [pairing_secret, device_name_ciphertext, ed25519_public_key, x25519_public_key]
+              required: [pairing_verifier, device_id, join_proof, rollback_token, device_name_ciphertext, ed25519_public_key, x25519_public_key]
       responses:
         "200":
           description: New device public keys submitted.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PairingState"
+                $ref: "#/components/schemas/PairingJoinedState"
         "400":
           $ref: "#/components/responses/Error"
         "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: cancelPairing
+      description: >-
+        Creator-only cancellation through claimed state, provided the joining
+        device has not reported ready. Joined and approved cancellations retire
+        the exact joining tuple with a permanent rollback tombstone; claimed
+        cancellation also removes the provisional joining device atomically.
+        An untouched created invitation has no joining tuple and is deleted
+        without a tombstone. A valid-ID retry after successful cancellation is
+        idempotent and returns 204; ready or finalized pairings fail with
+        pairing_cancel_not_safe. After any joined/approved/claimed cancellation,
+        an exact joining rollback retry also returns 204 from the tombstone.
+      responses:
+        "204":
+          description: Pairing was absent already or was cancelled safely.
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
           $ref: "#/components/responses/Error"
   /v1/pairings/{pairingId}/approve:
     parameters:
       - $ref: "#/components/parameters/PairingId"
     post:
       operationId: approvePairing
+      description: >-
+        Approves the authenticated transcript and opens a bounded 24-hour
+        claim window. Exact approval retries remain idempotent after the
+        original ten-minute invitation expires. A conflicting encrypted
+        package returns pairing_approval_conflict; a premature or expired first
+        approval returns pairing_not_ready.
       requestBody:
         required: true
         content:
@@ -182,10 +427,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PairingState"
+                $ref: "#/components/schemas/PairingApprovedState"
+        "400":
+          $ref: "#/components/responses/Error"
         "401":
           $ref: "#/components/responses/Error"
         "409":
+          $ref: "#/components/responses/Error"
+        "429":
           $ref: "#/components/responses/Error"
   /v1/pairings/{pairingId}/claim:
     parameters:
@@ -193,6 +442,14 @@ paths:
     post:
       operationId: claimPairing
       security: []
+      description: >-
+        Claims an approved device within its 24-hour claim window. Exact
+        retries of an already-claimed identity remain idempotent, including
+        after ready or finalization. Claim installs a quarantined device and
+        starts a separate 24-hour ready window; its ordinary bearer remains
+        blocked with pairing_finalization_pending until creator finalization.
+        Expired verifier material returns invalid_or_expired_pairing and a bad
+        joining-device signature returns invalid_pairing_claim_proof.
       requestBody:
         required: true
         content:
@@ -200,13 +457,17 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [pairing_secret]
+              required: [pairing_verifier, device_token, claim_proof]
               properties:
-                pairing_secret:
+                pairing_verifier:
+                  $ref: "#/components/schemas/SecretInput"
+                device_token:
+                  $ref: "#/components/schemas/SecretInput"
+                claim_proof:
                   $ref: "#/components/schemas/SecretInput"
       responses:
         "201":
-          description: Device token and encrypted keyring claimed once.
+          description: Quarantined device token and encrypted keyring claimed or replayed idempotently.
           content:
             application/json:
               schema:
@@ -222,9 +483,64 @@ paths:
                     $ref: "#/components/schemas/OneTimeSecret"
                   encrypted_keyring:
                     $ref: "#/components/schemas/SealedBoxWire"
+        "400":
+          $ref: "#/components/responses/Error"
         "401":
           $ref: "#/components/responses/Error"
         "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/pairings/{pairingId}/ready:
+    parameters:
+      - $ref: "#/components/parameters/PairingId"
+    post:
+      operationId: readyPairing
+      description: >-
+        The quarantined joining device acknowledges durable local commit using
+        its device bearer before ready_expires_at, which is 24 hours after
+        claim. Ordinary account APIs remain blocked until creator finalization.
+        Exact retries return ready, or finalized if finalization already won.
+        A late first acknowledgement returns pairing_ready_window_expired.
+      responses:
+        "200":
+          description: Durable joining-device commit was acknowledged already or just now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingReadyState"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /v1/pairings/{pairingId}/finalize:
+    parameters:
+      - $ref: "#/components/parameters/PairingId"
+    post:
+      operationId: finalizePairing
+      description: >-
+        The authenticated creator releases a ready joining device from
+        quarantine. There is no additional finalization deadline after ready;
+        an exact retry returns finalized. A premature attempt returns
+        pairing_not_ready_to_finalize.
+      responses:
+        "200":
+          description: Pairing was finalized already or just now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingFinalizedState"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
           $ref: "#/components/responses/Error"
   /v1/sync:
     post:
@@ -251,6 +567,8 @@ paths:
           $ref: "#/components/responses/Error"
         "401":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
   /v1/devices:
@@ -271,11 +589,19 @@ paths:
                       $ref: "#/components/schemas/Device"
         "401":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
   /v1/devices/{deviceId}:
     parameters:
       - $ref: "#/components/parameters/DeviceId"
     delete:
       operationId: revokeDevice
+      description: >-
+        Reserved until signed roster replacement is synchronized. The fixed
+        two-device preview returns HTTP 409; only the dedicated rollback of an
+        unfinalized paired device is available.
       responses:
         "204":
           description: Device revoked.
@@ -302,6 +628,8 @@ paths:
                     items:
                       $ref: "#/components/schemas/Keyring"
         "401":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
     put:
       operationId: putKeyring
@@ -341,10 +669,14 @@ paths:
           $ref: "#/components/responses/Error"
 components:
   securitySchemes:
-    bearerAuth:
+    deviceBearer:
       type: http
       scheme: bearer
       bearerFormat: opaque-device-token
+    userSession:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-user-session
   parameters:
     AccountId:
       name: accountId
@@ -371,6 +703,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    UserSession:
+      description: Opaque login session. Store the token only in the platform secret store.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UserSession"
   schemas:
     HexId:
       type: string
@@ -383,6 +721,34 @@ components:
       allOf:
         - $ref: "#/components/schemas/Base64Url"
       writeOnly: true
+    UserPassword:
+      type: object
+      additionalProperties: false
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{3,64}$"
+        password:
+          type: string
+          format: password
+          writeOnly: true
+          minLength: 12
+          maxLength: 256
+    UserSession:
+      type: object
+      additionalProperties: false
+      required: [username, token, expires_at]
+      properties:
+        username:
+          type: string
+        token:
+          allOf:
+            - $ref: "#/components/schemas/OneTimeSecret"
+          description: Opaque 32-byte login session; never include it in endpoint configuration.
+        expires_at:
+          type: string
+          format: date-time
     OneTimeSecret:
       allOf:
         - $ref: "#/components/schemas/Base64Url"
@@ -410,6 +776,13 @@ components:
           allOf:
             - $ref: "#/components/schemas/Base64Url"
           description: Exactly 32 bytes after base64url decoding.
+    ProvisionedDeviceFields:
+      type: object
+      properties:
+        device_id:
+          $ref: "#/components/schemas/HexId"
+        device_token:
+          $ref: "#/components/schemas/SecretInput"
     DeviceRegistration:
       allOf:
         - $ref: "#/components/schemas/DeviceRegistrationFields"
@@ -418,8 +791,15 @@ components:
     AccountRegistration:
       allOf:
         - $ref: "#/components/schemas/DeviceRegistrationFields"
+        - $ref: "#/components/schemas/ProvisionedDeviceFields"
         - type: object
           properties:
+            account_id:
+              $ref: "#/components/schemas/HexId"
+            rollback_token:
+              allOf:
+                - $ref: "#/components/schemas/SecretInput"
+              description: Dedicated 32-byte short-lived provisioning rollback capability.
             recovery_authentication:
               allOf:
                 - $ref: "#/components/schemas/SecretInput"
@@ -428,7 +808,17 @@ components:
                 HKDF-SHA-256 using yunpin-recovery-authentication-v1. This is
                 not the yprec1 recovery key; the relay stores only its SHA-256.
       unevaluatedProperties: false
-      required: [recovery_authentication, device_name_ciphertext, ed25519_public_key, x25519_public_key]
+      required: [account_id, device_id, device_token, rollback_token, recovery_authentication, device_name_ciphertext, ed25519_public_key, x25519_public_key]
+    RecoveryRegistration:
+      allOf:
+        - $ref: "#/components/schemas/DeviceRegistrationFields"
+        - $ref: "#/components/schemas/ProvisionedDeviceFields"
+        - type: object
+          properties:
+            recovery_authentication:
+              $ref: "#/components/schemas/SecretInput"
+      unevaluatedProperties: false
+      required: [device_id, device_token, recovery_authentication, device_name_ciphertext, ed25519_public_key, x25519_public_key]
     AccountCreated:
       type: object
       additionalProperties: false
@@ -440,14 +830,38 @@ components:
           $ref: "#/components/schemas/HexId"
         device_token:
           $ref: "#/components/schemas/OneTimeSecret"
-    PairingState:
+    PairingJoinedState:
       type: object
       additionalProperties: false
       required: [state]
       properties:
         state:
           type: string
-          enum: [joined, approved]
+          const: joined
+    PairingApprovedState:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          const: approved
+    PairingReadyState:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [ready, finalized]
+    PairingFinalizedState:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          const: finalized
     PairingStatus:
       type: object
       additionalProperties: false
@@ -457,12 +871,28 @@ components:
           $ref: "#/components/schemas/HexId"
         state:
           type: string
-          enum: [created, joined, approved, claimed]
+          enum: [created, joined, approved, claimed, ready, finalized]
         expires_at:
           type: string
           format: date-time
+          description: Original ten-minute invitation deadline, even after later transitions.
+        claim_expires_at:
+          type: string
+          format: date-time
+          description: Present after approval; the unclaimed device must claim before this deadline.
+        ready_expires_at:
+          type: string
+          format: date-time
+          description: Present after claim; the joining device must report durable local commit before this deadline.
         expired:
           type: boolean
+          description: Whether the original invitation deadline has elapsed; does not describe claim or ready expiry.
+        device_id:
+          $ref: "#/components/schemas/HexId"
+        join_proof:
+          allOf:
+            - $ref: "#/components/schemas/Base64Url"
+          description: Present after join; exactly 32 decoded bytes and authenticated by the out-of-band PSK.
         device_name_ciphertext:
           $ref: "#/components/schemas/Ciphertext"
         ed25519_public_key:

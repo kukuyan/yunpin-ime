@@ -292,12 +292,18 @@ func TestX25519PairingAgreement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nonce := bytes.Repeat([]byte{0x5a}, 24)
-	left, err := DerivePairingKey(alice.X25519Private, bob.X25519Public, nonce)
+	secret := bytes.Repeat([]byte{0x5a}, PairingSecretSize)
+	transcript := PairingTranscript{
+		PairingID: bytes.Repeat([]byte{1}, 16), AccountID: bytes.Repeat([]byte{4}, 16), CreatorDeviceID: bytes.Repeat([]byte{2}, 16),
+		JoiningDeviceID: bytes.Repeat([]byte{3}, 16), CreatorEd25519PublicKey: alice.Ed25519Public,
+		JoiningEd25519PublicKey: bob.Ed25519Public, CreatorX25519PublicKey: alice.X25519Public,
+		JoiningX25519PublicKey: bob.X25519Public,
+	}
+	left, err := DerivePairingKey(alice.X25519Private, bob.X25519Public, secret, transcript)
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := DerivePairingKey(bob.X25519Private, alice.X25519Public, nonce)
+	right, err := DerivePairingKey(bob.X25519Private, alice.X25519Public, secret, transcript)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +312,37 @@ func TestX25519PairingAgreement(t *testing.T) {
 	}
 	if len(keysOrPanic(t, alice.Ed25519Private)) != ed25519.PrivateKeySize {
 		t.Fatal("invalid signing key")
+	}
+	verifier, err := PairingRelayVerifier(secret, transcript.PairingID)
+	if err != nil || len(verifier) != 32 || bytes.Equal(verifier, secret) {
+		t.Fatal("pairing relay verifier is invalid or disclosed the PSK")
+	}
+	proof, err := PairingJoinProof(secret, transcript)
+	if err != nil || VerifyPairingJoinProof(secret, transcript, proof) != nil {
+		t.Fatal("pairing join proof did not verify")
+	}
+	substituted := transcript
+	substituted.JoiningX25519PublicKey = alice.X25519Public
+	if VerifyPairingJoinProof(secret, substituted, proof) == nil {
+		t.Fatal("relay public-key substitution retained a valid join proof")
+	}
+	deviceToken := "synthetic-device-token"
+	claimProof, err := PairingClaimProof(transcript, deviceToken, bob.Ed25519Private)
+	if err != nil || VerifyPairingClaimProof(transcript, deviceToken, bob.Ed25519Public, claimProof) != nil {
+		t.Fatal("pairing claim proof did not verify")
+	}
+	if VerifyPairingClaimProof(transcript, deviceToken+"-changed", bob.Ed25519Public, claimProof) == nil {
+		t.Fatal("pairing claim proof was not bound to the device token")
+	}
+	if VerifyPairingClaimProof(transcript, deviceToken, alice.Ed25519Public, claimProof) == nil {
+		t.Fatal("pairing claim proof accepted the wrong signing device")
+	}
+	wrongSecret := append([]byte(nil), secret...)
+	wrongSecret[0] ^= 1
+	if _, err := DerivePairingKey(alice.X25519Private, bob.X25519Public, wrongSecret, transcript); err != nil {
+		t.Fatal(err)
+	} else if wrong, _ := DerivePairingKey(alice.X25519Private, bob.X25519Public, wrongSecret, transcript); bytes.Equal(left, wrong) {
+		t.Fatal("different pairing PSK derived the same key")
 	}
 }
 

@@ -1,0 +1,243 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Wed, 12 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Defer userdb sync while a composition is active
+
+Make the idle check and entry into maintenance one serialized server request.
+Any composing or uninspectable session returns a retryable exit status without
+clearing sessions. The desktop agent observes that status on the exact fixed
+child process and retries later.
+---
+ RimeWithWeasel/RimeWithWeasel.cpp    | 28 ++++++++++++++++++++++++++++
+ WeaselDeployer/Configurator.cpp      | 32 +++++++++++++++++++++-----------
+ WeaselIPC/WeaselClientImpl.cpp       | 15 ++++++++++++++-
+ WeaselIPC/WeaselClientImpl.h         |  1 +
+ WeaselIPCServer/WeaselServerImpl.cpp |  9 ++++++---
+ include/RimeWithWeasel.h             |  2 ++
+ include/WeaselIPC.h                  | 11 +++++++++++
+ 7 files changed, 83 insertions(+), 15 deletions(-)
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 1c343b9..12de578 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -539,6 +539,34 @@ void RimeWithWeaselHandler::StartMaintenance() {
+   _UpdateUI(0);
+ }
+ 
++bool RimeWithWeaselHandler::_SessionsAreIdle() {
++  if (m_disabled)
++    return true;
++  for (const auto& pair : m_session_status_map) {
++    const RimeSessionId session_id = pair.second.session_id;
++    if (!session_id || !rime_api->find_session(session_id))
++      return false;
++    RIME_STRUCT(RimeStatus, status);
++    if (!rime_api->get_status(session_id, &status))
++      return false;
++    const bool idle = !status.is_composing;
++    rime_api->free_status(&status);
++    if (!idle)
++      return false;
++  }
++  return true;
++}
++
++bool RimeWithWeaselHandler::TryStartMaintenance() {
++  // The idle check and Finalize() run on the same IPC server message.  A
++  // composition cannot appear between them, and a busy session is left intact.
++  if (!_SessionsAreIdle())
++    return false;
++  if (!m_disabled)
++    StartMaintenance();
++  return true;
++}
++
+ void RimeWithWeaselHandler::EndMaintenance() {
+   if (m_disabled) {
+     Initialize();
+diff --git a/WeaselDeployer/Configurator.cpp b/WeaselDeployer/Configurator.cpp
+index eaf8157..4c6657e 100644
+--- a/WeaselDeployer/Configurator.cpp
++++ b/WeaselDeployer/Configurator.cpp
+@@ -196,6 +196,10 @@ int Configurator::DictManagement() {
+ }
+ 
+ int Configurator::SyncUserData() {
++  // The desktop agent maps this retryable process result to its authenticated
++  // ErrRimeMaintenanceBusy path. It observes the status of the exact fixed
++  // child-process handle; no writable side channel or PATH lookup is involved.
++  constexpr int kMaintenanceBusyExitCode = 75;
+   HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
+   if (!hMutex) {
+     LOG(ERROR) << "Error creating WeaselDeployerMutex.";
+@@ -212,18 +216,24 @@ int Configurator::SyncUserData() {
+   }
+ 
+   weasel::Client client;
+-  if (client.Connect()) {
+-    LOG(INFO) << "Turning WeaselServer into maintenance mode.";
+-    client.StartMaintenance();
++  if (!client.Connect()) {
++    LOG(INFO) << "Deferring user data sync until the idle gate is available.";
++    CloseHandle(hMutex);
++    return kMaintenanceBusyExitCode;
++  }
++  LOG(INFO) << "Requesting idle-only WeaselServer maintenance mode.";
++  if (!client.TryStartMaintenance()) {
++    LOG(INFO) << "Deferring user data sync while a composition is active.";
++    CloseHandle(hMutex);
++    return kMaintenanceBusyExitCode;
+   }
+ 
+-  {
+-    RimeApi* rime = rime_get_api();
+-    if (!rime->sync_user_data()) {
+-      LOG(ERROR) << "Error synching user data.";
+-      CloseHandle(hMutex);
+-      return 1;
+-    }
++  int result = 0;
++  RimeApi* rime = rime_get_api();
++  if (!rime->sync_user_data()) {
++    LOG(ERROR) << "Error synching user data.";
++    result = 1;
++  } else {
+     rime->join_maintenance_thread();
+   }
+ 
+@@ -233,5 +243,5 @@ int Configurator::SyncUserData() {
+     LOG(INFO) << "Resuming service.";
+     client.EndMaintenance();
+   }
+-  return 0;
++  return result;
+ }
+diff --git a/WeaselIPC/WeaselClientImpl.cpp b/WeaselIPC/WeaselClientImpl.cpp
+index 26122ad..8a95922 100644
+--- a/WeaselIPC/WeaselClientImpl.cpp
++++ b/WeaselIPC/WeaselClientImpl.cpp
+@@ -157,10 +157,19 @@ void ClientImpl::EndSession() {
+ }
+ 
+ void ClientImpl::StartMaintenance() {
+-  _SendMessage(WEASEL_IPC_START_MAINTENANCE, 0, 0);
++  _SendMessage(WEASEL_IPC_START_MAINTENANCE,
++               WEASEL_IPC_MAINTENANCE_FORCE, 0);
+   session_id = 0;
+ }
+ 
++bool ClientImpl::TryStartMaintenance() {
++  const LRESULT accepted = _SendMessage(WEASEL_IPC_START_MAINTENANCE,
++                                        WEASEL_IPC_MAINTENANCE_IF_IDLE, 0);
++  if (accepted)
++    session_id = 0;
++  return accepted != 0;
++}
++
+ void ClientImpl::EndMaintenance() {
+   _SendMessage(WEASEL_IPC_END_MAINTENANCE, 0, 0);
+   session_id = 0;
+@@ -268,6 +277,10 @@ void Client::StartMaintenance() {
+   m_pImpl->StartMaintenance();
+ }
+ 
++bool Client::TryStartMaintenance() {
++  return m_pImpl->TryStartMaintenance();
++}
++
+ void Client::EndMaintenance() {
+   m_pImpl->EndMaintenance();
+ }
+diff --git a/WeaselIPC/WeaselClientImpl.h b/WeaselIPC/WeaselClientImpl.h
+index 7602792..4b4cf5f 100644
+--- a/WeaselIPC/WeaselClientImpl.h
++++ b/WeaselIPC/WeaselClientImpl.h
+@@ -15,6 +15,7 @@ class ClientImpl {
+   void StartSession();
+   void EndSession();
+   void StartMaintenance();
++  bool TryStartMaintenance();
+   void EndMaintenance();
+   bool Echo();
+   bool ProcessKeyEvent(KeyEvent const& keyEvent);
+diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
+index 21c05b8..3adf05c 100644
+--- a/WeaselIPCServer/WeaselServerImpl.cpp
++++ b/WeaselIPCServer/WeaselServerImpl.cpp
+@@ -295,9 +295,12 @@ DWORD ServerImpl::OnUpdateInputPosition(WEASEL_IPC_COMMAND uMsg,
+ DWORD ServerImpl::OnStartMaintenance(WEASEL_IPC_COMMAND uMsg,
+                                      DWORD wParam,
+                                      DWORD lParam) {
+-  if (m_pRequestHandler)
+-    m_pRequestHandler->StartMaintenance();
+-  return 0;
++  if (!m_pRequestHandler)
++    return FALSE;
++  if (wParam == WEASEL_IPC_MAINTENANCE_IF_IDLE)
++    return m_pRequestHandler->TryStartMaintenance() ? TRUE : FALSE;
++  m_pRequestHandler->StartMaintenance();
++  return TRUE;
+ }
+ 
+ DWORD ServerImpl::OnEndMaintenance(WEASEL_IPC_COMMAND uMsg,
+diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
+index 6fb0a4c..b502220 100644
+--- a/include/RimeWithWeasel.h
++++ b/include/RimeWithWeasel.h
+@@ -56,6 +56,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   virtual void FocusOut(DWORD param, WeaselSessionId ipc_id);
+   virtual void UpdateInputPosition(RECT const& rc, WeaselSessionId ipc_id);
+   virtual void StartMaintenance();
++  virtual bool TryStartMaintenance();
+   virtual void EndMaintenance();
+   virtual void SetOption(WeaselSessionId ipc_id,
+                          const std::string& opt,
+@@ -84,6 +85,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+ 
+   bool _IsSessionTSF(RimeSessionId session_id);
+   void _UpdateInlinePreeditStatus(WeaselSessionId ipc_id);
++  bool _SessionsAreIdle();
+ 
+   RimeSessionId to_session_id(WeaselSessionId ipc_id) {
+     return m_session_status_map[ipc_id].session_id;
+diff --git a/include/WeaselIPC.h b/include/WeaselIPC.h
+index 7f3e19e..65acb43 100644
+--- a/include/WeaselIPC.h
++++ b/include/WeaselIPC.h
+@@ -35,6 +35,11 @@ enum WEASEL_IPC_COMMAND {
+   WEASEL_IPC_LAST_COMMAND
+ };
+ 
++enum WEASEL_IPC_MAINTENANCE_MODE {
++  WEASEL_IPC_MAINTENANCE_FORCE = 0,
++  WEASEL_IPC_MAINTENANCE_IF_IDLE = 1,
++};
++
+ namespace weasel {
+ struct PipeMessage {
+   WEASEL_IPC_COMMAND Msg;
+@@ -78,6 +83,10 @@ struct RequestHandler {
+   virtual void FocusOut(DWORD param, DWORD session_id) {}
+   virtual void UpdateInputPosition(RECT const& rc, DWORD session_id) {}
+   virtual void StartMaintenance() {}
++  virtual bool TryStartMaintenance() {
++    StartMaintenance();
++    return true;
++  }
+   virtual void EndMaintenance() {}
+   virtual void SetOption(DWORD session_id, const std::string& opt, bool val) {}
+   virtual void UpdateColorTheme(BOOL darkMode) {}
+@@ -116,6 +125,8 @@ class Client {
+   void EndSession();
+   // 進入維護模式
+   void StartMaintenance();
++  // 僅在所有輸入會話皆無未提交組字時進入維護模式
++  bool TryStartMaintenance();
+   // 退出維護模式
+   void EndMaintenance();
+   // 测试连接
+-- 
+2.50.1

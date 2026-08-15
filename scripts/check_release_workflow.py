@@ -223,6 +223,10 @@ CI_SNIPPETS = {
     "YunPin-IME-macOS-development-preview.dmg": "macOS DMG asset",
     "YunPin-IME-development-preview-source.tar.gz": "macOS source asset",
     "macos-release-metadata.json": "macOS commit metadata",
+    "name: YunPin-Windows-private-pairing-E2E": "isolated Windows private E2E artifact",
+    "path: build/windows/e2e-private/windows": "isolated Windows private E2E path",
+    "name: YunPin-macOS-private-pairing-E2E": "isolated macOS private E2E artifact",
+    "path: build/macos/e2e-private/macos": "isolated macOS private E2E path",
     "release-preview:\n    name: release-preview": "tag-only caller job",
     "needs: [required, windows-client, macos-client]": "full-CI and two-platform publication gate",
     "attestations: read": "caller release-attestation permission",
@@ -273,6 +277,11 @@ def check_static_contract() -> int:
         errors.append("CI publisher call must be tag-only")
     if "softprops/action-gh-release" in release or "ncipollo/release-action" in release:
         errors.append("release publishing must use the runner's built-in gh CLI")
+    for forbidden in ("private-pairing", "e2e-private", "yunpin_pairing_private"):
+        if forbidden in release.lower():
+            errors.append(
+                f"release workflow must not download or publish private E2E material: {forbidden}"
+            )
 
     create_offset = release.find("gh release create")
     if create_offset >= 0:

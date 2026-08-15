@@ -1,0 +1,201 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: Serialize reentrant candidate updates and detach Rime context memory
+
+InputMethodKit client callbacks can synchronously deliver another controller's
+key event while the shared TextKit candidate panel is still being updated.
+Serialize the complete Rime-to-TextKit snapshot across controllers, coalesce
+nested refreshes onto the next main-run-loop turn, and release all C-owned
+commit/status/context storage before entering IMK or AppKit.
+
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index 130a521..6a62cc8 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -85,6 +85,12 @@ final class SquirrelInputController: IMKInputController {
+   private static var lastInputActivityUptime: TimeInterval = 0
+   private static let maintenanceIdleInterval: TimeInterval = 5
+   private static var controllerCallbacksAreMainThreadOnly = true
++  // Every controller shares one candidate panel. IMK client callbacks can
++  // synchronously deliver another controller's key event, so serialize the
++  // complete Rime-to-TextKit snapshot across all live controllers.
++  private static var rimeUpdateInProgress = false
++  private static var rimeUpdateWasReentered = false
++  private static let pendingRimeUpdates = NSHashTable<SquirrelInputController>.weakObjects()
+ 
+   private weak var client: IMKTextInput?
+   private let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+@@ -562,16 +568,38 @@ private extension SquirrelInputController {
+   func rimeConsumeCommittedText() {
+     var commitText = RimeCommit.rimeStructInit()
+     if rimeAPI.get_commit(session, &commitText) {
+-      if let text = commitText.text {
+-        commit(string: String(cString: text))
+-      }
++      let committed = commitText.text.map { String(cString: $0) }
+       _ = rimeAPI.free_commit(&commitText)
++      if let committed {
++        commit(string: committed)
++      }
+     }
+   }
+ 
+   // swiftlint:disable:next cyclomatic_complexity
+   func rimeUpdate() {
+     Self.recordInputActivity()
++    guard Thread.isMainThread else {
++      DispatchQueue.main.async { [weak self] in self?.rimeUpdate() }
++      return
++    }
++    if Self.rimeUpdateInProgress {
++      Self.rimeUpdateWasReentered = true
++      Self.pendingRimeUpdates.add(self)
++      return
++    }
++    Self.rimeUpdateInProgress = true
++    Self.rimeUpdateWasReentered = false
++    defer {
++      let pendingControllers = Self.pendingRimeUpdates.allObjects
++      Self.pendingRimeUpdates.removeAllObjects()
++      Self.rimeUpdateInProgress = false
++      Self.rimeUpdateWasReentered = false
++      for controller in pendingControllers {
++        DispatchQueue.main.async { [weak controller] in controller?.rimeUpdate() }
++      }
++    }
++
+     // print("[DEBUG] rimeUpdate")
+     // Client calls below can synchronously re-enter InputMethodKit and release
+     // this controller.  Hold the session lifetime independently and defer any
+@@ -582,33 +610,48 @@ private extension SquirrelInputController {
+     guard session != 0 else { return }
+ 
+     rimeConsumeCommittedText()
++    guard !Self.rimeUpdateWasReentered else { return }
+ 
+     var status = RimeStatus_stdbool.rimeStructInit()
++    var nextSchemaId: String?
+     if rimeAPI.get_status(session, &status) {
+-      // enable schema specific ui style
+       // swiftlint:disable:next identifier_name
+       if let schema_id = status.schema_id, schemaId == "" || schemaId != String(cString: schema_id) {
+-        schemaId = String(cString: schema_id)
+-        NSApp.squirrelAppDelegate.loadSettings(for: schemaId)
+-        // inline preedit
+-        if let panel = NSApp.squirrelAppDelegate.panel {
+-          inlinePreedit = (panel.inlinePreedit && !rimeAPI.get_option(session, "no_inline")) || rimeAPI.get_option(session, "inline")
+-          inlineCandidate = panel.inlineCandidate && !rimeAPI.get_option(session, "no_inline")
+-          // if not inline, embed soft cursor in preedit string
+-          rimeAPI.set_option(session, "soft_cursor", !inlinePreedit)
+-        }
++        nextSchemaId = String(cString: schema_id)
+       }
+       _ = rimeAPI.free_status(&status)
+     }
++    if let nextSchemaId {
++      schemaId = nextSchemaId
++      NSApp.squirrelAppDelegate.loadSettings(for: schemaId)
++      // inline preedit
++      if let panel = NSApp.squirrelAppDelegate.panel {
++        inlinePreedit = (panel.inlinePreedit && !rimeAPI.get_option(session, "no_inline")) || rimeAPI.get_option(session, "inline")
++        inlineCandidate = panel.inlineCandidate && !rimeAPI.get_option(session, "no_inline")
++        // if not inline, embed soft cursor in preedit string
++        rimeAPI.set_option(session, "soft_cursor", !inlinePreedit)
++      }
++    }
+ 
+     var ctx = RimeContext_stdbool.rimeStructInit()
+     if rimeAPI.get_context(session, &ctx) {
+-      // update preedit text
++      // Copy every C-owned string and scalar before calling an IMK client or
++      // AppKit. Those calls may synchronously re-enter this controller and
++      // mutate the Rime session. No pointer from RimeContext is allowed to
++      // survive into the UI phase.
+       let preedit = ctx.composition.preedit.map({ String(cString: $0) }) ?? ""
++      func index(atUTF8Offset rawOffset: Int) -> String.Index {
++        let offset = max(0, min(rawOffset, preedit.utf8.count))
++        let utf8Index = preedit.utf8.index(preedit.utf8.startIndex, offsetBy: offset)
++        return String.Index(utf8Index, within: preedit) ?? preedit.startIndex
++      }
++      let start = index(atUTF8Offset: Int(ctx.composition.sel_start))
++      let end = index(atUTF8Offset: Int(ctx.composition.sel_end))
++      let caretPos = index(atUTF8Offset: Int(ctx.composition.cursor_pos))
+ 
+-      let start = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.sel_start)), within: preedit) ?? preedit.startIndex
+-      let end = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.sel_end)), within: preedit) ?? preedit.startIndex
+-      let caretPos = String.Index(preedit.utf8.index(preedit.utf8.startIndex, offsetBy: Int(ctx.composition.cursor_pos)), within: preedit) ?? preedit.startIndex
++      var markedPreedit: String
++      var markedSelRange: NSRange
++      var markedCaretPos: Int
+ 
+       if inlineCandidate {
+         var candidatePreview = ctx.commit_text_preview.map { String(cString: $0) } ?? ""
+@@ -650,19 +693,28 @@ private extension SquirrelInputController {
+         let start = min(start, candidatePreview.endIndex)
+         // caret can be either before or after the selected range.
+         let caretPos = caretPos <= start ? caretPos : endOfCandidatePreview
+-        show(preedit: candidatePreview,
+-             selRange: NSRange(location: start.utf16Offset(in: candidatePreview),
+-                               length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)),
+-             caretPos: caretPos.utf16Offset(in: candidatePreview))
++        markedPreedit = candidatePreview
++        markedSelRange = NSRange(
++          location: start.utf16Offset(in: candidatePreview),
++          length: candidatePreview.utf16.distance(from: start, to: candidatePreview.endIndex)
++        )
++        markedCaretPos = caretPos.utf16Offset(in: candidatePreview)
+       } else {
+         if inlinePreedit {
+-          show(preedit: preedit, selRange: NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end)), caretPos: caretPos.utf16Offset(in: preedit))
++          markedPreedit = preedit
++          markedSelRange = NSRange(
++            location: start.utf16Offset(in: preedit),
++            length: preedit.utf16.distance(from: start, to: end)
++          )
++          markedCaretPos = caretPos.utf16Offset(in: preedit)
+         } else {
+           // TRICKY: display a non-empty string to prevent iTerm2 from echoing
+           // each character in preedit. note this is a full-shape space U+3000;
+           // using half shape characters like "..." will result in an unstable
+           // baseline when composing Chinese characters.
+-          show(preedit: preedit.isEmpty ? "" : "　", selRange: NSRange(location: 0, length: 0), caretPos: 0)
++          markedPreedit = preedit.isEmpty ? "" : "　"
++          markedSelRange = NSRange(location: 0, length: 0)
++          markedCaretPos = 0
+         }
+       }
+ 
+@@ -688,12 +740,20 @@ private extension SquirrelInputController {
+       // swiftlint:enable identifier_name
+       let page = Int(ctx.menu.page_no)
+       let lastPage = ctx.menu.is_last_page
++      let highlighted = Int(ctx.menu.highlighted_candidate_index)
++      let panelSelRange = NSRange(
++        location: start.utf16Offset(in: preedit),
++        length: preedit.utf16.distance(from: start, to: end)
++      )
++      let panelCaretPos = caretPos.utf16Offset(in: preedit)
++      _ = rimeAPI.free_context(&ctx)
+ 
+-      let selRange = NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end))
+-      showPanel(preedit: inlinePreedit ? "" : preedit, selRange: selRange, caretPos: caretPos.utf16Offset(in: preedit),
+-                candidates: candidates, comments: comments, labels: labels, highlighted: Int(ctx.menu.highlighted_candidate_index),
++      show(preedit: markedPreedit, selRange: markedSelRange, caretPos: markedCaretPos)
++      guard !Self.rimeUpdateWasReentered else { return }
++      let panelPreedit = inlinePreedit ? "" : preedit
++      showPanel(preedit: panelPreedit, selRange: panelSelRange, caretPos: panelCaretPos,
++                candidates: candidates, comments: comments, labels: labels, highlighted: highlighted,
+                 page: page, lastPage: lastPage)
+-      _ = rimeAPI.free_context(&ctx)
+     } else {
+       hidePalettes()
+     }
+@@ -741,6 +801,7 @@ private extension SquirrelInputController {
+     guard let client = client else { return }
+     var inputPos = NSRect()
+     client.attributes(forCharacterIndex: 0, lineHeightRectangle: &inputPos)
++    guard !Self.rimeUpdateWasReentered else { return }
+     if let panel = NSApp.squirrelAppDelegate.panel {
+       panel.position = inputPos
+       panel.inputController = self

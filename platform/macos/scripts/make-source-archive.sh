@@ -29,6 +29,8 @@ tar -C "$source_dir" \
   --exclude='librime/dist' \
   --exclude='librime/build-yunpin' \
   --exclude='librime/dist-yunpin' \
+  --exclude='librime/build-yunpin-runtime-plugins' \
+  --exclude='librime/dist-yunpin-runtime-plugins' \
   -cf - . | tar -C "$staging/YunPin-IME/Squirrel" -xf -
 
 # Export only committed files.  A recursive worktree copy also picks up ignored
@@ -36,9 +38,11 @@ tar -C "$source_dir" \
 # corresponding source nor appropriate release material.
 git -C "$REPO_ROOT" archive HEAD -- \
   LICENSE NOTICE THIRD_PARTY_NOTICES.md \
+  third_party/go-modules.lock.json scripts/package_go_licenses.py \
   platform/LICENSE-BOUNDARIES.md platform/upstream-lock.json \
   platform/macos platform/rime platform/patches/squirrel \
   platform/patches/librime-1.16 \
+  desktopagent localstore protocol syncclient \
   engine librime-yunpin | \
   tar -C "$staging/YunPin-IME/YunPin" -xf -
 

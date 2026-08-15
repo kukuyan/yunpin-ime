@@ -2,6 +2,7 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
@@ -298,19 +299,167 @@ func CanonicalPinyin(value string) string {
 	return canonical.String()
 }
 
-func DerivePairingKey(private, peerPublic, sessionNonce []byte) ([]byte, error) {
+const PairingSecretSize = 32
+
+// PairingTranscript binds the out-of-band invitation, both device identities,
+// and both long-term public keys into every pairing proof and encrypted
+// package. The relay may route these public values, but it never receives the
+// PairingSecret needed to authenticate or decrypt them.
+type PairingTranscript struct {
+	PairingID               []byte `cbor:"1,keyasint" json:"pairing_id"`
+	AccountID               []byte `cbor:"2,keyasint" json:"account_id"`
+	CreatorDeviceID         []byte `cbor:"3,keyasint" json:"creator_device_id"`
+	JoiningDeviceID         []byte `cbor:"4,keyasint" json:"joining_device_id"`
+	CreatorEd25519PublicKey []byte `cbor:"5,keyasint" json:"creator_ed25519_public_key"`
+	JoiningEd25519PublicKey []byte `cbor:"6,keyasint" json:"joining_ed25519_public_key"`
+	CreatorX25519PublicKey  []byte `cbor:"7,keyasint" json:"creator_x25519_public_key"`
+	JoiningX25519PublicKey  []byte `cbor:"8,keyasint" json:"joining_x25519_public_key"`
+}
+
+func validatePairingTranscript(transcript PairingTranscript) error {
+	zeroID := make([]byte, 16)
+	zeroKey := make([]byte, 32)
+	if len(transcript.PairingID) != 16 || len(transcript.AccountID) != 16 || len(transcript.CreatorDeviceID) != 16 ||
+		len(transcript.JoiningDeviceID) != 16 || bytes.Equal(transcript.PairingID, zeroID) ||
+		bytes.Equal(transcript.AccountID, zeroID) ||
+		bytes.Equal(transcript.CreatorDeviceID, zeroID) || bytes.Equal(transcript.JoiningDeviceID, zeroID) ||
+		bytes.Equal(transcript.CreatorDeviceID, transcript.JoiningDeviceID) {
+		return errors.New("pairing transcript identifiers are invalid")
+	}
+	for _, key := range [][]byte{transcript.CreatorEd25519PublicKey, transcript.JoiningEd25519PublicKey,
+		transcript.CreatorX25519PublicKey, transcript.JoiningX25519PublicKey} {
+		if len(key) != 32 || bytes.Equal(key, zeroKey) {
+			return errors.New("pairing transcript public keys are invalid")
+		}
+	}
+	if bytes.Equal(transcript.CreatorEd25519PublicKey, transcript.JoiningEd25519PublicKey) ||
+		bytes.Equal(transcript.CreatorX25519PublicKey, transcript.JoiningX25519PublicKey) {
+		return errors.New("pairing transcript device keys must differ")
+	}
+	return nil
+}
+
+func canonicalPairingTranscript(transcript PairingTranscript) ([]byte, error) {
+	if err := validatePairingTranscript(transcript); err != nil {
+		return nil, err
+	}
+	return canonicalCBOR.Marshal(transcript)
+}
+
+// PairingRelayVerifier is the only PSK-derived value sent to the relay. It
+// authorizes state transitions without revealing the high-entropy PSK used by
+// the end-to-end pairing channel.
+func PairingRelayVerifier(pairingSecret, pairingID []byte) ([]byte, error) {
+	if len(pairingSecret) != PairingSecretSize || len(pairingID) != 16 {
+		return nil, errors.New("pairing secret and identifier have invalid lengths")
+	}
+	mac := hmac.New(sha256.New, pairingSecret)
+	_, _ = mac.Write([]byte("yunpin-pairing-relay-verifier-v2\x00"))
+	_, _ = mac.Write(pairingID)
+	return mac.Sum(nil), nil
+}
+
+// PairingJoinProof proves to the creator that the joining public material came
+// from a peer holding the out-of-band PSK. A relay that substitutes its own
+// public keys cannot forge this proof.
+func PairingJoinProof(pairingSecret []byte, transcript PairingTranscript) ([]byte, error) {
+	if len(pairingSecret) != PairingSecretSize {
+		return nil, errors.New("pairing secret must be 32 bytes")
+	}
+	encoded, err := canonicalPairingTranscript(transcript)
+	if err != nil {
+		return nil, err
+	}
+	mac := hmac.New(sha256.New, pairingSecret)
+	_, _ = mac.Write([]byte("yunpin-pairing-join-proof-v2\x00"))
+	_, _ = mac.Write(encoded)
+	return mac.Sum(nil), nil
+}
+
+func VerifyPairingJoinProof(pairingSecret []byte, transcript PairingTranscript, proof []byte) error {
+	expected, err := PairingJoinProof(pairingSecret, transcript)
+	if err != nil {
+		return err
+	}
+	if len(proof) != sha256.Size || !hmac.Equal(expected, proof) {
+		return errors.New("pairing join proof is invalid")
+	}
+	return nil
+}
+
+// PairingClaimProof binds the client-generated bearer token to the authenticated
+// joining device. A stolen relay database contains the verifier but not the
+// Ed25519 private key required to win or replay the claim with another token.
+func PairingClaimProof(transcript PairingTranscript, deviceToken string, private ed25519.PrivateKey) ([]byte, error) {
+	if len(private) != ed25519.PrivateKeySize || deviceToken == "" {
+		return nil, errors.New("pairing claim credentials are invalid")
+	}
+	encoded, err := canonicalPairingTranscript(transcript)
+	if err != nil {
+		return nil, err
+	}
+	tokenHash := sha256.Sum256([]byte(deviceToken))
+	message := make([]byte, 0, len(encoded)+len(tokenHash)+32)
+	message = append(message, []byte("yunpin-pairing-claim-v2\x00")...)
+	message = append(message, encoded...)
+	message = append(message, tokenHash[:]...)
+	return ed25519.Sign(private, message), nil
+}
+
+func VerifyPairingClaimProof(transcript PairingTranscript, deviceToken string, public ed25519.PublicKey, proof []byte) error {
+	if len(public) != ed25519.PublicKeySize || len(proof) != ed25519.SignatureSize || deviceToken == "" {
+		return errors.New("pairing claim proof is invalid")
+	}
+	encoded, err := canonicalPairingTranscript(transcript)
+	if err != nil {
+		return err
+	}
+	tokenHash := sha256.Sum256([]byte(deviceToken))
+	message := make([]byte, 0, len(encoded)+len(tokenHash)+32)
+	message = append(message, []byte("yunpin-pairing-claim-v2\x00")...)
+	message = append(message, encoded...)
+	message = append(message, tokenHash[:]...)
+	if !ed25519.Verify(public, message, proof) {
+		return errors.New("pairing claim proof is invalid")
+	}
+	return nil
+}
+
+func DerivePairingKey(private, peerPublic, pairingSecret []byte, transcript PairingTranscript) ([]byte, error) {
 	if len(private) != curve25519.ScalarSize || len(peerPublic) != curve25519.PointSize {
 		return nil, errors.New("X25519 keys must be 32 bytes")
 	}
-	if len(sessionNonce) < 16 {
-		return nil, errors.New("pairing nonce must be at least 16 bytes")
+	if len(pairingSecret) != PairingSecretSize {
+		return nil, errors.New("pairing secret must be 32 bytes")
+	}
+	encoded, err := canonicalPairingTranscript(transcript)
+	if err != nil {
+		return nil, err
+	}
+	selfPublic, err := curve25519.X25519(private, curve25519.Basepoint)
+	if err != nil {
+		return nil, err
+	}
+	validDirection := (bytes.Equal(selfPublic, transcript.CreatorX25519PublicKey) &&
+		bytes.Equal(peerPublic, transcript.JoiningX25519PublicKey)) ||
+		(bytes.Equal(selfPublic, transcript.JoiningX25519PublicKey) &&
+			bytes.Equal(peerPublic, transcript.CreatorX25519PublicKey))
+	clear(selfPublic)
+	if !validDirection {
+		return nil, errors.New("pairing key direction is not bound to the transcript")
 	}
 	shared, err := curve25519.X25519(private, peerPublic)
 	if err != nil {
 		return nil, err
 	}
+	transcriptHash := sha256.Sum256(encoded)
+	inputKeyMaterial := make([]byte, 0, len(pairingSecret)+len(shared))
+	inputKeyMaterial = append(inputKeyMaterial, pairingSecret...)
+	inputKeyMaterial = append(inputKeyMaterial, shared...)
+	defer clear(inputKeyMaterial)
+	defer clear(shared)
 	key := make([]byte, chacha20poly1305.KeySize)
-	reader := hkdf.New(sha256.New, shared, sessionNonce, []byte("yunpin-pairing-v1"))
+	reader := hkdf.New(sha256.New, inputKeyMaterial, transcriptHash[:], []byte("yunpin-pairing-key-v2"))
 	if _, err := io.ReadFull(reader, key); err != nil {
 		return nil, err
 	}

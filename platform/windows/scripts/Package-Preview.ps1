@@ -142,7 +142,8 @@ Reset-GeneratedDirectory -Path $bundleRoot -AllowedParent $packageRoot
 $runtimeRoot = Join-Path $bundleRoot "runtime"
 $rimeDataRoot = Join-Path $bundleRoot "rime-data"
 $licenseRoot = Join-Path $bundleRoot "licenses"
-New-Item -ItemType Directory -Path $runtimeRoot, $rimeDataRoot, $licenseRoot -Force | Out-Null
+$syncAgentRoot = Join-Path $bundleRoot "sync-agent"
+New-Item -ItemType Directory -Path $runtimeRoot, $rimeDataRoot, $licenseRoot, $syncAgentRoot -Force | Out-Null
 
 foreach ($mapping in $lock.package.runtimeFiles.PSObject.Properties) {
     $source = Join-Path (Join-Path $WeaselSource "output") $mapping.Name
@@ -152,6 +153,26 @@ foreach ($mapping in $lock.package.runtimeFiles.PSObject.Properties) {
     }
     Copy-Item -LiteralPath $source -Destination $destination -Force
 }
+
+$publicSyncAgent = Join-Path $OutputRoot "desktopagent\public\yunpin-sync-agent.exe"
+if (-not (Test-Path $publicSyncAgent -PathType Leaf)) {
+    throw "Public default-tag sync agent is missing: $publicSyncAgent"
+}
+Copy-Item -LiteralPath $publicSyncAgent -Destination (Join-Path $syncAgentRoot "yunpin-sync-agent.exe") -Force
+$syncAgentLicenses = Join-Path $OutputRoot "desktopagent\licenses"
+if (-not (Test-Path (Join-Path $syncAgentLicenses "LICENSES.json") -PathType Leaf)) {
+    throw "Public sync-agent license-text bundle is missing"
+}
+Copy-TreeContent -Source $syncAgentLicenses -Destination (Join-Path $licenseRoot "YunPin-Sync-Agent-Go")
+foreach ($supportScript in @(
+    "Install-SyncAgent.ps1", "Verify-SyncAgent.ps1",
+    "Enable-SyncAgent.ps1", "Uninstall-SyncAgent.ps1"
+)) {
+    Copy-Item -LiteralPath (Join-Path $repoRoot ("desktopagent\install\windows\" + $supportScript)) `
+        -Destination (Join-Path $syncAgentRoot $supportScript) -Force
+}
+Copy-Item -LiteralPath (Join-Path $repoRoot "desktopagent\install\README.md") `
+    -Destination (Join-Path $syncAgentRoot "README.md") -Force
 
 $systemData = Join-Path $WeaselSource "output\data"
 if (Test-Path $systemData -PathType Container) {
@@ -223,6 +244,13 @@ $metadata = [ordered]@{
     architectures = @("x86-tsf", "x64-tsf", "x64-service")
     mergedPlugin = "librime-yunpin"
     privateCandidateSnapshotEnabled = $false
+    syncAgent = [ordered]@{
+        bundled = $true
+        target = "windows-amd64"
+        build = "public-default-tag"
+        privatePairingCommands = $false
+        residentDefault = "disabled"
+    }
     upstreams = [ordered]@{
         weasel = $lock.weasel.commit
         librime = $lock.librime.commit
@@ -271,12 +299,31 @@ foreach ($file in @(".gitignore", "CMakeLists.txt", "Makefile", "README.md")) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $repoRoot "engine") $file) -Destination $sourceEngine -Force
 }
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/windows" -Destination (Join-Path $sourceRoot "platform\windows") -ScratchRoot $scratchRoot
+$privateE2ESource = [IO.Path]::GetFullPath((Join-Path $sourceRoot "platform\windows\e2e"))
+$sourcePrefixForExclusion = [IO.Path]::GetFullPath($sourceRoot).TrimEnd("\") + "\"
+if (-not $privateE2ESource.StartsWith($sourcePrefixForExclusion, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to exclude a private E2E source path outside the generated source root"
+}
+if (Test-Path -LiteralPath $privateE2ESource) {
+    $privateE2EItem = Get-Item -LiteralPath $privateE2ESource -Force
+    if (-not $privateE2EItem.PSIsContainer -or
+        ($privateE2EItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to remove a non-directory or reparse-point private E2E source export"
+    }
+    Remove-Item -LiteralPath $privateE2ESource -Recurse -Force
+}
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/rime" -Destination (Join-Path $sourceRoot "platform\rime") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/weasel" -Destination (Join-Path $sourceRoot "platform\patches\weasel") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/librime-1.17" -Destination (Join-Path $sourceRoot "platform\patches\librime-1.17") -ScratchRoot $scratchRoot
+foreach ($tree in @("desktopagent", "localstore", "protocol", "syncclient")) {
+    Export-GitSubtree -Checkout $repoRoot -Tree $tree -Destination (Join-Path $sourceRoot $tree) -ScratchRoot $scratchRoot
+}
 foreach ($file in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $file) -Destination $sourceRoot -Force
 }
+New-Item -ItemType Directory -Path (Join-Path $sourceRoot "third_party"), (Join-Path $sourceRoot "scripts") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "third_party\go-modules.lock.json") -Destination (Join-Path $sourceRoot "third_party\go-modules.lock.json") -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\package_go_licenses.py") -Destination (Join-Path $sourceRoot "scripts\package_go_licenses.py") -Force
 New-Item -ItemType Directory -Path (Join-Path $sourceRoot "docs") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\LICENSE_MATRIX.md") -Destination (Join-Path $sourceRoot "docs\LICENSE_MATRIX.md") -Force
 $sourceBoost = Join-Path $OutputRoot "cache\boost_1_84_0.7z"
@@ -304,8 +351,10 @@ YunPin IME Windows development-preview corresponding source
 
 This archive contains the exact exported source trees and commit markers for
 Weasel, librime, librime's nested dependencies, and Rime Ice, plus YunPin's
-engine, merged plugin, Windows scripts, ordered GPL patches, licenses, and the
-verified Boost source archive. It contains no private phrase data.
+engine, merged plugin, public default-tag sync agent source and its local Go
+modules, Windows scripts, ordered GPL patches, licenses, and the verified Boost
+source archive. It contains no private phrase data, E2E binary artifact, or
+private E2E activation script.
 
 Verify SOURCE-MANIFEST.sha256, then run from a Visual Studio 2022 developer
 PowerShell:

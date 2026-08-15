@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -79,23 +80,23 @@ func TestLearningThresholdAndProtectedContexts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.UseCount != 1 || first.SyncEligible {
-		t.Fatalf("first selection must remain local: %#v", first)
+	if first.UseCount != 1 || !first.SyncEligible {
+		t.Fatalf("first selection must be sync eligible: %#v", first)
 	}
 	pending, err := store.PendingEventCount(ctx)
-	if err != nil || pending != 0 {
-		t.Fatalf("first selection entered outbox: pending=%d err=%v", pending, err)
+	if err != nil || pending != 1 {
+		t.Fatalf("first selection was not atomically queued: pending=%d err=%v", pending, err)
 	}
 	second, err := store.RecordSelection(ctx, phrase, LearningContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.UseCount != 2 || !second.SyncEligible {
-		t.Fatalf("second selection must become sync eligible: %#v", second)
+		t.Fatalf("second selection must remain sync eligible: %#v", second)
 	}
 	pending, err = store.PendingEventCount(ctx)
 	if err != nil || pending != 1 {
-		t.Fatalf("threshold crossing was not atomically queued: pending=%d err=%v", pending, err)
+		t.Fatalf("updated selection was not atomically queued: pending=%d err=%v", pending, err)
 	}
 	events, err := store.PendingEvents(ctx, 256)
 	if err != nil || len(events) != 1 || events[0].Phrase.UseCount != 2 {
@@ -112,6 +113,101 @@ func TestLearningThresholdAndProtectedContexts(t *testing.T) {
 	events, err = store.PendingEvents(ctx, 256)
 	if err != nil || len(events) != 1 || events[0].Phrase.UseCount != 3 {
 		t.Fatalf("newer count was not retained after stale ack: events=%#v err=%v", events, err)
+	}
+}
+
+func TestNativeSelectionReceiptIsAtomicAndIdempotent(t *testing.T) {
+	store, _ := openDeviceStore(t, deviceA)
+	ctx := context.Background()
+	selection := NativeSelection{
+		EventID: "process_nonce-00000001",
+		Phrase:  Phrase{Text: "合成原生事件", Pinyin: "he cheng yuan sheng shi jian"},
+	}
+	first, err := store.RecordNativeSelection(ctx, selection)
+	if err != nil || !first.Recorded || first.Duplicate || first.UseCount != 1 {
+		t.Fatalf("first native selection mismatch: result=%#v err=%v", first, err)
+	}
+	second, err := store.RecordNativeSelection(ctx, selection)
+	if err != nil || !second.Duplicate || second.Recorded {
+		t.Fatalf("duplicate native selection was not idempotent: result=%#v err=%v", second, err)
+	}
+	snapshot, err := store.Snapshot(ctx)
+	if err != nil || len(snapshot.Phrases) != 1 || snapshot.Phrases[0].UseCount != 1 {
+		t.Fatalf("duplicate changed encrypted phrase: snapshot=%#v err=%v", snapshot, err)
+	}
+	pending, err := store.PendingEventCount(ctx)
+	if err != nil || pending != 1 {
+		t.Fatalf("first native selection was not queued: pending=%d err=%v", pending, err)
+	}
+	selection.EventID = "process_nonce-00000002"
+	third, err := store.RecordNativeSelection(ctx, selection)
+	if err != nil || !third.Recorded || !third.SyncEligible || third.UseCount != 2 {
+		t.Fatalf("second distinct native selection mismatch: result=%#v err=%v", third, err)
+	}
+}
+
+func TestNativeSelectionRejectsUnsafeEventIDs(t *testing.T) {
+	store, _ := openDeviceStore(t, deviceA)
+	for _, eventID := range []string{"", "../escape", "contains.dot", "含隐私"} {
+		_, err := store.RecordNativeSelection(context.Background(), NativeSelection{
+			EventID: eventID, Phrase: Phrase{Text: "合成拒绝", Pinyin: "he cheng ju jue"},
+		})
+		if err == nil {
+			t.Fatalf("unsafe native event ID accepted: %q", eventID)
+		}
+	}
+}
+
+func TestNativeSelectionReceiptNeverCreatesPhraseOrOutbox(t *testing.T) {
+	store, _ := openDeviceStore(t, deviceA)
+	ctx := context.Background()
+	first, err := store.RecordNativeSelectionReceipt(ctx, "baseline_event-1")
+	if err != nil || first.Duplicate || first.Recorded {
+		t.Fatalf("first receipt mismatch: result=%#v err=%v", first, err)
+	}
+	second, err := store.RecordNativeSelectionReceipt(ctx, "baseline_event-1")
+	if err != nil || !second.Duplicate || second.Recorded {
+		t.Fatalf("duplicate receipt mismatch: result=%#v err=%v", second, err)
+	}
+	snapshot, err := store.Snapshot(ctx)
+	if err != nil || len(snapshot.Phrases) != 0 {
+		t.Fatalf("receipt-only event created phrase state: snapshot=%#v err=%v", snapshot, err)
+	}
+	pending, err := store.PendingEventCount(ctx)
+	if err != nil || pending != 0 {
+		t.Fatalf("receipt-only event entered outbox: pending=%d err=%v", pending, err)
+	}
+}
+
+func TestNativeSelectionReceiptsArePrunedToFixedBound(t *testing.T) {
+	store, _ := openDeviceStore(t, deviceA)
+	ctx := context.Background()
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := transaction.PrepareContext(ctx, `INSERT INTO consumed_native_events(event_id, consumed_at) VALUES(?, ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxConsumedNativeReceipts+7; index++ {
+		if _, err := statement.ExecContext(ctx, fmt.Sprintf("old_%08d", index), index); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = statement.Close()
+	if err := transaction.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordNativeSelectionReceipt(ctx, "new_receipt"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM consumed_native_events").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != maxConsumedNativeReceipts {
+		t.Fatalf("receipt count=%d want=%d", count, maxConsumedNativeReceipts)
 	}
 }
 

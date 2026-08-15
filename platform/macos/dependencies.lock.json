@@ -37,6 +37,10 @@
     {
       "path": "platform/patches/librime-1.16/0001-configurable-corrector-component.patch",
       "sha256": "79b0e7629b5eee454855187ddfcfc4f3014f4b24425bd0aa45f104593994d51b"
+    },
+    {
+      "path": "platform/patches/librime-1.16/0002-disconnect-engine-notifiers-before-context-destruction.patch",
+      "sha256": "3f0bd74f2b5b05f0b0d049474ea73d70d51a4507a909e6615b56fac81bce23a4"
     }
   ],
   "squirrel_patches": [
@@ -67,6 +71,26 @@
     {
       "path": "platform/patches/squirrel/0007-yunpin-reconcile-input-source-persistence.patch",
       "sha256": "45b6c515f5c30fcaf642f2a34bbf61bc4978c906ae94d70d9781e35db91da611"
+    },
+    {
+      "path": "platform/patches/squirrel/0008-yunpin-defer-reentrant-session-destruction.patch",
+      "sha256": "81d4e961c691d94cdbad1c72d9db4862fe41a7f7be39d17e84a467f7ff26390b"
+    },
+    {
+      "path": "platform/patches/squirrel/0009-yunpin-start-native-event-spooler.patch",
+      "sha256": "4d155d89747f4011b9a13f2ffcf436404b4b9b427134a77d8407bb9529569362"
+    },
+    {
+      "path": "platform/patches/squirrel/0010-yunpin-refresh-rime-userdb-snapshot.patch",
+      "sha256": "3160387f28a875a2062ecd5a732c3cf909a65b0e8719c21ef0c37347d2a994c8"
+    },
+    {
+      "path": "platform/patches/squirrel/0011-yunpin-serialize-reentrant-candidate-updates.patch",
+      "sha256": "fef2091fdb4c0a4e331e190ceca6d3a31301986f439af93cf799fd183b0ec444"
+    },
+    {
+      "path": "platform/patches/squirrel/0012-yunpin-defer-rime-notifications-outside-engine.patch",
+      "sha256": "b81d4e8e71b5c798203736baad1818f773279a77ce48439a07a9414cf991905d"
     }
   ],
   "archives": [
@@ -94,6 +118,38 @@
       "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.6.2/Sparkle-2.6.2.tar.xz",
       "sha256": "2300a7dc2545a4968e54621b7f351d388ddf1a5cb49e79f6c99e9a09d826f5e8",
       "license": "MIT"
+    },
+    {
+      "name": "librime-lua-68f9c36.tar.gz",
+      "url": "https://codeload.github.com/hchunhui/librime-lua/tar.gz/68f9c364a2d25a04c7d4794981d7c796b05ab627",
+      "sha256": "3c4a60bacf8dd6389ca1b4b4889207b8f6c0c6a43e7b848cdac570d592a640b5",
+      "rime_plugin": "lua",
+      "commit": "68f9c364a2d25a04c7d4794981d7c796b05ab627",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "librime-lua-thirdparty-fa40fad.tar.gz",
+      "url": "https://codeload.github.com/hchunhui/librime-lua/tar.gz/fa40fadd8af1e5b1fbd55703ccbd54476956d74c",
+      "sha256": "70f43164aaec58a22cb92774d61b19d206563cc62a08954832c2dfd416cf8fd8",
+      "rime_plugin_thirdparty": "lua",
+      "commit": "fa40fadd8af1e5b1fbd55703ccbd54476956d74c",
+      "license": "MIT"
+    },
+    {
+      "name": "librime-octagram-dfcc151.tar.gz",
+      "url": "https://codeload.github.com/lotem/librime-octagram/tar.gz/dfcc15115788c828d9dd7b4bff68067d3ce2ffb8",
+      "sha256": "7da3df7a5dae82557f7a4842b94dfe81dd21ef7e036b132df0f462f2dae18393",
+      "rime_plugin": "octagram",
+      "commit": "dfcc15115788c828d9dd7b4bff68067d3ce2ffb8",
+      "license": "GPL-3.0-only"
+    },
+    {
+      "name": "librime-predict-920bd41.tar.gz",
+      "url": "https://codeload.github.com/rime/librime-predict/tar.gz/920bd41ebf6f9bf6855d14fbe80212e54e749791",
+      "sha256": "38b2f32254e1a35ac04dba376bc8999915c8fbdb35be489bffdf09079983400c",
+      "rime_plugin": "predict",
+      "commit": "920bd41ebf6f9bf6855d14fbe80212e54e749791",
+      "license": "BSD-3-Clause"
     },
     {
       "name": "rime-prelude-082425e.tar.gz",

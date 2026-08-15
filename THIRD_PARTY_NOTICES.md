@@ -19,6 +19,14 @@ and verified SHA-256 values are recorded in
 are checked by the macOS tests. Sparkle's upstream update feed is disabled in
 YunPin builds.
 
+The same preview rebuilds the external librime-lua (BSD-3-Clause),
+librime-octagram (GPL-3.0-only), and librime-predict (BSD-3-Clause) plugins
+from their locked upstream commits with the same compiler and SDK as the
+bundled librime. librime-lua embeds Lua 5.4.8 (MIT). The exact source archive
+URLs, commit IDs, and SHA-256 values are recorded in the macOS dependency
+lock; corresponding source and the complete upstream license texts are
+retained in the source and application artifacts.
+
 The Windows development preview is built from Weasel 0.17.4 and librime 1.17.0
 at the commits recorded in `platform/windows/dependencies.lock.json`. Its
 ordered GPL patch series, nested librime dependency commits, official Boost

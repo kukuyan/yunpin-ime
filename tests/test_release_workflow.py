@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import json
 from pathlib import Path
@@ -717,6 +718,53 @@ class ReleaseWorkflowStateMachineTests(unittest.TestCase):
 
 
 class ReleaseWorkflowStaticTests(unittest.TestCase):
+    def test_go_license_packager_decodes_go_output_as_strict_utf8(self) -> None:
+        source = (ROOT / "scripts" / "package_go_licenses.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        subprocess_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+            and node.func.attr == "run"
+        ]
+        self.assertEqual(2, len(subprocess_calls))
+        for call in subprocess_calls:
+            keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+            self.assertEqual(
+                "utf-8", ast.literal_eval(keywords["encoding"])
+            )
+            self.assertEqual("strict", ast.literal_eval(keywords["errors"]))
+
+    def test_private_pairing_artifacts_are_ci_only(self) -> None:
+        ci = workflow.CI_WORKFLOW.read_text(encoding="utf-8")
+        release = workflow.RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        for name, path in (
+            (
+                "YunPin-Windows-private-pairing-E2E",
+                "build/windows/e2e-private/windows",
+            ),
+            (
+                "YunPin-macOS-private-pairing-E2E",
+                "build/macos/e2e-private/macos",
+            ),
+        ):
+            self.assertIn(name, ci)
+            self.assertIn(path, ci)
+            self.assertNotIn(name, release)
+            self.assertNotIn(path, release)
+        self.assertNotIn("yunpin_pairing_private", release)
+
+    def test_windows_private_pairing_artifact_keeps_signed_hidden_marker(self) -> None:
+        ci = workflow.CI_WORKFLOW.read_text(encoding="utf-8")
+        upload = ci[ci.index("name: YunPin-Windows-private-pairing-E2E") :]
+        upload = upload[: upload.index("retention-days: 1")]
+        self.assertIn("include-hidden-files: true", upload)
+
     def test_post_create_path_never_resolves_or_uploads_by_tag(self) -> None:
         release = workflow.RELEASE_WORKFLOW.read_text(encoding="utf-8")
         after_create = release[release.index("gh release create") :]

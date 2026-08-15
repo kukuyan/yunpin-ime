@@ -60,6 +60,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         for archive in lock["archives"]:
             self.assertTrue(
                 archive["url"].startswith("https://github.com/")
+                or archive["url"].startswith("https://codeload.github.com/")
                 or archive["url"].startswith("https://archives.boost.io/")
             )
             self.assertEqual(64, len(archive["sha256"]))
@@ -73,7 +74,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(7, len(patches))
+        self.assertEqual(12, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -105,19 +106,23 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), row["sha256"])
             patch_text = patch.read_text(encoding="utf-8")
             self.assertIn(lock["nested_submodules"]["librime"], patch_text)
-            self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
-            self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
-            self.assertIn("bool correction_offset_used = false", patch_text)
-            self.assertIn("kMaxCorrectionInputBytes = 128", patch_text)
-            self.assertIn("kMaxCorrectionSearchesPerInput = 32", patch_text)
-            self.assertIn("if (correction_analysis_enabled)", patch_text)
-            self.assertIn("vector<vector<size_t>> normal_exact_ends", patch_text)
-            self.assertIn("exact_path_reachable[current_pos]", patch_text)
-            self.assertIn("exact_suffix_reachable[correction_end]", patch_text)
-            self.assertIn("has_full_normal_exact_path", patch_text)
-            self.assertIn("++correction_searches", patch_text)
-            self.assertNotIn("!has_exact_match", patch_text)
-            self.assertIn("if (correction_added)", patch_text)
+            if "0001-configurable-corrector" in row["path"]:
+                self.assertIn("set<pair<SyllableId, size_t>> exact_matches", patch_text)
+                self.assertIn("exact_matches.find({m.value, m.length})", patch_text)
+                self.assertIn("bool correction_offset_used = false", patch_text)
+                self.assertIn("kMaxCorrectionInputBytes = 128", patch_text)
+                self.assertIn("kMaxCorrectionSearchesPerInput = 32", patch_text)
+                self.assertIn("if (correction_analysis_enabled)", patch_text)
+                self.assertIn("vector<vector<size_t>> normal_exact_ends", patch_text)
+                self.assertIn("exact_path_reachable[current_pos]", patch_text)
+                self.assertIn("exact_suffix_reachable[correction_end]", patch_text)
+                self.assertIn("has_full_normal_exact_path", patch_text)
+                self.assertIn("++correction_searches", patch_text)
+                self.assertNotIn("!has_exact_match", patch_text)
+                self.assertIn("if (correction_added)", patch_text)
+            else:
+                self.assertIn("commit_connection_.disconnect()", patch_text)
+                self.assertIn("filters_.clear()", patch_text)
             subprocess.run(
                 ["git", "-C", str(SQUIRREL / "librime"), "apply", "--check", str(patch)],
                 check=True,
@@ -162,7 +167,88 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("SquirrelApp.logDir.path(percentEncoded: false)", sources)
         self.assertNotIn("SquirrelApp.userDir.path()", sources)
         self.assertNotIn("rime.github.io/release/squirrel", sources)
-        self.assertIn("encrypted sync is not connected", sources)
+        self.assertNotIn("encrypted sync is not connected", sources)
+        self.assertIn("--sync <request nonce>", sources)
+        self.assertIn("validMaintenanceNonce", sources)
+        self.assertIn("requestNonce: String", sources)
+        self.assertIn("join_maintenance_thread", sources)
+        self.assertIn('acknowledgementName = "rime-maintenance.ack"', sources)
+        self.assertIn("O_DIRECTORY | O_NOFOLLOW", sources)
+        self.assertIn("O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW", sources)
+        self.assertIn("fchmod(temporaryFD, 0o600)", sources)
+        self.assertIn("fstat(temporaryFD, &temporaryMetadata)", sources)
+        self.assertIn("temporaryMetadata.st_uid == geteuid()", sources)
+        self.assertIn("renameat(directoryFD, temporaryName, directoryFD, acknowledgementName)", sources)
+        self.assertIn("fsync(directoryFD)", sources)
+        self.assertIn("rimeSyncCompletionQueue.async", sources)
+        self.assertIn("rimeSyncCompletionQueue.sync", sources)
+        self.assertIn("rimeSyncStateLock", sources)
+        self.assertIn("rimeSyncInFlight", sources)
+        self.assertIn("Thread.isMainThread", sources)
+        self.assertIn("DispatchQueue.main.async", sources)
+        self.assertIn("prepareForUserDataMaintenance", sources)
+        self.assertIn("maintenanceIdleInterval", sources)
+        self.assertIn("liveControllers", sources)
+        self.assertIn("controllerCallbacksAreMainThreadOnly", sources)
+        self.assertIn("controller.rimeAPI.get_context(session, &context)", sources)
+        self.assertIn("context.composition.preedit != nil", sources)
+        self.assertIn("controller.rimeAPI.free_context(&context)", sources)
+        self.assertIn("controller.sessionLifetime.requestDestroy()", sources)
+        self.assertIn("guard controller.session == 0 else", sources)
+        self.assertIn("invalidateAllSessionsForRimeShutdown", sources)
+        self.assertIn("controllers.allSatisfy { $0.session == 0 }", sources)
+        self.assertIn("operationInProgress", sources)
+        self.assertIn("controller.chordTimer?.isValid != true", sources)
+        self.assertIn("Deferred private Rime maintenance while input is active or recently used.", sources)
+        self.assertIn('"busy:"', sources)
+        self.assertIn("Rejected overlapping private Rime maintenance request.", sources)
+        application_delegate = (
+            self.prepared / "sources" / "SquirrelApplicationDelegate.swift"
+        ).read_text(encoding="utf-8")
+        maintenance = application_delegate[
+            application_delegate.index("  func syncUserData(requestNonce: String)") :
+            application_delegate.index("  func waitForRimeSyncCompletion()")
+        ]
+        self.assertLess(
+            maintenance.index("prepareForUserDataMaintenance()"),
+            maintenance.index("rimeAPI.sync_user_data()"),
+        )
+        shutdown = application_delegate[
+            application_delegate.index("  func shutdownRime() -> Bool") :
+            application_delegate.index("  func workspaceWillPowerOff")
+        ]
+        self.assertLess(
+            shutdown.index("invalidateAllSessionsForRimeShutdown()"),
+            shutdown.index("rimeAPI.finalize()"),
+        )
+        deploy = application_delegate[
+            application_delegate.index("  func deploy()") :
+            application_delegate.index("  private func writeMaintenanceAcknowledgement")
+        ]
+        self.assertIn("guard Thread.isMainThread", deploy)
+        self.assertIn("DispatchQueue.main.async", deploy)
+        self.assertIn("guard self.shutdownRime()", deploy)
+        self.assertLess(
+            sources.index("rimeAPI.sync_user_data()"),
+            sources.index("rimeSyncCompletionQueue.async"),
+        )
+        self.assertLess(
+            sources.index("rimeSyncCompletionQueue.async"),
+            sources.index("self.rimeAPI.join_maintenance_thread()"),
+        )
+        self.assertLess(
+            sources.index("self.rimeAPI.join_maintenance_thread()"),
+            sources.index("self.writeMaintenanceAcknowledgement(requestNonce)"),
+        )
+        self.assertNotIn("userInfo", sources)
+        self.assertNotIn("NSApp.squirrelAppDelegate.syncUserData()", sources)
+        self.assertIn('appendingPathComponent("YunPin", isDirectory: true)', sources)
+        for component in ("Sync", "native-events", "incoming"):
+            self.assertIn(
+                f'appendingPathComponent("{component}", isDirectory: true)', sources
+            )
+        self.assertIn("YunPinStartNativeSelectionSpoolerV1", sources)
+        self.assertGreaterEqual(sources.count("YunPinStopNativeSelectionSpoolerV1"), 2)
 
     def test_registration_refreshes_tis_without_changing_enabled_modes(self) -> None:
         source = (self.prepared / "sources" / "InputSource.swift").read_text(
@@ -221,6 +307,109 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('if [[ ! -x "$executable" ]]', postinstall)
         self.assertIn('if [[ "$login_user" == "root" ]]', postinstall)
 
+    def test_public_sync_agent_is_bundled_but_not_resident_enabled_by_root(self) -> None:
+        build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        agent_build = (MACOS_DIR / "scripts" / "build-sync-agents.sh").read_text(
+            encoding="utf-8"
+        )
+        sign = (MACOS_DIR / "scripts" / "sign-app-adhoc.sh").read_text(
+            encoding="utf-8"
+        )
+        verify = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(
+            encoding="utf-8"
+        )
+        postinstall = (MACOS_DIR / "package" / "postinstall").read_text(
+            encoding="utf-8"
+        )
+        source_archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('"${MACOS_DIR}/scripts/build-sync-agents.sh"', build)
+        self.assertIn('sync-agent/public/yunpin-sync-agent', build)
+        self.assertIn('Contents/MacOS/yunpin-sync-agent', build)
+        self.assertIn('sync_support="$shared_support/SyncAgent"', build)
+        self.assertNotIn("e2e-private", build)
+        self.assertIn("-tags=yunpin_pairing_private", agent_build)
+        self.assertIn('private_root="$build_root/e2e-private/macos"', agent_build)
+        self.assertIn("MACOSX_DEPLOYMENT_TARGET=13.0", agent_build)
+        self.assertIn("go_quote_argument() {", agent_build)
+        self.assertIn(
+            "cannot safely quote a Go tool argument containing both quote styles",
+            agent_build,
+        )
+        self.assertIn('sdkroot="$(xcrun --sdk macosx --show-sdk-path)"', agent_build)
+        self.assertIn('$sdkroot/usr/include/stdlib.h', agent_build)
+        self.assertIn('go_cc="$(go_quote_argument "$clang")"', agent_build)
+        self.assertIn('go_sdkroot="$(go_quote_argument "$sdkroot")"', agent_build)
+        self.assertIn('CC="$go_cc"', agent_build)
+        self.assertIn('SDKROOT="$sdkroot"', agent_build)
+        self.assertIn(
+            '-isysroot $go_sdkroot -mmacosx-version-min=13.0', agent_build
+        )
+        self.assertNotIn(
+            '-isysroot $sdkroot -mmacosx-version-min=13.0', agent_build
+        )
+        self.assertIn('xcrun vtool -show-build "$output"', agent_build)
+        self.assertIn("go mod verify", agent_build)
+        self.assertIn("package_go_licenses.py", agent_build)
+        self.assertIn('publicReleaseEligible', agent_build)
+        self.assertNotIn('${tags[@]}', agent_build)
+        self.assertIn(
+            'public_baseline_output="$("$public_binary" '
+            'e2e-init-empty-baseline 2>&1)"',
+            agent_build,
+        )
+        self.assertIn(
+            '"$public_baseline_output" == "yunpin-sync-agent: unknown command"',
+            agent_build,
+        )
+        self.assertIn(
+            'private_baseline_gate_output="$("$private_binary" '
+            'e2e-init-empty-baseline 2>&1)"',
+            agent_build,
+        )
+        self.assertIn(
+            "e2e-init-empty-baseline requires --confirm-create-empty-baseline",
+            agent_build,
+        )
+        self.assertNotIn(
+            '"$private_binary" e2e-init-empty-baseline '
+            '--confirm-create-empty-baseline',
+            agent_build,
+        )
+        self.assertIn(
+            'build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64"\n',
+            agent_build,
+        )
+        self.assertIn(
+            'build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64" \\\n'
+            '      -tags=yunpin_pairing_private',
+            agent_build,
+        )
+        self.assertIn('sign_adhoc "$sync_agent"', sign)
+        self.assertLess(sign.index('sign_adhoc "$sync_agent"'), sign.index('sign_adhoc "$app"'))
+        for required in (
+            '"$sync_agent" install-probe',
+            '"$sync_agent" pairing-invite',
+            'yunpin-sync-agent: unknown command',
+            'lipo -archs "$sync_agent"',
+        ):
+            self.assertIn(required, verify)
+        for forbidden in (
+            "yunpin-sync-agent",
+            "SyncAgent",
+            "Library/LaunchAgents",
+            "Keychain",
+        ):
+            self.assertNotIn(forbidden, postinstall)
+        for tree in ("desktopagent", "localstore", "protocol", "syncclient"):
+            self.assertIn(tree, source_archive)
+        self.assertIn("third_party/go-modules.lock.json", source_archive)
+        self.assertNotIn("rime_userdb_snapshot", source_archive)
+
     def test_expression_commit_text_cannot_trigger_platform_side_effects(self) -> None:
         controller = (self.prepared / "sources" / "SquirrelInputController.swift").read_text(
             encoding="utf-8"
@@ -244,6 +433,132 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("YunPinFavoriteCandidate", filter_source)
         self.assertNotIn("yunpin-search:", filter_source)
         self.assertNotIn("yunpin-fav:", filter_source)
+
+    def test_reentrant_client_callbacks_hold_session_through_final_rime_use(self) -> None:
+        controller = (
+            self.prepared / "sources" / "SquirrelInputController.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn("func withSessionOperation<Result>", controller)
+
+        commit = controller[
+            controller.index("  override func commitComposition") : controller.index(
+                "  override func menu()"
+            )
+        ]
+        self.assertLess(commit.index("withSessionOperation"), commit.index("get_input"))
+        self.assertLess(commit.index("commit(string:"), commit.index("clear_composition"))
+        self.assertIn("operation lease keeps the same session valid", commit)
+
+        update = controller[
+            controller.index("  func rimeUpdate()") : controller.index(
+                "  func commit(string:"
+            )
+        ]
+        self.assertLess(update.index("beginOperation()"), update.index("rimeConsumeCommittedText"))
+        self.assertIn("defer { lifetime.endOperation() }", update)
+
+        subprocess.run(
+            ["/usr/bin/xcrun", "swift", str(MACOS_DIR / "tests" / "session_lifetime_harness.swift")],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def test_candidate_updates_detach_rime_memory_and_serialize_reentry(self) -> None:
+        controller = (
+            self.prepared / "sources" / "SquirrelInputController.swift"
+        ).read_text(encoding="utf-8")
+        update = controller[
+            controller.index("  func rimeUpdate()") : controller.index(
+                "  func commit(string:"
+            )
+        ]
+
+        for marker in (
+            "private static var rimeUpdateInProgress",
+            "private static var rimeUpdateWasReentered",
+            "pendingRimeUpdates",
+            "guard Thread.isMainThread",
+            "DispatchQueue.main.async",
+        ):
+            self.assertIn(marker, controller)
+        self.assertLess(
+            update.index("if Self.rimeUpdateInProgress"),
+            update.index("rimeConsumeCommittedText()"),
+        )
+        self.assertIn("Self.pendingRimeUpdates.add(self)", update)
+        self.assertIn("guard !Self.rimeUpdateWasReentered else { return }", update)
+
+        # No Rime-owned pointer may cross an IMK/AppKit callback. The complete
+        # Swift snapshot is formed and released before either UI entry point.
+        context_release = update.index("rimeAPI.free_context(&ctx)")
+        self.assertLess(context_release, update.index("show(preedit:"))
+        self.assertLess(context_release, update.index("showPanel(preedit:"))
+        self.assertNotIn("ctx.", update[context_release:])
+        self.assertIn("min(rawOffset, preedit.utf8.count)", update)
+
+        status_release = update.index("rimeAPI.free_status(&status)")
+        self.assertLess(status_release, update.index("loadSettings(for: schemaId)"))
+        committed = controller[
+            controller.index("  func rimeConsumeCommittedText()") :
+            controller.index("  func rimeUpdate()")
+        ]
+        self.assertLess(
+            committed.index("rimeAPI.free_commit(&commitText)"),
+            committed.index("commit(string: committed)"),
+        )
+
+        show_panel = controller[
+            controller.index("  func showPanel(") : controller.rindex("\n}")
+        ]
+        self.assertLess(
+            show_panel.index("client.attributes("),
+            show_panel.index("guard !Self.rimeUpdateWasReentered"),
+        )
+        self.assertLess(
+            show_panel.index("guard !Self.rimeUpdateWasReentered"),
+            show_panel.index("panel.update("),
+        )
+
+    def test_rime_notifications_leave_engine_stack_before_ui_or_rime_calls(self) -> None:
+        delegate = (
+            self.prepared / "sources" / "SquirrelApplicationDelegate.swift"
+        ).read_text(encoding="utf-8")
+        callback = delegate[
+            delegate.index("private func notificationHandler(") : delegate.index(
+                "private extension SquirrelApplicationDelegate"
+            )
+        ]
+        deferred = delegate[
+            delegate.index("  func handleRimeNotification(") : delegate.index(
+                "  func showStatusMessage("
+            )
+        ]
+
+        # The synchronous librime callback may only own its transient C values
+        # and enqueue them. It must not touch AppKit, IMK, or re-enter Rime.
+        self.assertLess(callback.index("String(cString:"), callback.index("DispatchQueue.main.async"))
+        for forbidden in (
+            "showStatusMessage(",
+            "showMessage(",
+            "get_state_label_abbreviated",
+            "find_session(",
+            "panel?",
+        ):
+            self.assertNotIn(forbidden, callback)
+
+        self.assertIn("guard Thread.isMainThread", deferred)
+        self.assertLess(deferred.index("find_session(sessionId)"), deferred.index("get_state_label_abbreviated"))
+        self.assertIn("showStatusMessage(", deferred)
+
+        subprocess.run(
+            ["/usr/bin/xcrun", "swift", str(MACOS_DIR / "tests" / "notification_deferral_harness.swift")],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
 
     def test_original_artwork_replaces_upstream_visible_assets(self) -> None:
         upstream_logo = SQUIRREL / "Rime.icon" / "Assets" / "logo.svg"
@@ -297,6 +612,14 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('"shousubijiaokuaideshihouu"', fixture_source)
         self.assertIn('"shouusubijiaokuaideshihouu"', fixture_source)
         self.assertIn('"youceshizhanghaoma"', fixture_source)
+        learning_capability_count = fixture_source.count(
+            'set_option(session, "yunpin_learning_allowed", True)'
+        )
+        self.assertGreater(learning_capability_count, 0)
+        self.assertEqual(
+            fixture_source.count("api->create_session()"),
+            learning_capability_count,
+        )
 
     def test_rime_overlay_enables_the_bounded_private_filter(self) -> None:
         overlay = (ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml").read_text(
@@ -323,7 +646,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("yunpin/snapshot\": yunpin/private.tsv", overlay)
         self.assertIn("yunpin/max_candidates\": 2", overlay)
         self.assertIn("yunpin/short_input_guard\": true", overlay)
-        self.assertIn("yunpin/session_learning\": true", overlay)
+        self.assertIn("yunpin/session_learning\": false", overlay)
         self.assertIn("translator/enable_correction\": false", overlay)
         self.assertIn(
             "translator/corrector_component\": yunpin_corrector", overlay
@@ -356,6 +679,75 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("apply --reverse --check", stage)
         self.assertIn('git -C "$source_dir/librime" diff --quiet', stage)
         self.assertIn("tracked changes outside the locked patch series", stage)
+
+    def test_external_rime_plugins_are_rebuilt_from_locked_sources(self) -> None:
+        lock = json.loads((MACOS_DIR / "dependencies.lock.json").read_text(encoding="utf-8"))
+        plugin_sources = {
+            row.get("rime_plugin"): row
+            for row in lock["archives"]
+            if "rime_plugin" in row
+        }
+        self.assertEqual({"lua", "octagram", "predict"}, set(plugin_sources))
+        self.assertEqual(
+            "68f9c364a2d25a04c7d4794981d7c796b05ab627",
+            plugin_sources["lua"]["commit"],
+        )
+        thirdparty = [
+            row for row in lock["archives"] if "rime_plugin_thirdparty" in row
+        ]
+        self.assertEqual(1, len(thirdparty))
+        self.assertEqual("lua", thirdparty[0]["rime_plugin_thirdparty"])
+        self.assertEqual(
+            "fa40fadd8af1e5b1fbd55703ccbd54476956d74c",
+            thirdparty[0]["commit"],
+        )
+
+        fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(".yunpin-source-commit", fetch)
+        self.assertIn('archive["rime_plugin"]', fetch)
+        self.assertIn('archive["rime_plugin_thirdparty"]', fetch)
+
+        build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("RIME_PLUGINS='lua octagram predict'", build)
+        self.assertIn('-DBUILD_MERGED_PLUGINS=OFF', build)
+        self.assertIn('-DENABLE_EXTERNAL_PLUGINS=ON', build)
+        self.assertIn('plugin_build_dir="$librime_dir/build-yunpin-runtime-plugins"', build)
+        self.assertIn("expected_runtime_plugins='librime-lua.dylib librime-octagram.dylib librime-predict.dylib '", build)
+        self.assertIn("xcrun vtool -show-build", build)
+        self.assertIn("install -m 755", build)
+
+        notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        for component in (
+            "librime-lua",
+            "librime-octagram",
+            "librime-predict",
+            "Lua 5.4.8",
+        ):
+            self.assertIn(component, notices)
+
+    def test_final_app_runs_real_plugin_candidate_and_lifecycle_probe(self) -> None:
+        build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        runtime = (MACOS_DIR / "scripts" / "test-rime-plugin-runtime.sh").read_text(
+            encoding="utf-8"
+        )
+        probe = (MACOS_DIR / "tests" / "rime_public_candidate_probe.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('scripts/test-rime-plugin-runtime.sh" "$app" "$source_dir"', build)
+        self.assertIn("DYLD_PRINT_LIBRARIES=1", runtime)
+        self.assertIn("librime-lua.dylib", runtime)
+        self.assertIn("librime-octagram.dylib", runtime)
+        self.assertIn("librime-predict.dylib", runtime)
+        self.assertIn("English-only public candidate page", runtime)
+        self.assertIn("constexpr int kLifecycleSessions = 128", probe)
+        for public_input in ("s", "sh", "shu", "shuru", "ceshi", "wendingxing"):
+            self.assertIn(f'"{public_input}"', probe)
 
     def test_merged_librime_build_has_bounded_parallelism(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(
@@ -761,6 +1153,7 @@ class MacOSIntegrationTests(unittest.TestCase):
                 app / "Contents" / "Frameworks" / "librime.1.dylib",
                 app / "Contents" / "Frameworks" / "rime-plugins" / "librime-lua.dylib",
                 app / "Contents" / "MacOS" / "rime_deployer",
+                app / "Contents" / "MacOS" / "yunpin-sync-agent",
             ]
             for target in targets:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -806,6 +1199,7 @@ class MacOSIntegrationTests(unittest.TestCase):
                 str(targets[4]),
                 str(targets[5]),
                 str(targets[6]),
+                str(targets[7]),
                 str(app),
                 f"VERIFY:{app}",
             ]
@@ -983,7 +1377,7 @@ class MacOSIntegrationTests(unittest.TestCase):
             previous_hash,
         )
         self.assertEqual(
-            "25e07ca2754e0bb67407f44b9f675dd8c54a09b1ee33de94de1016ed7088daa7",
+            "11576819105dc8daa5142413632c9806d1aa7151c82a4cb1db6b8a6b4be0aa6b",
             conservative_hash,
         )
         self.assertIn(f'yunpin_legacy_correction_overlay_sha256="{legacy_hash}"', source)
@@ -992,6 +1386,23 @@ class MacOSIntegrationTests(unittest.TestCase):
             source,
         )
         self.assertIn(f'yunpin_conservative_overlay_sha256="{conservative_hash}"', source)
+        # The installer accepts the briefly shipped lifecycle candidate only
+        # to migrate it back to the current fail-closed overlay.
+        self.assertIn(
+            'yunpin_lifecycle_candidate_overlay_sha256='
+            '"b4289c5cab6db34eba8073f3e15f8718cc57afc9be94640009c181d9c39a835e"',
+            source,
+        )
+        self.assertIn(
+            'yunpin_pre_lifecycle_overlay_sha256='
+            '"25e07ca2754e0bb67407f44b9f675dd8c54a09b1ee33de94de1016ed7088daa7"',
+            source,
+        )
+        self.assertIn(
+            'yunpin_session_learning_hotfix_overlay_sha256='
+            '"2aa8d5ec68b18dc0bb887e44e67e1d5d2239d95dead73418b1f3d050279ab093"',
+            source,
+        )
         self.assertIn(
             'yunpin_previous_default_overlay_sha256='
             '"23039527ee16342493e346cdc80ebf50f6729cc562b6c85436f7f60651e97bfa"',
@@ -1079,6 +1490,71 @@ class MacOSIntegrationTests(unittest.TestCase):
             backups = list(root.glob("rime_ice.custom.yaml.pre-conservative-*"))
             self.assertEqual(1, len(backups))
             self.assertEqual(previous.read_bytes(), backups[0].read_bytes())
+
+    def test_postinstall_migrates_known_lifecycle_overlays_to_fail_closed(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        current = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        current_text = current.read_text(encoding="utf-8")
+        pre_lifecycle_text = current_text.replace(
+            "  # Fail closed until the IMK host supplies a trustworthy positive\n"
+            "  # yunpin_learning_allowed signal for a non-secure text field.\n",
+            "",
+        ).replace('"yunpin/session_learning": false', '"yunpin/session_learning": true')
+        hotfix_text = pre_lifecycle_text.replace(
+            '"yunpin/session_learning": true',
+            '"yunpin/session_learning": false',
+        )
+        lifecycle_candidate_text = current_text.replace(
+            "  # Fail closed until the IMK host supplies a trustworthy positive\n"
+            "  # yunpin_learning_allowed signal for a non-secure text field.\n",
+            "  # Bounded in-process word learning is on by default. Protected-context\n"
+            "  # commits never update habits or enter the native event queue.\n",
+        ).replace('"yunpin/session_learning": false', '"yunpin/session_learning": true')
+        self.assertEqual(
+            "25e07ca2754e0bb67407f44b9f675dd8c54a09b1ee33de94de1016ed7088daa7",
+            hashlib.sha256(pre_lifecycle_text.encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(
+            "2aa8d5ec68b18dc0bb887e44e67e1d5d2239d95dead73418b1f3d050279ab093",
+            hashlib.sha256(hotfix_text.encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(
+            "b4289c5cab6db34eba8073f3e15f8718cc57afc9be94640009c181d9c39a835e",
+            hashlib.sha256(lifecycle_candidate_text.encode("utf-8")).hexdigest(),
+        )
+        owner = run("id", "-un").stdout.strip()
+        command = (
+            'source "$1"; '
+            'yunpin_migrate_known_correction_overlay "$2" "$3" "$4"'
+        )
+
+        for label, old_text in (
+            ("pre-lifecycle", pre_lifecycle_text),
+            ("session-hotfix", hotfix_text),
+            ("lifecycle-candidate", lifecycle_candidate_text),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory(
+                prefix=f"yunpin-postinstall-{label}-"
+            ) as temporary:
+                root = Path(temporary)
+                user_overlay = root / "rime_ice.custom.yaml"
+                user_overlay.write_text(old_text, encoding="utf-8")
+                run(
+                    "bash",
+                    "-c",
+                    command,
+                    "yunpin-postinstall-test",
+                    str(postinstall),
+                    str(current),
+                    str(user_overlay),
+                    owner,
+                )
+                self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
+                backups = list(
+                    root.glob("rime_ice.custom.yaml.pre-conservative-*")
+                )
+                self.assertEqual(1, len(backups))
+                self.assertEqual(old_text.encode("utf-8"), backups[0].read_bytes())
 
     def test_postinstall_upgrades_the_known_default_overlay_for_saved_option(self) -> None:
         postinstall = MACOS_DIR / "package" / "postinstall"

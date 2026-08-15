@@ -303,6 +303,47 @@ bool BenchmarkFinalKey(RimeApi* api,
   return p95 <= 20000;
 }
 
+bool ExerciseSessionLifecycleChurn(RimeApi* api) {
+  constexpr int kIterations = 128;
+  for (int iteration = 0; iteration < kIterations; ++iteration) {
+    const RimeSessionId session = api->create_session();
+    if (!session || !api->select_schema(session, "yunpin_e2e")) {
+      std::cerr << "failed to create lifecycle session #" << iteration
+                << '\n';
+      if (session) {
+        api->destroy_session(session);
+      }
+      return false;
+    }
+    api->set_option(session, "yunpin_learning_allowed", True);
+
+    // Exercise option, update, select/commit and immediate destroy notifier
+    // paths.  Intentionally do not drain the commit on alternating sessions:
+    // an IMK controller can disappear immediately after selection.
+    api->set_option(session, "yunpin_private_mode", True);
+    api->set_option(session, "yunpin_private_mode", False);
+    std::vector<std::string> candidates;
+    if (!Compose(api, session, "richang", &candidates) ||
+        candidates.empty() || !api->select_candidate(session, 0)) {
+      std::cerr << "failed lifecycle select/commit #" << iteration << '\n';
+      api->destroy_session(session);
+      return false;
+    }
+    if ((iteration & 1) == 0) {
+      RIME_STRUCT(RimeCommit, commit);
+      if (api->get_commit(session, &commit)) {
+        api->free_commit(&commit);
+      }
+    }
+    if (!api->destroy_session(session)) {
+      std::cerr << "failed immediate lifecycle destroy #" << iteration
+                << '\n';
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -339,6 +380,12 @@ int main(int argc, char** argv) {
     api->finalize();
     return 1;
   }
+
+  // This synthetic harness contains no password/private/one-shot field. The
+  // production host remains fail-closed unless it can make this positive
+  // per-session attestation; tests must opt in explicitly rather than weaken
+  // the filter's safe default.
+  api->set_option(session, "yunpin_learning_allowed", True);
 
   bool ok = ExpectFirst(api, session, "zgsh");
   ok = ExpectFirst(
@@ -500,6 +547,7 @@ int main(int argc, char** argv) {
   }
 
   api->destroy_session(session);
+  ok = ExerciseSessionLifecycleChurn(api) && ok;
   api->finalize();
   if (!ok) {
     return 1;
@@ -507,7 +555,7 @@ int main(int argc, char** argv) {
   std::cout
       << "verified conservative one-bridge correction, exact-input "
          "stability, short guard, ranking, quota, deduplication, commit, "
-         "candidate-Pinyin visibility, session correction, and private-mode "
-         "suppression\n";
+         "candidate-Pinyin visibility, session correction, private-mode "
+         "suppression, and 128-session notifier churn\n";
   return 0;
 }

@@ -33,21 +33,40 @@ import (
 )
 
 const (
-	protocolVersion   = 1
-	paddingBucket     = 512
-	maxBodyBytes      = 1 << 20
-	maxCiphertext     = 524816    // protocol.MaxEnvelopeCiphertext (512 KiB canonical CBOR payload)
-	maxSealedBoxWire  = 256 << 10 // protocol.MaxSealedBoxWireSize
-	maxUploadBatch    = 256
-	defaultSyncLimit  = 256
-	maximumSyncLimit  = 256
-	maxDownloadBytes  = maxCiphertext
-	pairingLifetime   = 10 * time.Minute
+	protocolVersion  = 1
+	paddingBucket    = 512
+	maxBodyBytes     = 1 << 20
+	maxCiphertext    = 524816    // protocol.MaxEnvelopeCiphertext (512 KiB canonical CBOR payload)
+	maxSealedBoxWire = 256 << 10 // protocol.MaxSealedBoxWireSize
+	maxUploadBatch   = 256
+	defaultSyncLimit = 256
+	maximumSyncLimit = 256
+	maxDownloadBytes = maxCiphertext
+	// The first production slice is deliberately the Mac plus R0W.  Keep the
+	// active trust roster bounded until signed roster-chain propagation exists.
+	maxActiveDevices     = 2
+	pairingLifetime      = 10 * time.Minute
+	pairingClaimLifetime = 24 * time.Hour
+	// Provisioning is crash-resumable from an OS-protected local journal. A
+	// seven-day remote window avoids stranding that journal during an outage;
+	// normal account APIs remain blocked until the account is explicitly sealed.
+	provisioningLife  = 7 * 24 * time.Hour
 	rateWindow        = time.Minute
-	requestsPerWindow = 240
+	// A first device may legitimately replay an entire personal dictionary.
+	// Keep login throttling separate, but allow the trusted sync API to drain a
+	// full local outbox without turning a one-time import into a multi-minute
+	// stop-and-wait loop.
+	requestsPerWindow = 4096
 )
 
 var canonicalCBOR cbor.EncMode
+
+// Recovery remains protocol-reserved but is not exposed in the two-device
+// preview: its recovery package does not yet carry the signed two-peer roster.
+// This is a variable (rather than a dead-code build flag) so the retained
+// decoder remains compiled and fuzzable while production stays fail-closed.
+var twoDeviceRecoveryEnabled = false
+var twoDeviceRevocationEnabled = false
 
 func init() {
 	mode, err := cbor.CanonicalEncOptions().EncMode()
@@ -62,24 +81,30 @@ var migrations embed.FS
 
 // Server is both the HTTP handler and owner of the SQLite connection pool.
 type Server struct {
-	db      *sql.DB
-	logger  *log.Logger
-	now     func() time.Time
-	limiter *ipLimiter
-	handler http.Handler
+	db                 *sql.DB
+	logger             *log.Logger
+	now                func() time.Time
+	limiter            *ipLimiter
+	authLimiter        *ipLimiter
+	handler            http.Handler
+	pairingLifecycleMu sync.Mutex
 }
 
 type deviceIdentity struct {
-	ID          string
-	AccountID   string
-	Ed25519Key  ed25519.PublicKey
-	X25519Key   []byte
-	CreatedUnix int64
+	ID            string
+	AccountID     string
+	Ed25519Key    ed25519.PublicKey
+	X25519Key     []byte
+	CreatedUnix   int64
+	AccountSealed bool
 }
 
 type contextKey string
 
-const identityKey contextKey = "yunpin-device"
+const (
+	identityKey     contextKey = "yunpin-device"
+	userIdentityKey contextKey = "yunpin-user"
+)
 
 type ipLimiter struct {
 	mu        sync.Mutex
@@ -111,7 +136,10 @@ func New(ctx context.Context, databasePath string, logOutput io.Writer) (*Server
 		separator = "&"
 	}
 	// modernc applies each _pragma to every connection opened by database/sql.
-	dsn += separator + "_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	// Immediate write transactions take SQLite's reserved lock at BeginTx,
+	// avoiding a deferred read-to-write upgrade race when two relay processes
+	// concurrently cancel the same pairing tuple.
+	dsn += separator + "_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -126,6 +154,11 @@ func New(ctx context.Context, databasePath string, logOutput io.Writer) (*Server
 			entries: make(map[string]rateEntry),
 			limit:   requestsPerWindow,
 			window:  rateWindow,
+		},
+		authLimiter: &ipLimiter{
+			entries: make(map[string]rateEntry),
+			limit:   maxAuthAttempts,
+			window:  10 * time.Minute,
 		},
 	}
 	if err := s.initialize(ctx); err != nil {
@@ -215,8 +248,35 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/healthz" && r.Method == http.MethodGet:
 		s.health(w, r)
+	case path == "/v1/auth/register" && r.Method == http.MethodPost:
+		s.registerUser(w, r)
+	case path == "/v1/auth/login" && r.Method == http.MethodPost:
+		s.loginUser(w, r)
+	case path == "/v1/auth/logout" && r.Method == http.MethodPost:
+		s.logoutUser(w, r)
 	case path == "/v1/accounts" && r.Method == http.MethodPost:
-		s.createAccount(w, r)
+		s.requireUserAuth(s.createAccount)(w, r)
+	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/claim") && r.Method == http.MethodPost:
+		parts := strings.Split(path, "/")
+		if len(parts) != 5 {
+			notFound(w)
+			return
+		}
+		s.requireUserAuth(func(w http.ResponseWriter, r *http.Request) { s.claimAccount(w, r, parts[3]) })(w, r)
+	case strings.HasPrefix(path, "/v1/accounts/") && r.Method == http.MethodDelete:
+		parts := strings.Split(path, "/")
+		if len(parts) != 4 {
+			notFound(w)
+			return
+		}
+		s.rollbackAccount(w, r, parts[3])
+	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/seal") && r.Method == http.MethodPost:
+		parts := strings.Split(path, "/")
+		if len(parts) != 5 {
+			notFound(w)
+			return
+		}
+		s.requireProvisioningAuth(func(w http.ResponseWriter, r *http.Request) { s.sealAccount(w, r, parts[3]) })(w, r)
 	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/recover") && r.Method == http.MethodPost:
 		parts := strings.Split(path, "/")
 		if len(parts) != 5 {
@@ -232,6 +292,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.requireAuth(s.syncEnvelopes)(w, r)
 	case path == "/v1/devices" && r.Method == http.MethodGet:
 		s.requireAuth(s.listDevices)(w, r)
+	case path == "/v1/devices/current" && r.Method == http.MethodDelete:
+		s.rollbackCurrentDevice(w, r)
 	case strings.HasPrefix(path, "/v1/devices/") && r.Method == http.MethodDelete:
 		parts := strings.Split(path, "/")
 		if len(parts) != 4 {
@@ -242,9 +304,286 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case path == "/v1/keyring" && r.Method == http.MethodGet:
 		s.requireAuth(s.getKeyring)(w, r)
 	case path == "/v1/keyring" && r.Method == http.MethodPut:
-		s.requireAuth(s.putKeyring)(w, r)
+		s.requireProvisioningAuth(s.putKeyring)(w, r)
 	default:
 		notFound(w)
+	}
+}
+
+// rollbackAccount removes only a newly provisioned, otherwise-unused account.
+// It exists so the first desktop client can undo the remote write if its local
+// Keychain/DPAPI or encrypted-SQLite commit fails. The short-lived dedicated
+// rollback capability, rather than the long-term device token, authorizes the
+// single conditional
+// DELETE keeps the safety checks and the cascade in one SQLite statement: the
+// authenticated device must be the account's only device, and no pairing or
+// vocabulary envelope may ever have been created.  Recovery keyrings are
+// allowed because provisioning stores epoch one before committing locally.
+func (s *Server) rollbackAccount(w http.ResponseWriter, r *http.Request, accountID string) {
+	if !validID(accountID) {
+		writeError(w, http.StatusNotFound, "account_not_found")
+		return
+	}
+	rollbackToken, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "rollback_capability_required")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	var tombstone int
+	err = tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM account_rollback_tombstones
+		WHERE account_id = ? AND rollback_hash = ?`, accountID, digest(rollbackToken)).Scan(&tombstone)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if tombstone == 1 {
+		if err := tx.Commit(); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	result, err := tx.ExecContext(r.Context(), `DELETE FROM accounts
+		WHERE id = ?
+		  AND provisioning_sealed_at IS NULL
+		  AND provisioning_expires_at > ?
+		  AND provisioning_rollback_hash = ?
+		  AND (SELECT COUNT(*) FROM devices WHERE account_id = ?) = 1
+		  AND EXISTS (SELECT 1 FROM devices WHERE account_id = ? AND revoked_at IS NULL)
+		  AND NOT EXISTS (SELECT 1 FROM pairings WHERE account_id = ?)
+		  AND NOT EXISTS (SELECT 1 FROM envelopes WHERE account_id = ?)`,
+		accountID, s.now().UnixMilli(), digest(rollbackToken), accountID, accountID, accountID, accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		writeError(w, http.StatusConflict, "account_rollback_not_safe")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `INSERT INTO account_rollback_tombstones(
+		account_id, rollback_hash) VALUES(?, ?)`, accountID, digest(rollbackToken)); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) sealAccount(w http.ResponseWriter, r *http.Request, accountID string) {
+	if !validID(accountID) {
+		writeError(w, http.StatusNotFound, "account_not_found")
+		return
+	}
+	identity := mustIdentity(r)
+	if identity.AccountID != accountID {
+		writeError(w, http.StatusNotFound, "account_not_found")
+		return
+	}
+	result, err := s.db.ExecContext(r.Context(), `UPDATE accounts
+		SET provisioning_sealed_at = COALESCE(provisioning_sealed_at, ?),
+		    provisioning_rollback_hash = NULL, provisioning_expires_at = NULL
+		WHERE id = ? AND EXISTS (SELECT 1 FROM keyrings WHERE account_id = ? AND epoch = 1)`,
+		s.now().UnixMilli(), accountID, accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		writeError(w, http.StatusConflict, "account_not_ready")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// rollbackCurrentDevice consumes the joining client's dedicated rollback
+// capability. Before claim there is no device bearer to authenticate, so the
+// exact account/device/pairing tuple plus the capability hash are the complete
+// authorization. Joined and approved reservations are removed directly;
+// claimed reservations additionally remove the still-quarantined device. A
+// durable ready acknowledgement is a one-way boundary and is never rolled
+// back. Every successful path leaves a hash-only tombstone so response-loss
+// retries are idempotent and neither the pairing nor device identity can be
+// resurrected.
+func (s *Server) rollbackCurrentDevice(w http.ResponseWriter, r *http.Request) {
+	rollbackToken, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "device_rollback_capability_required")
+		return
+	}
+	if _, err := decodeCanonicalSecret(rollbackToken, 32); err != nil {
+		writeError(w, http.StatusUnauthorized, "device_rollback_capability_required")
+		return
+	}
+	accountID := r.URL.Query().Get("account_id")
+	deviceID := r.URL.Query().Get("device_id")
+	pairingID := r.URL.Query().Get("pairing_id")
+	if !validID(accountID) || !validID(deviceID) || !validID(pairingID) {
+		writeError(w, http.StatusBadRequest, "invalid_device_rollback_identity")
+		return
+	}
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	rollbackHash := digest(rollbackToken)
+	tombstoneFound, tombstoneMatches, err := deviceRollbackTombstoneStatus(
+		r.Context(), tx, accountID, deviceID, pairingID, rollbackHash)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if tombstoneFound && !tombstoneMatches {
+		writeError(w, http.StatusConflict, "device_rollback_not_safe")
+		return
+	}
+	var storedAccountID, storedDeviceID, state string
+	var storedRollbackHash []byte
+	var readyAt, finalizedAt sql.NullInt64
+	err = tx.QueryRowContext(r.Context(), `SELECT account_id, COALESCE(new_device_id, ''), state,
+		rollback_hash, ready_at, finalized_at FROM pairings WHERE id = ?`, pairingID).
+		Scan(&storedAccountID, &storedDeviceID, &state, &storedRollbackHash, &readyAt, &finalizedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		if tombstoneFound && tombstoneMatches {
+			var resurrectedDevice int
+			if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices
+				WHERE account_id = ? AND id = ?`, accountID, deviceID).Scan(&resurrectedDevice); err != nil {
+				writeError(w, http.StatusInternalServerError, "database_error")
+				return
+			}
+			if resurrectedDevice != 0 {
+				writeError(w, http.StatusConflict, "device_rollback_not_safe")
+				return
+			}
+			if err := tx.Commit(); err != nil {
+				writeError(w, http.StatusInternalServerError, "database_error")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeError(w, http.StatusConflict, "device_rollback_not_safe")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if storedAccountID != accountID || storedDeviceID != deviceID ||
+		!constantTimeEqual(storedRollbackHash, rollbackHash) {
+		writeError(w, http.StatusConflict, "device_rollback_not_safe")
+		return
+	}
+	if readyAt.Valid || finalizedAt.Valid {
+		writeError(w, http.StatusConflict, "device_rollback_after_ready")
+		return
+	}
+
+	switch state {
+	case "joined", "approved":
+		var existingDevice int
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices WHERE id = ?`, deviceID).
+			Scan(&existingDevice); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if existingDevice != 0 {
+			writeError(w, http.StatusConflict, "device_rollback_not_safe")
+			return
+		}
+	case "claimed":
+		var activePeerCount, claimedMappings, unsafeWrites int
+		if err := tx.QueryRowContext(r.Context(), `SELECT
+			(SELECT COUNT(*) FROM devices WHERE account_id = ? AND id <> ? AND revoked_at IS NULL),
+			(SELECT COUNT(*) FROM pairings WHERE account_id = ? AND new_device_id = ? AND state = 'claimed'),
+			(SELECT COUNT(*) FROM envelopes WHERE account_id = ? AND device_id = ?) +
+			(SELECT COUNT(*) FROM keyrings WHERE account_id = ? AND writer_device_id = ?) +
+			(SELECT COUNT(*) FROM pairings WHERE account_id = ? AND creator_device_id = ?)`,
+			accountID, deviceID, accountID, deviceID,
+			accountID, deviceID, accountID, deviceID, accountID, deviceID).
+			Scan(&activePeerCount, &claimedMappings, &unsafeWrites); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if activePeerCount == 0 || claimedMappings != 1 || unsafeWrites != 0 {
+			writeError(w, http.StatusConflict, "device_rollback_not_safe")
+			return
+		}
+	default:
+		// A created invitation has no authenticated joining tuple. Unknown or
+		// absent state must never turn an arbitrary capability into success.
+		writeError(w, http.StatusConflict, "device_rollback_not_safe")
+		return
+	}
+
+	if !tombstoneFound {
+		if _, err := tx.ExecContext(r.Context(), `INSERT INTO device_rollback_tombstones(
+			account_id, device_id, pairing_id, rollback_hash) VALUES(?, ?, ?, ?)`,
+			accountID, deviceID, pairingID, rollbackHash); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+	}
+	result, err := tx.ExecContext(r.Context(), `DELETE FROM pairings
+		WHERE id = ? AND account_id = ? AND new_device_id = ? AND state = ? AND rollback_hash = ?
+		  AND ready_at IS NULL AND finalized_at IS NULL`, pairingID, accountID, deviceID, state, rollbackHash)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		writeError(w, http.StatusConflict, "device_rollback_not_safe")
+		return
+	}
+	if state == "claimed" {
+		result, err = tx.ExecContext(r.Context(), `DELETE FROM devices
+			WHERE id = ? AND account_id = ? AND revoked_at IS NULL`, deviceID, accountID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			writeError(w, http.StatusConflict, "device_rollback_not_safe")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deviceRollbackTombstoneStatus authenticates the tombstone hash in constant
+// time after selecting by the public tuple. Selecting with the hash in SQL
+// would make a conflicting capability observably different from an absent
+// tuple and would not provide a constant-time secret comparison.
+func deviceRollbackTombstoneStatus(ctx context.Context, tx *sql.Tx, accountID, deviceID, pairingID string, expectedHash []byte) (bool, bool, error) {
+	var storedHash []byte
+	err := tx.QueryRowContext(ctx, `SELECT rollback_hash FROM device_rollback_tombstones
+		WHERE account_id = ? AND device_id = ? AND pairing_id = ?`, accountID, deviceID, pairingID).
+		Scan(&storedHash)
+	switch {
+	case err == nil:
+		return true, constantTimeEqual(storedHash, expectedHash), nil
+	case errors.Is(err, sql.ErrNoRows):
+		return false, false, nil
+	default:
+		return false, false, err
 	}
 }
 
@@ -266,17 +605,64 @@ func (s *Server) routePairing(w http.ResponseWriter, r *http.Request, path strin
 		s.claimPairing(w, r, parts[3])
 		return
 	}
+	if len(parts) == 5 && parts[4] == "ready" && r.Method == http.MethodPost {
+		s.readyPairing(w, r, parts[3])
+		return
+	}
+	if len(parts) == 5 && parts[4] == "finalize" && r.Method == http.MethodPost {
+		s.requireAuth(func(w http.ResponseWriter, r *http.Request) { s.finalizePairing(w, r, parts[3]) })(w, r)
+		return
+	}
+	if len(parts) == 4 && r.Method == http.MethodDelete {
+		s.requireAuth(func(w http.ResponseWriter, r *http.Request) { s.cancelPairing(w, r, parts[3]) })(w, r)
+		return
+	}
 	notFound(w)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
+	if err := s.cleanupExpiredProvisioning(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable")
+		return
+	}
 	if err := s.db.PingContext(ctx); err != nil {
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) cleanupExpiredProvisioning(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := s.now()
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO account_rollback_tombstones(
+		account_id, rollback_hash)
+		SELECT id, provisioning_rollback_hash FROM accounts
+		WHERE provisioning_sealed_at IS NULL
+		  AND provisioning_expires_at <= ?
+		  AND provisioning_rollback_hash IS NOT NULL
+		  AND (SELECT COUNT(*) FROM devices WHERE account_id = accounts.id) = 1
+		  AND NOT EXISTS (SELECT 1 FROM pairings WHERE account_id = accounts.id)
+		  AND NOT EXISTS (SELECT 1 FROM envelopes WHERE account_id = accounts.id)`,
+		now.UnixMilli())
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `DELETE FROM accounts
+		WHERE provisioning_sealed_at IS NULL
+		  AND provisioning_expires_at <= ?
+		  AND (SELECT COUNT(*) FROM devices WHERE account_id = accounts.id) = 1
+		  AND NOT EXISTS (SELECT 1 FROM pairings WHERE account_id = accounts.id)
+		  AND NOT EXISTS (SELECT 1 FROM envelopes WHERE account_id = accounts.id)`, now.UnixMilli())
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type deviceRegistration struct {
@@ -286,7 +672,15 @@ type deviceRegistration struct {
 }
 
 func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
+	if err := s.cleanupExpiredProvisioning(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
 	var input struct {
+		AccountID              string `json:"account_id"`
+		DeviceID               string `json:"device_id"`
+		DeviceToken            string `json:"device_token"`
+		RollbackToken          string `json:"rollback_token"`
 		RecoveryAuthentication string `json:"recovery_authentication"`
 		deviceRegistration
 	}
@@ -303,21 +697,16 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_recovery_authentication")
 		return
 	}
-	accountID, err := randomID(16)
+	deviceToken, err := validateProvisioningIdentity(input.AccountID, input.DeviceID, input.DeviceToken)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
+		writeError(w, http.StatusBadRequest, "invalid_provisioning_identity")
 		return
 	}
-	deviceID, err := randomID(16)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
+	if _, err := decodeCanonicalSecret(input.RollbackToken, 32); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_rollback_capability")
 		return
 	}
-	deviceToken, err := randomSecret(32)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
-		return
-	}
+	user := mustUserIdentity(r)
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -325,16 +714,76 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(r.Context(), "INSERT INTO accounts(id, recovery_authentication_hash, created_at) VALUES(?, ?, ?)", accountID, digestBytes(recoveryAuthentication), now); err == nil {
+	var rollbackTombstone int
+	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM account_rollback_tombstones
+		WHERE account_id = ?`, input.AccountID).Scan(&rollbackTombstone); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if rollbackTombstone != 0 {
+		writeError(w, http.StatusConflict, "provisioning_identity_retired")
+		return
+	}
+	accountHash := digestBytes(recoveryAuthentication)
+	var existingAccountHash []byte
+	err = tx.QueryRowContext(r.Context(), "SELECT recovery_authentication_hash FROM accounts WHERE id = ?", input.AccountID).Scan(&existingAccountHash)
+	accountCreated := errors.Is(err, sql.ErrNoRows)
+	if accountCreated {
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO accounts(
+			id, recovery_authentication_hash, created_at, provisioning_rollback_hash, provisioning_expires_at, user_id)
+			VALUES(?, ?, ?, ?, ?, ?)`, input.AccountID, accountHash, now, digest(input.RollbackToken), now+provisioningLife.Milliseconds(), user.ID)
+	} else if err == nil && !constantTimeEqual(existingAccountHash, accountHash) {
+		writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+		return
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if !accountCreated {
+		var rollbackHash []byte
+		var sealed sql.NullInt64
+		var expires sql.NullInt64
+		var accountUser sql.NullString
+		if err := tx.QueryRowContext(r.Context(), `SELECT provisioning_rollback_hash,
+			provisioning_expires_at, provisioning_sealed_at, user_id FROM accounts WHERE id = ?`, input.AccountID).
+			Scan(&rollbackHash, &expires, &sealed, &accountUser); err != nil || sealed.Valid || !expires.Valid ||
+			expires.Int64 <= now || !constantTimeEqual(rollbackHash, digest(input.RollbackToken)) {
+			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+			return
+		}
+		if !accountUser.Valid || accountUser.String != user.ID {
+			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+			return
+		}
+	}
+	var existingAccountID string
+	var existingName, existingTokenHash, existingEdKey, existingXKey []byte
+	var revoked sql.NullInt64
+	err = tx.QueryRowContext(r.Context(), `SELECT account_id, name_ciphertext, token_hash,
+		ed25519_public_key, x25519_public_key, revoked_at FROM devices WHERE id = ?`, input.DeviceID).
+		Scan(&existingAccountID, &existingName, &existingTokenHash, &existingEdKey, &existingXKey, &revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		if !accountCreated {
+			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+			return
+		}
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO devices(id, account_id, name_ciphertext, token_hash, ed25519_public_key, x25519_public_key, created_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?)`, deviceID, accountID, nameCiphertext, digest(deviceToken), edKey, xKey, now)
+			VALUES(?, ?, ?, ?, ?, ?, ?)`, input.DeviceID, input.AccountID, nameCiphertext, digest(input.DeviceToken), edKey, xKey, now)
+	} else if err == nil {
+		if existingAccountID != input.AccountID || revoked.Valid || !constantTimeEqual(existingName, nameCiphertext) ||
+			!constantTimeEqual(existingTokenHash, digest(input.DeviceToken)) || !constantTimeEqual(existingEdKey, edKey) ||
+			!constantTimeEqual(existingXKey, xKey) {
+			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+			return
+		}
 	}
 	if err != nil || tx.Commit() != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"account_id": accountID, "device_id": deviceID, "device_token": deviceToken,
+		"account_id": input.AccountID, "device_id": input.DeviceID, "device_token": deviceToken,
 	})
 }
 
@@ -343,7 +792,18 @@ func (s *Server) recoverAccount(w http.ResponseWriter, r *http.Request, accountI
 		writeError(w, http.StatusNotFound, "account_not_found")
 		return
 	}
+	// Recovery cannot safely establish the second peer until the recovery box
+	// carries and verifies the same signed two-device roster as pairing v2.
+	// Keeping the endpoint fail-closed prevents a relay roster from becoming a
+	// trust root. The parser below remains for the next protocol revision.
+	if !twoDeviceRecoveryEnabled {
+		writeError(w, http.StatusConflict, "recovery_not_available_in_two_device_preview")
+		return
+	}
+
 	var input struct {
+		DeviceID               string `json:"device_id"`
+		DeviceToken            string `json:"device_token"`
 		RecoveryAuthentication string `json:"recovery_authentication"`
 		deviceRegistration
 	}
@@ -361,7 +821,8 @@ func (s *Server) recoverAccount(w http.ResponseWriter, r *http.Request, accountI
 		return
 	}
 	var expected []byte
-	if err := s.db.QueryRowContext(r.Context(), "SELECT recovery_authentication_hash FROM accounts WHERE id = ?", accountID).Scan(&expected); err != nil {
+	if err := s.db.QueryRowContext(r.Context(), `SELECT recovery_authentication_hash FROM accounts
+		WHERE id = ? AND provisioning_sealed_at IS NOT NULL`, accountID).Scan(&expected); err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_recovery_authentication")
 		return
 	}
@@ -370,72 +831,262 @@ func (s *Server) recoverAccount(w http.ResponseWriter, r *http.Request, accountI
 		writeError(w, http.StatusUnauthorized, "invalid_recovery_authentication")
 		return
 	}
-	deviceID, err := randomID(16)
+	deviceToken, err := validateProvisioningIdentity(accountID, input.DeviceID, input.DeviceToken)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
+		writeError(w, http.StatusBadRequest, "invalid_provisioning_identity")
 		return
 	}
-	deviceToken, err := randomSecret(32)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
-		return
-	}
-	_, err = s.db.ExecContext(r.Context(), `INSERT INTO devices(id, account_id, name_ciphertext, token_hash, ed25519_public_key, x25519_public_key, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`, deviceID, accountID, nameCiphertext, digest(deviceToken), edKey, xKey, s.now().UnixMilli())
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"account_id": accountID, "device_id": deviceID, "device_token": deviceToken})
+	defer tx.Rollback()
+	var existingAccountID string
+	var existingName, existingTokenHash, existingEdKey, existingXKey []byte
+	var revoked sql.NullInt64
+	err = tx.QueryRowContext(r.Context(), `SELECT account_id, name_ciphertext, token_hash,
+		ed25519_public_key, x25519_public_key, revoked_at FROM devices WHERE id = ?`, input.DeviceID).
+		Scan(&existingAccountID, &existingName, &existingTokenHash, &existingEdKey, &existingXKey, &revoked)
+	if errors.Is(err, sql.ErrNoRows) {
+		var result sql.Result
+		result, err = tx.ExecContext(r.Context(), `INSERT INTO devices(id, account_id, name_ciphertext, token_hash,
+			ed25519_public_key, x25519_public_key, created_at)
+			SELECT ?, ?, ?, ?, ?, ?, ?
+			WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) < ?`,
+			input.DeviceID, accountID, nameCiphertext, digest(input.DeviceToken), edKey, xKey,
+			s.now().UnixMilli(), accountID, maxActiveDevices)
+		if err == nil {
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				writeError(w, http.StatusConflict, "device_limit_reached")
+				return
+			}
+		}
+	} else if err == nil {
+		if existingAccountID != accountID || revoked.Valid || !constantTimeEqual(existingName, nameCiphertext) ||
+			!constantTimeEqual(existingTokenHash, digest(input.DeviceToken)) || !constantTimeEqual(existingEdKey, edKey) ||
+			!constantTimeEqual(existingXKey, xKey) {
+			writeError(w, http.StatusConflict, "provisioning_identity_conflict")
+			return
+		}
+	}
+	if err != nil || tx.Commit() != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"account_id": accountID, "device_id": input.DeviceID, "device_token": deviceToken})
 }
 
 func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 	identity := mustIdentity(r)
-	pairingID, err := randomID(16)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
-		return
-	}
-	pairingSecret, err := randomSecret(24)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
-		return
-	}
-	now := s.now()
-	_, err = s.db.ExecContext(r.Context(), `INSERT INTO pairings(id, account_id, creator_device_id, secret_hash, state, expires_at, created_at)
-		VALUES(?, ?, ?, ?, 'created', ?, ?)`, pairingID, identity.AccountID, identity.ID, digest(pairingSecret), now.Add(pairingLifetime).UnixMilli(), now.UnixMilli())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database_error")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"pairing_id": pairingID, "pairing_secret": pairingSecret,
-		"creator_x25519_public_key": base64.RawURLEncoding.EncodeToString(identity.X25519Key),
-		"expires_at":                now.Add(pairingLifetime).UTC().Format(time.RFC3339),
-	})
-}
-
-func (s *Server) joinPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
 	var input struct {
-		PairingSecret string `json:"pairing_secret"`
-		deviceRegistration
+		PairingID       string `json:"pairing_id"`
+		PairingVerifier string `json:"pairing_verifier"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	nameCiphertext, edKey, xKey, err := validateRegistration(input.deviceRegistration)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	verifier, err := decodeCanonicalSecret(input.PairingVerifier, 32)
+	if !validID(input.PairingID) || input.PairingID == strings.Repeat("0", 32) || err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_pairing_invitation")
 		return
 	}
-	result, err := s.db.ExecContext(r.Context(), `UPDATE pairings SET state = 'joined', pending_name_ciphertext = ?, pending_ed25519_public_key = ?, pending_x25519_public_key = ?
-		WHERE id = ? AND secret_hash = ? AND state = 'created' AND expires_at > ?`, nameCiphertext, edKey, xKey, pairingID, digest(input.PairingSecret), s.now().UnixMilli())
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	now := s.now()
+	expiresAt := now.Add(pairingLifetime).UnixMilli()
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	// Expired joined/approved reservations already contain an authenticated
+	// joining tuple. Retire that tuple before freeing the live reservation;
+	// only an untouched created invitation may disappear without a tombstone.
+	var expiredPairingID, expiredDeviceID string
+	var expiredRollbackHash []byte
+	err = tx.QueryRowContext(r.Context(), `SELECT id, COALESCE(new_device_id, ''), rollback_hash
+		FROM pairings WHERE account_id = ? AND (
+			(state = 'joined' AND expires_at <= ?) OR
+			(state = 'approved' AND claim_expires_at IS NOT NULL AND claim_expires_at <= ?))
+		LIMIT 1`, identity.AccountID, now.UnixMilli(), now.UnixMilli()).
+		Scan(&expiredPairingID, &expiredDeviceID, &expiredRollbackHash)
+	if err == nil {
+		if !validID(expiredDeviceID) || len(expiredRollbackHash) != sha256.Size {
+			writeError(w, http.StatusConflict, "pairing_invitation_conflict")
+			return
+		}
+		var existingDevice int
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices WHERE id = ?`, expiredDeviceID).
+			Scan(&existingDevice); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if existingDevice != 0 {
+			writeError(w, http.StatusConflict, "pairing_invitation_conflict")
+			return
+		}
+		found, matches, tombstoneErr := deviceRollbackTombstoneStatus(r.Context(), tx,
+			identity.AccountID, expiredDeviceID, expiredPairingID, expiredRollbackHash)
+		if tombstoneErr != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if found && !matches {
+			writeError(w, http.StatusConflict, "pairing_invitation_conflict")
+			return
+		}
+		if !found {
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO device_rollback_tombstones(
+				account_id, device_id, pairing_id, rollback_hash) VALUES(?, ?, ?, ?)`,
+				identity.AccountID, expiredDeviceID, expiredPairingID, expiredRollbackHash); err != nil {
+				writeError(w, http.StatusInternalServerError, "database_error")
+				return
+			}
+		}
+		result, err := tx.ExecContext(r.Context(), `DELETE FROM pairings
+			WHERE id = ? AND account_id = ? AND new_device_id = ? AND rollback_hash = ?
+			  AND state IN ('joined', 'approved') AND ready_at IS NULL AND finalized_at IS NULL`,
+			expiredPairingID, identity.AccountID, expiredDeviceID, expiredRollbackHash)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			writeError(w, http.StatusConflict, "pairing_invitation_conflict")
+			return
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), `DELETE FROM pairings
+		WHERE account_id = ? AND state = 'created' AND expires_at <= ?`,
+		identity.AccountID, now.UnixMilli()); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	var retiredPairingID int
+	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM device_rollback_tombstones
+		WHERE pairing_id = ?`, input.PairingID).Scan(&retiredPairingID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if retiredPairingID != 0 {
+		writeError(w, http.StatusConflict, "pairing_invitation_conflict")
+		return
+	}
+	result, err := tx.ExecContext(r.Context(), `INSERT OR IGNORE INTO pairings(
+		id, account_id, creator_device_id, secret_hash, state, expires_at, created_at)
+		SELECT ?, ?, ?, ?, 'created', ?, ?
+		WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) = 1
+		AND NOT EXISTS (SELECT 1 FROM pairings WHERE account_id = ? AND state IN ('created', 'joined', 'approved'))`,
+		input.PairingID, identity.AccountID, identity.ID, verifier, expiresAt, now.UnixMilli(),
+		identity.AccountID, identity.AccountID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
+		var accountID, creatorID string
+		var existingVerifier []byte
+		var existingExpiry int64
+		var existingState string
+		if err := tx.QueryRowContext(r.Context(), `SELECT account_id, creator_device_id, secret_hash, expires_at, state
+			FROM pairings WHERE id = ?`, input.PairingID).Scan(&accountID, &creatorID, &existingVerifier, &existingExpiry, &existingState); err != nil ||
+			accountID != identity.AccountID || creatorID != identity.ID || !constantTimeEqual(existingVerifier, verifier) ||
+			existingExpiry <= now.UnixMilli() || (existingState != "created" && existingState != "joined" && existingState != "approved") {
+			writeError(w, http.StatusConflict, "pairing_invitation_conflict")
+			return
+		}
+		expiresAt = existingExpiry
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"pairing_id": input.PairingID,
+		"expires_at": time.UnixMilli(expiresAt).UTC(),
+	})
+}
+
+func (s *Server) joinPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
+	var input struct {
+		PairingVerifier string `json:"pairing_verifier"`
+		DeviceID        string `json:"device_id"`
+		JoinProof       string `json:"join_proof"`
+		RollbackToken   string `json:"rollback_token"`
+		deviceRegistration
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	verifier, verifierErr := decodeCanonicalSecret(input.PairingVerifier, 32)
+	joinProof, proofErr := decodeCanonicalSecret(input.JoinProof, 32)
+	_, rollbackErr := decodeCanonicalSecret(input.RollbackToken, 32)
+	nameCiphertext, edKey, xKey, err := validateRegistration(input.deviceRegistration)
+	if !validID(pairingID) || !validID(input.DeviceID) || input.DeviceID == strings.Repeat("0", 32) ||
+		verifierErr != nil || proofErr != nil || rollbackErr != nil || err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_pairing_join")
+		return
+	}
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	var accountID, state, existingDeviceID string
+	var secretHash, existingName, existingEdKey, existingXKey, existingProof, existingRollback []byte
+	var expiresAt int64
+	err = tx.QueryRowContext(r.Context(), `SELECT account_id, state, secret_hash, COALESCE(new_device_id, ''), pending_name_ciphertext,
+		pending_ed25519_public_key, pending_x25519_public_key, pending_join_proof, rollback_hash, expires_at FROM pairings WHERE id = ?`, pairingID).
+		Scan(&accountID, &state, &secretHash, &existingDeviceID, &existingName, &existingEdKey, &existingXKey, &existingProof, &existingRollback, &expiresAt)
+	if err != nil || (state == "created" && expiresAt <= s.now().UnixMilli()) || !constantTimeEqual(secretHash, verifier) {
 		writeError(w, http.StatusUnauthorized, "invalid_or_expired_pairing")
+		return
+	}
+	var retiredDeviceID int
+	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM device_rollback_tombstones
+		WHERE account_id = ? AND device_id = ?`, accountID, input.DeviceID).Scan(&retiredDeviceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if retiredDeviceID != 0 {
+		writeError(w, http.StatusConflict, "pairing_join_conflict")
+		return
+	}
+	if state == "created" {
+		var result sql.Result
+		result, err = tx.ExecContext(r.Context(), `UPDATE pairings SET state = 'joined', new_device_id = ?,
+			pending_name_ciphertext = ?, pending_ed25519_public_key = ?, pending_x25519_public_key = ?,
+			pending_join_proof = ?, rollback_hash = ? WHERE id = ? AND state = 'created'
+			AND (SELECT COUNT(*) FROM devices WHERE account_id = pairings.account_id AND revoked_at IS NULL) = 1
+			AND NOT EXISTS (SELECT 1 FROM devices WHERE id = ?)`,
+			input.DeviceID, nameCiphertext, edKey, xKey, joinProof, digest(input.RollbackToken), pairingID, input.DeviceID)
+		if err == nil {
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				writeError(w, http.StatusConflict, "device_limit_reached")
+				return
+			}
+		}
+	} else if state == "joined" || state == "approved" || state == "claimed" {
+		if existingDeviceID != input.DeviceID || !constantTimeEqual(existingName, nameCiphertext) ||
+			!constantTimeEqual(existingEdKey, edKey) || !constantTimeEqual(existingXKey, xKey) ||
+			!constantTimeEqual(existingProof, joinProof) || !constantTimeEqual(existingRollback, digest(input.RollbackToken)) {
+			writeError(w, http.StatusConflict, "pairing_join_conflict")
+			return
+		}
+	} else {
+		writeError(w, http.StatusConflict, "pairing_not_joinable")
+		return
+	}
+	if err != nil || tx.Commit() != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"state": "joined"})
@@ -443,13 +1094,16 @@ func (s *Server) joinPairing(w http.ResponseWriter, r *http.Request, pairingID s
 
 func (s *Server) getPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
 	identity := mustIdentity(r)
-	var state string
-	var nameCiphertext, ed25519Key, x25519Key []byte
-	var expiresAt int64
-	err := s.db.QueryRowContext(r.Context(), `SELECT state, pending_name_ciphertext, pending_ed25519_public_key,
-		pending_x25519_public_key, expires_at FROM pairings
+	var state, newDeviceID string
+	var nameCiphertext, ed25519Key, x25519Key, joinProof []byte
+	var expiresAt, claimExpiresAt, readyExpiresAt int64
+	var readyAt, finalizedAt sql.NullInt64
+	err := s.db.QueryRowContext(r.Context(), `SELECT state, COALESCE(new_device_id, ''), pending_name_ciphertext, pending_ed25519_public_key,
+		pending_x25519_public_key, pending_join_proof, expires_at, COALESCE(claim_expires_at, 0),
+		ready_at, COALESCE(ready_expires_at, 0), finalized_at FROM pairings
 		WHERE id = ? AND account_id = ? AND creator_device_id = ?`, pairingID, identity.AccountID, identity.ID).
-		Scan(&state, &nameCiphertext, &ed25519Key, &x25519Key, &expiresAt)
+		Scan(&state, &newDeviceID, &nameCiphertext, &ed25519Key, &x25519Key, &joinProof,
+			&expiresAt, &claimExpiresAt, &readyAt, &readyExpiresAt, &finalizedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "pairing_not_found")
 		return
@@ -458,16 +1112,47 @@ func (s *Server) getPairing(w http.ResponseWriter, r *http.Request, pairingID st
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
+	visibleState := state
+	if state == "claimed" {
+		switch {
+		case finalizedAt.Valid:
+			visibleState = "finalized"
+		case readyAt.Valid:
+			visibleState = "ready"
+		}
+	}
+	nowMillis := s.now().UnixMilli()
+	stageExpired := false
+	switch visibleState {
+	case "created", "joined":
+		stageExpired = expiresAt <= nowMillis
+	case "approved":
+		stageExpired = claimExpiresAt <= nowMillis
+	case "claimed":
+		stageExpired = readyExpiresAt <= nowMillis
+	case "ready", "finalized":
+		// A durable ready acknowledgement and finalization are terminal progress,
+		// not continuations of any earlier invitation/claim deadline.
+		stageExpired = false
+	}
 	response := map[string]any{
 		"pairing_id": pairingID,
-		"state":      state,
+		"state":      visibleState,
 		"expires_at": time.UnixMilli(expiresAt).UTC(),
-		"expired":    expiresAt <= s.now().UnixMilli(),
+		"expired":    stageExpired,
+	}
+	if claimExpiresAt != 0 {
+		response["claim_expires_at"] = time.UnixMilli(claimExpiresAt).UTC()
+	}
+	if readyExpiresAt != 0 {
+		response["ready_expires_at"] = time.UnixMilli(readyExpiresAt).UTC()
 	}
 	if len(nameCiphertext) != 0 {
+		response["device_id"] = newDeviceID
 		response["device_name_ciphertext"] = base64.RawURLEncoding.EncodeToString(nameCiphertext)
 		response["ed25519_public_key"] = base64.RawURLEncoding.EncodeToString(ed25519Key)
 		response["x25519_public_key"] = base64.RawURLEncoding.EncodeToString(x25519Key)
+		response["join_proof"] = base64.RawURLEncoding.EncodeToString(joinProof)
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -485,20 +1170,49 @@ func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request, pairingI
 		writeError(w, http.StatusBadRequest, "invalid_encrypted_keyring")
 		return
 	}
-	deviceID, err := randomID(16)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
-		return
-	}
-	result, err := s.db.ExecContext(r.Context(), `UPDATE pairings SET state = 'approved', new_device_id = ?, encrypted_keyring = ?
-		WHERE id = ? AND account_id = ? AND creator_device_id = ? AND state = 'joined' AND expires_at > ?`,
-		deviceID, keyring, pairingID, identity.AccountID, identity.ID, s.now().UnixMilli())
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
+	defer tx.Rollback()
+	var state, newDeviceID string
+	var existingKeyring []byte
+	var expiresAt, claimExpiresAt int64
+	err = tx.QueryRowContext(r.Context(), `SELECT state, COALESCE(new_device_id, ''), encrypted_keyring, expires_at,
+		COALESCE(claim_expires_at, 0) FROM pairings
+		WHERE id = ? AND account_id = ? AND creator_device_id = ?`, pairingID, identity.AccountID, identity.ID).
+		Scan(&state, &newDeviceID, &existingKeyring, &expiresAt, &claimExpiresAt)
+	if err != nil || (state == "joined" && expiresAt <= s.now().UnixMilli()) || !validID(newDeviceID) {
 		writeError(w, http.StatusConflict, "pairing_not_ready")
+		return
+	}
+	if state == "joined" {
+		claimExpiresAt = s.now().Add(pairingClaimLifetime).UnixMilli()
+		var result sql.Result
+		result, err = tx.ExecContext(r.Context(), `UPDATE pairings SET state = 'approved', encrypted_keyring = ?, claim_expires_at = ?
+			WHERE id = ? AND state = 'joined'
+			AND (SELECT COUNT(*) FROM devices WHERE account_id = pairings.account_id AND revoked_at IS NULL) = 1`,
+			keyring, claimExpiresAt, pairingID)
+		if err == nil {
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				writeError(w, http.StatusConflict, "device_limit_reached")
+				return
+			}
+		}
+	} else if state == "approved" || state == "claimed" {
+		if !constantTimeEqual(existingKeyring, keyring) {
+			writeError(w, http.StatusConflict, "pairing_approval_conflict")
+			return
+		}
+	} else {
+		writeError(w, http.StatusConflict, "pairing_not_ready")
+		return
+	}
+	if err != nil || tx.Commit() != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"state": "approved"})
@@ -506,44 +1220,320 @@ func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request, pairingI
 
 func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
 	var input struct {
-		PairingSecret string `json:"pairing_secret"`
+		PairingVerifier string `json:"pairing_verifier"`
+		DeviceToken     string `json:"device_token"`
+		ClaimProof      string `json:"claim_proof"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
 	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
 	defer tx.Rollback()
-	var accountID, deviceID string
-	var nameCiphertext, expected, edKey, xKey, encryptedKeyring []byte
-	var expiresAt int64
-	err = tx.QueryRowContext(r.Context(), `SELECT account_id, new_device_id, pending_name_ciphertext, secret_hash, pending_ed25519_public_key,
-		pending_x25519_public_key, encrypted_keyring, expires_at FROM pairings WHERE id = ? AND state = 'approved'`, pairingID).
-		Scan(&accountID, &deviceID, &nameCiphertext, &expected, &edKey, &xKey, &encryptedKeyring, &expiresAt)
-	if err != nil || expiresAt <= s.now().UnixMilli() || subtle.ConstantTimeCompare(expected, digest(input.PairingSecret)) != 1 {
+	verifier, verifierErr := decodeCanonicalSecret(input.PairingVerifier, 32)
+	claimProof, proofErr := decodeCanonicalSecret(input.ClaimProof, ed25519.SignatureSize)
+	if _, err := decodeCanonicalSecret(input.DeviceToken, 32); err != nil || verifierErr != nil || proofErr != nil {
+		writeError(w, http.StatusBadRequest, "invalid_device_token")
+		return
+	}
+	var accountID, deviceID, creatorDeviceID, state string
+	var nameCiphertext, expected, edKey, xKey, creatorEdKey, creatorXKey, encryptedKeyring []byte
+	var expiresAt, claimExpiresAt int64
+	err = tx.QueryRowContext(r.Context(), `SELECT p.account_id, p.new_device_id, p.creator_device_id,
+		p.pending_name_ciphertext, p.secret_hash, p.pending_ed25519_public_key, p.pending_x25519_public_key,
+		d.ed25519_public_key, d.x25519_public_key, p.encrypted_keyring, p.expires_at,
+		COALESCE(p.claim_expires_at, 0), p.state
+		FROM pairings p JOIN devices d ON d.id = p.creator_device_id AND d.account_id = p.account_id
+		WHERE p.id = ? AND p.state IN ('approved', 'claimed')`, pairingID).
+		Scan(&accountID, &deviceID, &creatorDeviceID, &nameCiphertext, &expected, &edKey, &xKey,
+			&creatorEdKey, &creatorXKey, &encryptedKeyring, &expiresAt, &claimExpiresAt, &state)
+	if err != nil || !constantTimeEqual(expected, verifier) {
 		writeError(w, http.StatusUnauthorized, "invalid_or_expired_pairing")
 		return
 	}
-	deviceToken, err := randomSecret(32)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "random_source_unavailable")
+	if state == "approved" && (claimExpiresAt == 0 || claimExpiresAt <= s.now().UnixMilli()) {
+		writeError(w, http.StatusUnauthorized, "invalid_or_expired_pairing")
 		return
 	}
-	if _, err = tx.ExecContext(r.Context(), `INSERT INTO devices(id, account_id, name_ciphertext, token_hash, ed25519_public_key, x25519_public_key, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`, deviceID, accountID, nameCiphertext, digest(deviceToken), edKey, xKey, s.now().UnixMilli()); err == nil {
-		_, err = tx.ExecContext(r.Context(), "UPDATE pairings SET state = 'claimed', claimed_at = ? WHERE id = ? AND state = 'approved'", s.now().UnixMilli(), pairingID)
+	claimMessage, err := canonicalPairingClaimMessage(pairingID, accountID, creatorDeviceID, deviceID,
+		creatorEdKey, edKey, creatorXKey, xKey, input.DeviceToken)
+	if err != nil || !ed25519.Verify(ed25519.PublicKey(edKey), claimMessage, claimProof) {
+		writeError(w, http.StatusUnauthorized, "invalid_pairing_claim_proof")
+		return
+	}
+	if state == "approved" {
+		var result sql.Result
+		result, err = tx.ExecContext(r.Context(), `INSERT INTO devices(id, account_id, name_ciphertext, token_hash,
+			ed25519_public_key, x25519_public_key, created_at)
+			SELECT ?, ?, ?, ?, ?, ?, ?
+			WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) = 1`,
+			deviceID, accountID, nameCiphertext, digest(input.DeviceToken), edKey, xKey,
+			s.now().UnixMilli(), accountID)
+		if err == nil {
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				writeError(w, http.StatusConflict, "device_limit_reached")
+				return
+			}
+			now := s.now()
+			_, err = tx.ExecContext(r.Context(), `UPDATE pairings SET state = 'claimed', claimed_at = ?, ready_expires_at = ?
+				WHERE id = ? AND state = 'approved'`, now.UnixMilli(), now.Add(pairingClaimLifetime).UnixMilli(), pairingID)
+		}
+	} else {
+		var tokenHash []byte
+		err = tx.QueryRowContext(r.Context(), `SELECT token_hash FROM devices
+			WHERE id = ? AND account_id = ? AND revoked_at IS NULL`, deviceID, accountID).Scan(&tokenHash)
+		if err == nil && !constantTimeEqual(tokenHash, digest(input.DeviceToken)) {
+			writeError(w, http.StatusConflict, "pairing_claim_conflict")
+			return
+		}
 	}
 	if err != nil || tx.Commit() != nil {
 		writeError(w, http.StatusConflict, "pairing_already_claimed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"account_id": accountID, "device_id": deviceID, "device_token": deviceToken,
+		"account_id": accountID, "device_id": deviceID, "device_token": input.DeviceToken,
 		"encrypted_keyring": base64.RawURLEncoding.EncodeToString(encryptedKeyring),
 	})
+}
+
+// readyPairing is the joining device's durable-local-commit acknowledgement.
+// The ordinary device bearer remains blocked from every normal account API
+// until the creator subsequently finalizes the signed roster.
+func (s *Server) readyPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
+	if !validID(pairingID) {
+		writeError(w, http.StatusNotFound, "pairing_not_found")
+		return
+	}
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication_required")
+		return
+	}
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	var state string
+	var readyAt, finalizedAt sql.NullInt64
+	var readyExpiresAt int64
+	err = tx.QueryRowContext(r.Context(), `SELECT p.state, p.ready_at, p.finalized_at,
+		COALESCE(p.ready_expires_at, 0) FROM pairings p
+		JOIN devices d ON d.id = p.new_device_id AND d.account_id = p.account_id
+		WHERE p.id = ? AND p.state = 'claimed' AND d.revoked_at IS NULL AND d.token_hash = ?`,
+		pairingID, digest(token)).Scan(&state, &readyAt, &finalizedAt, &readyExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusUnauthorized, "invalid_device_token")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if finalizedAt.Valid {
+		if err := tx.Commit(); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"state": "finalized"})
+		return
+	}
+	if !readyAt.Valid {
+		if readyExpiresAt == 0 || readyExpiresAt <= s.now().UnixMilli() {
+			writeError(w, http.StatusConflict, "pairing_ready_window_expired")
+			return
+		}
+		if _, err := tx.ExecContext(r.Context(), `UPDATE pairings SET ready_at = ?
+			WHERE id = ? AND state = 'claimed' AND ready_at IS NULL AND finalized_at IS NULL`,
+			s.now().UnixMilli(), pairingID); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"state": "ready"})
+}
+
+func (s *Server) finalizePairing(w http.ResponseWriter, r *http.Request, pairingID string) {
+	identity := mustIdentity(r)
+	if !validID(pairingID) {
+		writeError(w, http.StatusNotFound, "pairing_not_found")
+		return
+	}
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	result, err := s.db.ExecContext(r.Context(), `UPDATE pairings SET finalized_at = COALESCE(finalized_at, ?)
+		WHERE id = ? AND account_id = ? AND creator_device_id = ? AND state = 'claimed' AND ready_at IS NOT NULL`,
+		s.now().UnixMilli(), pairingID, identity.AccountID, identity.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		writeError(w, http.StatusConflict, "pairing_not_ready_to_finalize")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"state": "finalized"})
+}
+
+// cancelPairing keeps the creator's trust roster self-only. It is allowed
+// before the joining device reports a durable local commit; after ready, only
+// creator finalization or the joining rollback capability may progress state.
+func (s *Server) cancelPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
+	identity := mustIdentity(r)
+	if !validID(pairingID) {
+		writeError(w, http.StatusNotFound, "pairing_not_found")
+		return
+	}
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	var state, deviceID string
+	var rollbackHash []byte
+	var joinMaterialBytes int
+	var readyAt, finalizedAt sql.NullInt64
+	err = tx.QueryRowContext(r.Context(), `SELECT state, COALESCE(new_device_id, ''), rollback_hash,
+		COALESCE(length(pending_name_ciphertext), 0) + COALESCE(length(pending_ed25519_public_key), 0) +
+		COALESCE(length(pending_x25519_public_key), 0) + COALESCE(length(pending_join_proof), 0) +
+		COALESCE(length(encrypted_keyring), 0), ready_at, finalized_at
+		FROM pairings WHERE id = ? AND account_id = ? AND creator_device_id = ?`,
+		pairingID, identity.AccountID, identity.ID).
+		Scan(&state, &deviceID, &rollbackHash, &joinMaterialBytes, &readyAt, &finalizedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if readyAt.Valid || finalizedAt.Valid {
+		writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+		return
+	}
+	needsTombstone := state == "joined" || state == "approved" || state == "claimed"
+	switch state {
+	case "created":
+		if deviceID != "" || len(rollbackHash) != 0 || joinMaterialBytes != 0 {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+	case "joined", "approved":
+		if !validID(deviceID) || len(rollbackHash) != sha256.Size {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+		var existingDevice int
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices WHERE id = ?`, deviceID).
+			Scan(&existingDevice); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if existingDevice != 0 {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+	case "claimed":
+		if !validID(deviceID) || len(rollbackHash) != sha256.Size {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+		var unsafeWrites int
+		if err := tx.QueryRowContext(r.Context(), `SELECT
+			(SELECT COUNT(*) FROM envelopes WHERE account_id = ? AND device_id = ?) +
+			(SELECT COUNT(*) FROM keyrings WHERE account_id = ? AND writer_device_id = ?) +
+			(SELECT COUNT(*) FROM pairings WHERE account_id = ? AND creator_device_id = ?)`,
+			identity.AccountID, deviceID, identity.AccountID, deviceID,
+			identity.AccountID, deviceID).Scan(&unsafeWrites); err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if unsafeWrites != 0 {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+	default:
+		writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+		return
+	}
+	if needsTombstone {
+		found, matches, tombstoneErr := deviceRollbackTombstoneStatus(r.Context(), tx,
+			identity.AccountID, deviceID, pairingID, rollbackHash)
+		if tombstoneErr != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if found && !matches {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+		if !found {
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO device_rollback_tombstones(
+				account_id, device_id, pairing_id, rollback_hash) VALUES(?, ?, ?, ?)`,
+				identity.AccountID, deviceID, pairingID, rollbackHash); err != nil {
+				writeError(w, http.StatusInternalServerError, "database_error")
+				return
+			}
+		}
+	}
+	var result sql.Result
+	if state == "created" {
+		result, err = tx.ExecContext(r.Context(), `DELETE FROM pairings
+			WHERE id = ? AND account_id = ? AND creator_device_id = ? AND state = 'created'
+			  AND new_device_id IS NULL AND rollback_hash IS NULL AND ready_at IS NULL AND finalized_at IS NULL`,
+			pairingID, identity.AccountID, identity.ID)
+	} else {
+		result, err = tx.ExecContext(r.Context(), `DELETE FROM pairings
+			WHERE id = ? AND account_id = ? AND creator_device_id = ? AND state = ?
+			  AND new_device_id = ? AND rollback_hash = ? AND ready_at IS NULL AND finalized_at IS NULL`,
+			pairingID, identity.AccountID, identity.ID, state, deviceID, rollbackHash)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+		return
+	}
+	if state == "claimed" {
+		result, err = tx.ExecContext(r.Context(), `DELETE FROM devices
+			WHERE id = ? AND account_id = ? AND revoked_at IS NULL`, deviceID, identity.AccountID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database_error")
+			return
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			writeError(w, http.StatusConflict, "pairing_cancel_not_safe")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Envelope is the JSON transport form of protocol.Header plus opaque payload.
@@ -571,6 +1561,61 @@ type Header struct {
 	DeviceSeq    uint64 `cbor:"6,keyasint"`
 	PreviousHash []byte `cbor:"7,keyasint,omitempty"`
 	Nonce        []byte `cbor:"8,keyasint"`
+}
+
+type pairingTranscript struct {
+	PairingID               []byte `cbor:"1,keyasint"`
+	AccountID               []byte `cbor:"2,keyasint"`
+	CreatorDeviceID         []byte `cbor:"3,keyasint"`
+	JoiningDeviceID         []byte `cbor:"4,keyasint"`
+	CreatorEd25519PublicKey []byte `cbor:"5,keyasint"`
+	JoiningEd25519PublicKey []byte `cbor:"6,keyasint"`
+	CreatorX25519PublicKey  []byte `cbor:"7,keyasint"`
+	JoiningX25519PublicKey  []byte `cbor:"8,keyasint"`
+}
+
+func canonicalPairingClaimMessage(pairingID, accountID, creatorDeviceID, joiningDeviceID string,
+	creatorEdKey, joiningEdKey, creatorXKey, joiningXKey []byte, deviceToken string) ([]byte, error) {
+	decodeID := func(value string) ([]byte, error) {
+		if !validID(value) {
+			return nil, errors.New("invalid pairing transcript identifier")
+		}
+		return hex.DecodeString(value)
+	}
+	pairingBytes, err := decodeID(pairingID)
+	if err != nil {
+		return nil, err
+	}
+	accountBytes, err := decodeID(accountID)
+	if err != nil {
+		return nil, err
+	}
+	creatorBytes, err := decodeID(creatorDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	joiningBytes, err := decodeID(joiningDeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if len(creatorEdKey) != ed25519.PublicKeySize || len(joiningEdKey) != ed25519.PublicKeySize ||
+		len(creatorXKey) != 32 || len(joiningXKey) != 32 {
+		return nil, errors.New("invalid pairing transcript key")
+	}
+	encoded, err := canonicalCBOR.Marshal(pairingTranscript{
+		PairingID: pairingBytes, AccountID: accountBytes, CreatorDeviceID: creatorBytes, JoiningDeviceID: joiningBytes,
+		CreatorEd25519PublicKey: creatorEdKey, JoiningEd25519PublicKey: joiningEdKey,
+		CreatorX25519PublicKey: creatorXKey, JoiningX25519PublicKey: joiningXKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	tokenHash := sha256.Sum256([]byte(deviceToken))
+	message := make([]byte, 0, len(encoded)+len(tokenHash)+32)
+	message = append(message, []byte("yunpin-pairing-claim-v2\x00")...)
+	message = append(message, encoded...)
+	message = append(message, tokenHash[:]...)
+	return message, nil
 }
 
 type decodedEnvelope struct {
@@ -816,6 +1861,14 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revokeDevice(w http.ResponseWriter, r *http.Request, deviceID string) {
 	identity := mustIdentity(r)
+	// General roster mutation is not exposed until signed roster replacement is
+	// synchronized end to end. Failed, not-yet-finalized joins use the dedicated
+	// rollback capability instead.
+	if !twoDeviceRevocationEnabled {
+		writeError(w, http.StatusConflict, "device_revocation_not_available_in_two_device_preview")
+		return
+	}
+
 	if deviceID == identity.ID {
 		writeError(w, http.StatusConflict, "cannot_revoke_current_device")
 		return
@@ -864,7 +1917,7 @@ func (s *Server) putKeyring(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ciphertext, err := decodeSealedBoxWire(input.Ciphertext)
-	if err != nil || input.Epoch < 1 {
+	if err != nil || input.Epoch < 1 || (!identity.AccountSealed && input.Epoch != 1) {
 		writeError(w, http.StatusBadRequest, "invalid_keyring")
 		return
 	}
@@ -885,30 +1938,64 @@ func (s *Server) putKeyring(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.authenticateDevice(false, next)
+}
+
+// requireProvisioningAuth permits a still-unsealed first device only for the
+// keyring and seal steps. Every normal sync, roster, and pairing endpoint uses
+// requireAuth and therefore rejects an incomplete account.
+func (s *Server) requireProvisioningAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.authenticateDevice(true, next)
+}
+
+func (s *Server) authenticateDevice(allowUnsealed bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") || strings.Contains(header[7:], " ") {
-			writeError(w, http.StatusUnauthorized, "authentication_required")
-			return
-		}
-		token := strings.TrimSpace(header[7:])
-		if token == "" {
+		token, ok := bearerToken(r)
+		if !ok {
 			writeError(w, http.StatusUnauthorized, "authentication_required")
 			return
 		}
 		var identity deviceIdentity
 		var edKey, xKey []byte
-		err := s.db.QueryRowContext(r.Context(), `SELECT id, account_id, ed25519_public_key, x25519_public_key, created_at
-			FROM devices WHERE token_hash = ? AND revoked_at IS NULL`, digest(token)).
-			Scan(&identity.ID, &identity.AccountID, &edKey, &xKey, &identity.CreatedUnix)
+		var sealed, expires sql.NullInt64
+		var pairingFinalized bool
+		err := s.db.QueryRowContext(r.Context(), `SELECT d.id, d.account_id, d.ed25519_public_key,
+			d.x25519_public_key, d.created_at, a.provisioning_sealed_at, a.provisioning_expires_at,
+			(NOT EXISTS (SELECT 1 FROM pairings p WHERE p.account_id = d.account_id AND p.new_device_id = d.id AND p.state = 'claimed')
+			 OR EXISTS (SELECT 1 FROM pairings p WHERE p.account_id = d.account_id AND p.new_device_id = d.id
+			             AND p.state = 'claimed' AND p.finalized_at IS NOT NULL))
+			FROM devices d JOIN accounts a ON a.id = d.account_id
+			WHERE d.token_hash = ? AND d.revoked_at IS NULL`, digest(token)).
+			Scan(&identity.ID, &identity.AccountID, &edKey, &xKey, &identity.CreatedUnix, &sealed, &expires, &pairingFinalized)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid_device_token")
+			return
+		}
+		identity.AccountSealed = sealed.Valid
+		if !identity.AccountSealed && (!allowUnsealed || !expires.Valid || expires.Int64 <= s.now().UnixMilli()) {
+			writeError(w, http.StatusConflict, "account_provisioning_incomplete")
+			return
+		}
+		if !pairingFinalized {
+			writeError(w, http.StatusConflict, "pairing_finalization_pending")
 			return
 		}
 		identity.Ed25519Key = ed25519.PublicKey(edKey)
 		identity.X25519Key = xKey
 		next(w, r.WithContext(context.WithValue(r.Context(), identityKey, identity)))
 	}
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "", false
+	}
+	token := header[len("Bearer "):]
+	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, " \t\r\n") {
+		return "", false
+	}
+	return token, true
 }
 
 func mustIdentity(r *http.Request) deviceIdentity {
@@ -1044,6 +2131,29 @@ func digestBytes(value []byte) []byte {
 	return sum[:]
 }
 
+func constantTimeEqual(left, right []byte) bool {
+	return len(left) == len(right) && subtle.ConstantTimeCompare(left, right) == 1
+}
+
+func decodeCanonicalSecret(value string, size int) ([]byte, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(decoded) != size || base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return nil, errors.New("invalid secret")
+	}
+	return decoded, nil
+}
+
+func validateProvisioningIdentity(accountID, deviceID, deviceToken string) (string, error) {
+	if !validID(accountID) || !validID(deviceID) || accountID == deviceID ||
+		accountID == strings.Repeat("0", 32) || deviceID == strings.Repeat("0", 32) {
+		return "", errors.New("invalid provisioning identifier")
+	}
+	if _, err := decodeCanonicalSecret(deviceToken, 32); err != nil {
+		return "", err
+	}
+	return deviceToken, nil
+}
+
 func randomID(bytes int) (string, error) {
 	buffer := make([]byte, bytes)
 	if _, err := rand.Read(buffer); err != nil {
@@ -1064,8 +2174,8 @@ func validID(value string) bool {
 	if len(value) != 32 {
 		return false
 	}
-	_, err := hex.DecodeString(value)
-	return err == nil
+	decoded, err := hex.DecodeString(value)
+	return err == nil && hex.EncodeToString(decoded) == value
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
@@ -1120,10 +2230,16 @@ func routeLabel(path string) string {
 	switch {
 	case path == "/healthz":
 		return "/healthz"
+	case strings.HasPrefix(path, "/v1/auth/"):
+		return "/v1/auth"
+	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/claim"):
+		return "/v1/accounts/:id/claim"
 	case path == "/v1/accounts":
 		return "/v1/accounts"
-	case strings.HasPrefix(path, "/v1/accounts/"):
+	case strings.HasPrefix(path, "/v1/accounts/") && strings.HasSuffix(path, "/recover"):
 		return "/v1/accounts/:id/recover"
+	case strings.HasPrefix(path, "/v1/accounts/"):
+		return "/v1/accounts/:id"
 	case path == "/v1/pairings":
 		return "/v1/pairings"
 	case strings.HasPrefix(path, "/v1/pairings/") && strings.HasSuffix(path, "/approve"):

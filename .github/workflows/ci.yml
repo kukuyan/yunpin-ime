@@ -55,6 +55,14 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: desktopagent/go.mod
+          cache-dependency-path: |
+            desktopagent/go.sum
+            syncclient/go.sum
+            localstore/go.sum
+            protocol/go.sum
       - name: Initialize pinned Windows sources
         shell: pwsh
         run: |
@@ -73,6 +81,9 @@ jobs:
           key: windows-client-${{ hashFiles('platform/windows/dependencies.lock.json') }}
       - name: Verify Windows integration source
         run: python -m unittest discover -s platform/windows/tests -p "test_*.py" -v
+      - name: Verify private snapshot E2E gate recovery fixtures
+        shell: pwsh
+        run: .\platform\windows\e2e\Test-Private-Snapshot-E2E.ps1
       - name: Build portable plugin tests with MSVC
         run: cmake -S librime-yunpin -B build/librime-yunpin-windows -A x64
       - run: cmake --build build/librime-yunpin-windows --config Release --parallel
@@ -80,6 +91,57 @@ jobs:
       - name: Build and package merged Weasel preview
         shell: pwsh
         run: .\platform\windows\scripts\Build-Preview.ps1
+      - name: Verify private Windows E2E artifact identity
+        shell: pwsh
+        run: |
+          $root = "build/windows/e2e-private/windows"
+          $metadata = Get-Content -LiteralPath (Join-Path $root "BUILD-METADATA.json") -Raw | ConvertFrom-Json
+          $publicOverlaySha = (Get-FileHash -Algorithm SHA256 -LiteralPath `
+            "platform/windows/rime/rime_ice.custom.yaml").Hash.ToLowerInvariant()
+          if ($metadata.schemaVersion -ne 2 -or
+              $metadata.repositoryCommit -cne $env:GITHUB_SHA -or
+              $metadata.buildTag -cne "yunpin_pairing_private" -or
+              $metadata.activationGate -cne "private-snapshot-e2e-only" -or
+              $metadata.sameRunPublicOverlay.relativePath -cne "platform/windows/rime/rime_ice.custom.yaml" -or
+              $metadata.sameRunPublicOverlay.sha256 -cne $publicOverlaySha -or
+              $metadata.overlayOnly -ne $true -or
+              $metadata.requiredHostCapability -cne "yunpin_learning_allowed" -or
+              $metadata.hostCapabilityProvided -ne $false -or
+              $metadata.realCandidateVisibilityClaimed -ne $false -or
+              $metadata.publicReleaseEligible -ne $false) {
+            throw "Windows private E2E artifact identity or release boundary differs"
+          }
+          $checksumPaths = @()
+          if (-not (Test-Path -LiteralPath (Join-Path $root ".yunpin-private-e2e-generated") -PathType Leaf)) {
+            throw "Windows private E2E generated-output marker is missing"
+          }
+          foreach ($line in Get-Content -LiteralPath (Join-Path $root "SHA256SUMS")) {
+            if ($line -notmatch '^([0-9a-f]{64})  (\.yunpin-private-e2e-generated|BUILD-METADATA\.json|yunpin-sync-agent\.exe|Private-Snapshot-E2E\.Common\.ps1|Enable-Private-Snapshot-E2E\.ps1|Disable-Private-Snapshot-E2E\.ps1|README\.md|licenses/[A-Za-z0-9_.@-]+)$') { throw "Malformed Windows E2E checksum row" }
+            $checksumPaths += $Matches[2]
+            $observed = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $root $Matches[2])).Hash.ToLowerInvariant()
+            if ($observed -cne $Matches[1]) { throw "Windows E2E artifact checksum mismatch" }
+          }
+          if ($checksumPaths -notcontains ".yunpin-private-e2e-generated" -or
+              $checksumPaths -notcontains "BUILD-METADATA.json" -or
+              $checksumPaths -notcontains "yunpin-sync-agent.exe" -or
+              $checksumPaths -notcontains "licenses/LICENSES.json" -or
+              $checksumPaths -notcontains "Private-Snapshot-E2E.Common.ps1" -or
+              $checksumPaths -notcontains "Enable-Private-Snapshot-E2E.ps1" -or
+              $checksumPaths -notcontains "Disable-Private-Snapshot-E2E.ps1" -or
+              $checksumPaths -notcontains "README.md" -or
+              (@($checksumPaths | Select-Object -Unique).Count -ne $checksumPaths.Count)) {
+            throw "Windows E2E checksum coverage differs"
+          }
+          $prefix = ([IO.Path]::GetFullPath($root)).TrimEnd("\") + "\"
+          $actualPaths = @(Get-ChildItem -LiteralPath $root -File -Recurse | Where-Object {
+            $_.Name -cne "SHA256SUMS"
+          } | ForEach-Object {
+            $_.FullName.Substring($prefix.Length).Replace("\", "/")
+          })
+          if ($actualPaths.Count -ne $checksumPaths.Count -or
+              @($actualPaths | Where-Object { $checksumPaths -cnotcontains $_ }).Count -ne 0) {
+            throw "Windows E2E SHA256SUMS does not cover the complete private artifact"
+          }
       - name: Bind Windows release metadata to tag commit
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -104,6 +166,14 @@ jobs:
             build/windows/artifacts/windows-release-metadata.json
           if-no-files-found: error
           retention-days: 7
+      - name: Upload private Windows E2E bundle only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: YunPin-Windows-private-pairing-E2E
+          path: build/windows/e2e-private/windows
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
 
   importer:
     name: importer-${{ matrix.os }}
@@ -188,6 +258,8 @@ jobs:
       - run: go test -race ./...
         if: runner.os != 'Windows'
         working-directory: desktopagent
+      - run: go test -tags yunpin_pairing_private ./...
+        working-directory: desktopagent
 
   protocol:
     name: protocol
@@ -258,11 +330,36 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: desktopagent/go.mod
+          cache-dependency-path: |
+            desktopagent/go.sum
+            syncclient/go.sum
+            localstore/go.sum
+            protocol/go.sum
       - run: sudo xcode-select --switch /Applications/Xcode_26.4.1.app
       - run: xcodebuild -version
       - run: cmake --version
       - run: make -C platform/macos test
       - run: make -C platform/macos dmg BUILD_ROOT=build/macos
+      - name: Verify private macOS E2E artifact identity
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("build/macos/e2e-private/macos")
+          metadata = json.loads((root / "BUILD-METADATA.json").read_text(encoding="utf-8"))
+          if metadata.get("repositoryCommit") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("macOS private E2E artifact commit differs")
+          if metadata.get("buildTag") != "yunpin_pairing_private":
+              raise SystemExit("macOS private E2E artifact build tag differs")
+          if metadata.get("publicReleaseEligible") is not False:
+              raise SystemExit("macOS private E2E artifact became release eligible")
+          PY
+          (cd build/macos/e2e-private/macos && shasum -a 256 -c SHA256SUMS)
       - name: Bind macOS release metadata to tag commit
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -281,6 +378,13 @@ jobs:
             build/macos/package/macos-release-metadata.json
           if-no-files-found: error
           retention-days: 7
+      - name: Upload private-pairing macOS E2E agent only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: YunPin-macOS-private-pairing-E2E
+          path: build/macos/e2e-private/macos
+          if-no-files-found: error
+          retention-days: 1
 
   required:
     name: required
