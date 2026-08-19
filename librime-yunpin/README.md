@@ -57,9 +57,14 @@ These session options suppress filtering and learning immediately:
 - `incognito_mode`
 - `yunpin_one_shot`, `one_shot_mode`, or `one_time_input`
 
-The Windows preview does not enable a real private snapshot until its TSF host
-can set those options from a verified secure-input signal and the service IPC
-has passed the local-user isolation gate.
+Filtering and learning additionally require the explicit
+`yunpin_learning_allowed` session option. The current Squirrel and Weasel
+patches set it when they establish an ordinary IME session, before applying
+per-application overrides; a configured client can therefore turn it off.
+The clean Windows public package still ships its private snapshot and session
+learning switches disabled, while an existing user-selected overlay is a
+separate deployment choice. The protected-mode options above always take
+precedence once supplied by the host.
 
 ## Schema
 

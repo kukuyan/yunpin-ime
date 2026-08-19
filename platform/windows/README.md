@@ -51,10 +51,11 @@ no `reset` and is included in `save_options`; Weasel still decides the scope of
 non-global option persistence, so it must not be described as a guaranteed
 machine-wide preference.
 
-`"yunpin/session_learning": false` is a separate Windows safety gate. Session
-correction stays disabled until TSF secure-input and authenticated IPC behavior
-has passed real-host testing; enabling the public short-input guard does not
-silently enable learning.
+`"yunpin/session_learning": false` remains a separate clean-install Windows
+gate. The Weasel service now opts each ordinary IME session into synchronized
+candidates before applying per-application overrides, but the public overlay
+does not silently enable private loading or learning. Existing user-selected
+overlay values are a deployment choice distinct from the package default.
 
 Automatic typing correction is fail-closed in this preview:
 
