@@ -444,7 +444,7 @@ class WindowsClientTests(unittest.TestCase):
             "function Preserve-YunPinBooleanOptIns",
             "$preservePrivateCandidates = Get-YunPinBooleanOptIn",
             "$preserveSessionLearning = Get-YunPinBooleanOptIn",
-            "[IO.File]::Replace($temporary, $Path, $null, $true)",
+            "[IO.File]::Replace($temporary, $Path, $metadataBackup, $true)",
         ):
             self.assertIn(marker, installer)
         self.assertLess(

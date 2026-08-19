@@ -206,12 +206,14 @@ function Preserve-YunPinBooleanOptIns {
         $content = [regex]::Replace($content, $falsePattern, '${prefix}true${suffix}')
     }
 
-    $temporary = $Path + '.preserve-' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $attempt = [guid]::NewGuid().ToString('N')
+    $temporary = $Path + '.preserve-' + $attempt + '.tmp'
+    $metadataBackup = $Path + '.preserve-' + $attempt + '.bak'
     try {
         [IO.File]::WriteAllText($temporary, $content, (New-Object Text.UTF8Encoding($false)))
-        [IO.File]::Replace($temporary, $Path, $null, $true)
+        [IO.File]::Replace($temporary, $Path, $metadataBackup, $true)
     } finally {
-        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $temporary, $metadataBackup -Force -ErrorAction SilentlyContinue
     }
     if (($PrivateCandidates -and -not (Get-YunPinBooleanOptIn -Path $Path -Name 'yunpin/enabled')) -or
         ($SessionLearning -and -not (Get-YunPinBooleanOptIn -Path $Path -Name 'yunpin/session_learning'))) {
