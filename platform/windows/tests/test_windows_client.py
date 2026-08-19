@@ -439,6 +439,22 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"Verify-SyncAgent.ps1"', installer)
         self.assertIn("-ExpectedSha256 $bundleManifest[$syncManifestPath]", installer)
         self.assertIn('syncAgentRegistration = "disabled"', installer)
+        for marker in (
+            "function Get-YunPinBooleanOptIn",
+            "function Preserve-YunPinBooleanOptIns",
+            "$preservePrivateCandidates = Get-YunPinBooleanOptIn",
+            "$preserveSessionLearning = Get-YunPinBooleanOptIn",
+            "[IO.File]::Replace($temporary, $Path, $null, $true)",
+        ):
+            self.assertIn(marker, installer)
+        self.assertLess(
+            installer.index("$preservePrivateCandidates = Get-YunPinBooleanOptIn"),
+            installer.index("Copy-OverlayWithBackup -SourceRoot"),
+        )
+        self.assertLess(
+            installer.index("Copy-OverlayWithBackup -SourceRoot"),
+            installer.index("Preserve-YunPinBooleanOptIns -Path"),
+        )
         self.assertNotIn('Enable-SyncAgent.ps1")', installer)
         self.assertIn('"support\\sync-agent\\Uninstall-SyncAgent.ps1"', uninstaller)
 

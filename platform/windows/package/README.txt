@@ -44,6 +44,10 @@ Security gates:
 
 The installer verifies every bundle file against MANIFEST.sha256, backs up
 overwritten Rime configuration files, and keeps existing user database files.
+When upgrading, it also preserves an existing explicit `yunpin/enabled: true`
+or `yunpin/session_learning: true` choice while taking all other settings from
+the newly verified overlay; a clean installation keeps both package defaults
+disabled.
 After an authorized private E2E procedure has completed endpoint, account,
 two-device pairing and Rime bridge setup, run
 `support\sync-agent\Enable-SyncAgent.ps1`; its redacted `resident-ready` gate
