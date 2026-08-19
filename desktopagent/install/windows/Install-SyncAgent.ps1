@@ -31,6 +31,7 @@ $bin = Join-Path $state "bin"
 $destination = Join-Path $bin "yunpin-sync-agent.exe"
 $temporary = Join-Path $bin (".yunpin-sync-agent-" + [guid]::NewGuid().ToString("N") + ".tmp")
 $backup = Join-Path $bin (".yunpin-sync-agent-" + [guid]::NewGuid().ToString("N") + ".rollback.exe")
+$replaceBackup = Join-Path $bin (".yunpin-sync-agent-" + [guid]::NewGuid().ToString("N") + ".replace-backup.exe")
 New-Item -ItemType Directory -Path $state, $bin -Force | Out-Null
 
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -74,7 +75,11 @@ try {
     Stop-InstalledAgent
     Copy-Item -LiteralPath $source -Destination $temporary
     if (Test-Path -LiteralPath $destination -PathType Leaf) {
-        [IO.File]::Replace($temporary, $destination, $null, $true)
+        # Windows PowerShell 5.1 on supported hosts rejects a null backup path
+        # for File.Replace.  Use a private same-directory metadata backup for
+        # the atomic replacement; the separately verified $backup remains the
+        # rollback source if a later registration step fails.
+        [IO.File]::Replace($temporary, $destination, $replaceBackup, $true)
     } else {
         [IO.File]::Move($temporary, $destination)
     }
@@ -136,6 +141,6 @@ try {
     }
     throw
 } finally {
-    Remove-Item -LiteralPath $temporary, $backup -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $temporary, $backup, $replaceBackup -Force -ErrorAction SilentlyContinue
 }
 Write-Host "Installed and locally verified YunPinSyncAgent; its scheduled task remains disabled until Enable-SyncAgent.ps1 is run after setup."
