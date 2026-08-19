@@ -87,14 +87,21 @@ try {
     $action = New-ScheduledTaskAction -Execute $destination -Argument "run --interval 1m"
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+    # The default Task Scheduler execution limit is 72 hours. A resident sync
+    # agent must not silently stop after that limit or when a workstation
+    # briefly reports battery/UPS power.
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     Disable-ScheduledTask -TaskName $taskName | Out-Null
     Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
     $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
     if ($registered.State.ToString() -cne "Disabled" -or
         $registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $destination -or
-        $registered.Actions[0].Arguments -cne "run --interval 1m") {
+        $registered.Actions[0].Arguments -cne "run --interval 1m" -or
+        [string]$registered.Settings.ExecutionTimeLimit -cne "PT0S" -or
+        $registered.Settings.DisallowStartIfOnBatteries -or
+        $registered.Settings.StopIfGoingOnBatteries) {
         throw "YunPin sync disabled background registration did not persist."
     }
     & $destination install-probe | Out-Null

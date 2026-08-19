@@ -22,6 +22,13 @@ phrase<TAB>pinyin<TAB>source<TAB>use_count[<TAB>pinned]
 ```
 
 `pinned` is optional and accepts `1`, `true`, `yes`, or `pinned`. A snapshot is
+backward compatible with older desktop builds: newly synchronized rows may use
+`synced_learning@<UTC-day>` as their source so current builds can rank a recent
+first selection ahead of stale frequency while older builds still treat it as
+an ordinary personal source. An optional sixth `last_used_day` column is also
+accepted by the shared/mobile loader.
+
+A snapshot is
 limited to 100,000 entries so the reviewed R0W Sogou vocabulary fits in one
 fully searchable index instead of a lossy hot/cold split. Invalid private rows
 are counted without logging the phrase or pinyin. If the file is absent or

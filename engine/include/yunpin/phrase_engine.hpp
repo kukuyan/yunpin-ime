@@ -15,6 +15,11 @@ namespace yunpin {
 // pinned phrases remain available from their ordinary two-letter initials.
 inline constexpr std::size_t kLongPhraseMinSyllables = 4;
 
+// A normal committed selection is enough to make a personal phrase eligible.
+// The background sync path uses the same threshold, so local recall and
+// cross-device recall cannot disagree about whether the first use counts.
+inline constexpr std::uint64_t kAutomaticLearningThreshold = 1;
+
 enum class PhraseOrigin : std::uint8_t {
   kBase,
   kPublic,
@@ -47,6 +52,10 @@ struct PhraseEntry {
   // available solely when its complete normalized code equals the literal
   // query; it never participates in full-prefix, initials or fuzzy matching.
   bool private_exact_code_only{false};
+  // UTC day of the latest committed use. Zero means the source predates
+  // recency tracking. It is compared only after source, match and explicit
+  // correction signals, so it cannot turn a fuzzy candidate into an exact one.
+  std::int64_t last_used_day{0};
 };
 
 struct Candidate {
@@ -60,6 +69,7 @@ struct Candidate {
   std::int64_t static_weight{0};
   bool pinned{false};
   std::int32_t correction_score{0};
+  std::int64_t last_used_day{0};
 
   [[nodiscard]] bool is_personal() const noexcept;
 };
