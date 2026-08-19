@@ -213,6 +213,8 @@ void TestSourcePrecedenceAndFirstPageQuota() {
 
 void TestLearningGateAndTombstones() {
   PhraseIndex index({
+      Entry("uncommitted", "未提交", "yun pin", PhraseOrigin::kPersonal,
+            0, 100, false, true),
       Entry("learned-once", "学习一次", "yun pin", PhraseOrigin::kPersonal,
             1, 100, false, true),
       Entry("learned-twice", "学习两次", "yun pin", PhraseOrigin::kPersonal,
@@ -221,10 +223,12 @@ void TestLearningGateAndTombstones() {
   });
 
   auto candidates = index.Query("yunpin");
-  Check(!ContainsId(candidates, "learned-once"),
-        "one-use automatically learned phrase must stay hidden");
+  Check(!ContainsId(candidates, "uncommitted"),
+        "an uncommitted learned phrase must stay hidden");
+  Check(ContainsId(candidates, "learned-once"),
+        "the first committed selection must be immediately eligible");
   Check(ContainsId(candidates, "learned-twice"),
-        "two-use automatically learned phrase must be eligible");
+        "later selections must remain eligible");
 
   Check(index.ApplyTombstone("learned-twice"),
         "known id should accept a tombstone");
@@ -233,6 +237,31 @@ void TestLearningGateAndTombstones() {
   candidates = index.Query("yunpin");
   Check(!ContainsId(candidates, "learned-twice"),
         "remove-wins tombstone must suppress a phrase");
+}
+
+void TestRecentCommittedUseBreaksFrequencyTiesWithoutOverridingIntent() {
+  PhraseEntry older =
+      Entry("older-frequent", "旧高频", "jing zhun", PhraseOrigin::kPersonal,
+            50, 100);
+  older.last_used_day = 20000;
+  PhraseEntry recent =
+      Entry("recent-once", "刚选一次", "jing zhun", PhraseOrigin::kPersonal,
+            1, 10, false, true);
+  recent.last_used_day = 21000;
+  PhraseIndex index({older, recent});
+
+  const auto candidates = index.Query("jingzhun");
+  Check(candidates.size() == 2 && candidates.front().id == "recent-once",
+        "a newly committed exact phrase must outrank stale frequency");
+
+  PhraseEntry recent_prefix =
+      Entry("recent-prefix", "近期前缀", "jing zhun xuan ci",
+            PhraseOrigin::kPersonal, 1, 10);
+  recent_prefix.last_used_day = 22000;
+  PhraseIndex exact_intent({older, recent_prefix});
+  const auto exact = exact_intent.Query("jingzhun");
+  Check(!exact.empty() && exact.front().id == "older-frequent",
+        "recency must not override exact full-pinyin intent");
 }
 
 void TestConcurrentQueriesAndTombstone() {
@@ -421,6 +450,7 @@ int main() {
     TestShortPrefixDoesNotInjectLongPhrases();
     TestSourcePrecedenceAndFirstPageQuota();
     TestLearningGateAndTombstones();
+    TestRecentCommittedUseBreaksFrequencyTiesWithoutOverridingIntent();
     TestConcurrentQueriesAndTombstone();
     TestNormalizationAndDeterminism();
     TestInvalidEntries();

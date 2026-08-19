@@ -1,11 +1,14 @@
-.PHONY: check test test-engine test-tools test-localstore-docker test-protocol-docker test-sync test-sync-docker test-integration-docker privacy-check license-check supply-chain-check interface-check
+.PHONY: check test test-engine test-mobile test-tools test-localstore-docker test-protocol-docker test-sync test-sync-docker test-integration-docker privacy-check license-check supply-chain-check interface-check
 
 check: test test-protocol-docker test-localstore-docker test-sync-docker test-integration-docker privacy-check license-check supply-chain-check interface-check
 
-test: test-engine test-tools
+test: test-engine test-mobile test-tools
 
 test-engine:
 	$(MAKE) -C engine test benchmark
+
+test-mobile:
+	$(MAKE) -C mobile test
 
 test-tools:
 	cd tools/importer && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py' -v

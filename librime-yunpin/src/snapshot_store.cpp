@@ -60,6 +60,37 @@ bool ParseCount(std::string_view text, std::uint64_t* count) {
   return true;
 }
 
+bool ParseLastUsedDay(std::string_view text, std::int64_t* day) {
+  if (text.empty() || day == nullptr) {
+    return false;
+  }
+  std::int64_t parsed = 0;
+  const char* begin = text.data();
+  const char* end = text.data() + text.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end || parsed < 0) {
+    return false;
+  }
+  *day = parsed;
+  return true;
+}
+
+bool ParseLearningSourceDay(std::string_view source, std::int64_t* day,
+                            bool* present) {
+  if (day == nullptr || present == nullptr) {
+    return false;
+  }
+  *day = 0;
+  *present = false;
+  constexpr std::string_view prefix = "synced_learning@";
+  if (source.size() < prefix.size() ||
+      source.substr(0, prefix.size()) != prefix) {
+    return true;
+  }
+  *present = true;
+  return ParseLastUsedDay(source.substr(prefix.size()), day) && *day > 0;
+}
+
 bool ParsePinned(std::string value) {
   value = LowerAscii(std::move(value));
   return value == "1" || value == "true" || value == "yes" ||
@@ -105,7 +136,9 @@ bool IsExpectedHeader(const std::vector<std::string>& fields) {
          fields[1] == "pinyin" && fields[2] == "source" &&
          fields[3] == "use_count" &&
          (fields.size() == 4 ||
-          (fields.size() == 5 && fields[4] == "pinned"));
+          (fields.size() == 5 && fields[4] == "pinned") ||
+          (fields.size() == 6 && fields[4] == "pinned" &&
+           fields[5] == "last_used_day"));
 }
 
 bool IsLegacyPrivateSnapshotToken(std::string_view syllable) {
@@ -143,7 +176,8 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
   if (!result.header_valid) {
     return result;
   }
-  const bool has_pinned = header.size() == 5;
+  const bool has_pinned = header.size() >= 5;
+  const bool has_last_used_day = header.size() == 6;
   const PinyinSegmenter segmenter;
   std::unordered_set<std::string> ids;
   ids.reserve(kMaxPrivateSnapshotEntries);
@@ -170,6 +204,9 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     }
 
     std::uint64_t use_count = 0;
+    std::int64_t last_used_day = 0;
+    std::int64_t source_last_used_day = 0;
+    bool source_has_last_used_day = false;
     const std::vector<std::string> syllables = SplitPinyin(fields[1]);
     bool all_syllables_valid = !syllables.empty();
     bool private_exact_code_only = false;
@@ -190,9 +227,18 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
       // gate instead of letting compatibility bypass the short-input guard.
       all_syllables_valid = false;
     }
-    if (!all_syllables_valid || !ParseCount(fields[3], &use_count)) {
+    if (!all_syllables_valid || !ParseCount(fields[3], &use_count) ||
+        !ParseLearningSourceDay(fields[2], &source_last_used_day,
+                                &source_has_last_used_day) ||
+        (has_last_used_day &&
+         !ParseLastUsedDay(fields[5], &last_used_day)) ||
+        (has_last_used_day && source_has_last_used_day &&
+         last_used_day != source_last_used_day)) {
       ++result.rejected_rows;
       continue;
+    }
+    if (!has_last_used_day && source_has_last_used_day) {
+      last_used_day = source_last_used_day;
     }
 
     const std::string id = StableId(fields[0], fields[1]);
@@ -209,8 +255,9 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     entry.use_count = use_count;
     entry.static_weight = 0;
     entry.pinned = has_pinned && ParsePinned(fields[4]);
-    entry.learned = use_count >= 2;
+    entry.learned = use_count >= kAutomaticLearningThreshold;
     entry.private_exact_code_only = private_exact_code_only;
+    entry.last_used_day = last_used_day;
     result.entries.push_back(std::move(entry));
     ++result.accepted_rows;
   }

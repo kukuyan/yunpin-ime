@@ -28,6 +28,10 @@
       {
         "path": "platform/patches/weasel/0006-yunpin-preserve-session-identity-across-maintenance.patch",
         "sha256": "a60fb96bf4ed34ecfeec1f4e5017b3d3f6ef48f549d2291594c791319c887b84"
+      },
+      {
+        "path": "platform/patches/weasel/0007-yunpin-enable-learning-in-ordinary-sessions.patch",
+        "sha256": "ca90510b9da30e13f0e015f26471c3a2e751ceacf1289b75b86cd625b41ec761"
       }
     ]
   },

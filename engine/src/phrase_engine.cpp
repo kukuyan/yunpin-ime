@@ -673,7 +673,8 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     const IndexedEntry& indexed = entries_[index];
     const PhraseEntry& entry = indexed.entry;
     if (tombstones_[index].load(std::memory_order_relaxed) ||
-        (entry.learned && !entry.pinned && entry.use_count < 2)) {
+        (entry.learned && !entry.pinned &&
+         entry.use_count < kAutomaticLearningThreshold)) {
       continue;
     }
 
@@ -723,7 +724,8 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
                                entry.static_weight,
                                entry.pinned,
                                correction_scores_[index].load(
-                                   std::memory_order_relaxed)});
+                                   std::memory_order_relaxed),
+                               entry.last_used_day});
   }
 
   std::sort(ranked.begin(), ranked.end(), [](const Candidate& left,
@@ -744,6 +746,9 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     }
     if (left.correction_score != right.correction_score) {
       return left.correction_score > right.correction_score;
+    }
+    if (left.last_used_day != right.last_used_day) {
+      return left.last_used_day > right.last_used_day;
     }
     if (left.use_count != right.use_count) {
       return left.use_count > right.use_count;

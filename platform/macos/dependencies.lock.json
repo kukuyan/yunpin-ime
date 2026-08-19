@@ -91,6 +91,10 @@
     {
       "path": "platform/patches/squirrel/0012-yunpin-defer-rime-notifications-outside-engine.patch",
       "sha256": "b81d4e8e71b5c798203736baad1818f773279a77ce48439a07a9414cf991905d"
+    },
+    {
+      "path": "platform/patches/squirrel/0013-yunpin-enable-learning-in-ordinary-sessions.patch",
+      "sha256": "45bd2fea65ef9a74bd30404f2b3313dd948d91fb64065d139edb26ac9212bcfe"
     }
   ],
   "archives": [

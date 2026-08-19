@@ -411,8 +411,9 @@ func (store *Store) loadByID(ctx context.Context, objectID []byte) (Phrase, bool
 	return phrase, true, err
 }
 
-// RecordSelection never writes anything for protected contexts. The second
-// explicit selection flips SyncEligible; the first remains device-local.
+// RecordSelection never writes anything for protected contexts. The first
+// explicit selection is immediately sync eligible and later selections
+// coalesce the same encrypted outbox record.
 func (store *Store) RecordSelection(ctx context.Context, phrase Phrase, learning LearningContext) (LearnResult, error) {
 	if learning.Disabled() {
 		return LearnResult{}, nil

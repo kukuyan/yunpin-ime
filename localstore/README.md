@@ -4,7 +4,7 @@ This Go reference implements the background persistence boundary shared by deskt
 
 The native clients will additionally use SQLCipher or platform-equivalent database protection and keep the two 256-bit keys in DPAPI/Credential Manager or Apple Keychain. The input key-event path never calls this package. A helper process reads/decrypts the database, builds an immutable index, and atomically swaps a new generation into the engine.
 
-`RecordSelection` suppresses password, private-mode and one-time contexts. One selection remains local; the second and later selections update a coalesced encrypted outbox event in the same SQLite transaction. Explicit saves and tombstones also enter that outbox immediately. Versioned acknowledgement cannot delete a newer coalesced count.
+`RecordSelection` suppresses password, private-mode and one-time contexts. The first committed selection creates a coalesced encrypted outbox event in the same SQLite transaction; later selections update that record. Explicit saves and tombstones also enter the outbox immediately. Versioned acknowledgement cannot delete a newer coalesced count.
 
 Synchronized clients open the database with `OpenForDevice` and a random 128-bit lowercase-hex device ID. Each encrypted phrase persists the actual `protocol.PhraseState`: usage is a per-device G-counter, pin state is HLC-LWW, and presence is a remove-wins generation. `Delete` writes a same-generation tombstone; ordinary selections refuse to mutate that tombstone; `SaveExplicit` is the only re-add path and increments the generation. The HLC wall/counter state is persisted in encrypted-store metadata and observes remote clocks before later local changes.
 

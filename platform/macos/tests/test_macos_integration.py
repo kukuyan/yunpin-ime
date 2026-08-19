@@ -74,7 +74,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(12, len(patches))
+        self.assertEqual(13, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -424,7 +424,20 @@ class MacOSIntegrationTests(unittest.TestCase):
             "favorites.jsonl",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, controller)
+                    self.assertNotIn(forbidden, controller)
+
+    def test_ordinary_squirrel_sessions_enable_synced_learning_before_app_overrides(self) -> None:
+        controller = (
+            self.prepared / "sources" / "SquirrelInputController.swift"
+        ).read_text(encoding="utf-8")
+        create_session = controller[
+            controller.index("  func createSession()") : controller.index(
+                "  func updateAppOptions()"
+            )
+        ]
+        marker = 'rimeAPI.set_option(session, "yunpin_learning_allowed", true)'
+        self.assertEqual(1, controller.count(marker))
+        self.assertLess(create_session.index(marker), create_session.index("updateAppOptions()"))
 
         filter_source = (ROOT / "librime-yunpin" / "src" / "rime_yunpin_filter.cpp").read_text(
             encoding="utf-8"

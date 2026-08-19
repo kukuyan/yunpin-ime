@@ -225,10 +225,11 @@ delete it.
 
 ## Remaining native acceptance gates
 
-Before a signed release, verify the merged filter and in-process correction
-through real InputMethodKit hosts. Connect encrypted SQLite/background snapshot
-refresh and habit reporting, strengthen host deletion/secure-context evidence,
-and keep private input suppressing both ranking and learning. Then test on real
+Before a signed release, keep verifying the merged filter and in-process
+correction through real InputMethodKit hosts. The preview now opts ordinary
+Squirrel sessions into synchronized candidates before per-application
+overrides, while protected-mode options still suppress ranking and learning.
+Strengthen field-level secure-context evidence and then test on real
 hardware in TextEdit, Safari, Office and Terminal, including native and Rosetta
 hosts, marked text, numbered selection, caret movement, dark/light candidate
 placement, secure text fields, sleep/login, upgrade and uninstall.
