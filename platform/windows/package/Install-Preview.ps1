@@ -163,6 +163,62 @@ function Copy-OverlayWithBackup {
     }
 }
 
+function Get-YunPinBooleanOptIn {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $content = Get-Content -LiteralPath $Path -Raw
+    $key = [regex]::Escape($Name)
+    $truePattern = '(?m)^[ \t]*"' + $key + '"[ \t]*:[ \t]*true[ \t]*(?:#[^\r\n]*)?\r?$'
+    $falsePattern = '(?m)^[ \t]*"' + $key + '"[ \t]*:[ \t]*false[ \t]*(?:#[^\r\n]*)?\r?$'
+    return (
+        [regex]::Matches($content, $truePattern).Count -eq 1 -and
+        [regex]::Matches($content, $falsePattern).Count -eq 0
+    )
+}
+
+function Preserve-YunPinBooleanOptIns {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][bool]$PrivateCandidates,
+        [Parameter(Mandatory = $true)][bool]$SessionLearning
+    )
+    if (-not $PrivateCandidates -and -not $SessionLearning) {
+        return
+    }
+    $content = Get-Content -LiteralPath $Path -Raw
+    foreach ($choice in @(
+        @{ Name = 'yunpin/enabled'; Preserve = $PrivateCandidates },
+        @{ Name = 'yunpin/session_learning'; Preserve = $SessionLearning }
+    )) {
+        if (-not $choice.Preserve) {
+            continue
+        }
+        $key = [regex]::Escape([string]$choice.Name)
+        $falsePattern = '(?m)^(?<prefix>[ \t]*"' + $key + '"[ \t]*:[ \t]*)false(?<suffix>[ \t]*(?:#[^\r\n]*)?\r?)$'
+        if ([regex]::Matches($content, $falsePattern).Count -ne 1) {
+            throw "Packaged overlay does not contain one disabled $($choice.Name) setting."
+        }
+        $content = [regex]::Replace($content, $falsePattern, '${prefix}true${suffix}')
+    }
+
+    $temporary = $Path + '.preserve-' + [guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        [IO.File]::WriteAllText($temporary, $content, (New-Object Text.UTF8Encoding($false)))
+        [IO.File]::Replace($temporary, $Path, $null, $true)
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+    if (($PrivateCandidates -and -not (Get-YunPinBooleanOptIn -Path $Path -Name 'yunpin/enabled')) -or
+        ($SessionLearning -and -not (Get-YunPinBooleanOptIn -Path $Path -Name 'yunpin/session_learning'))) {
+        throw "Existing YunPin opt-in settings were not preserved."
+    }
+}
+
 if (-not $AcceptUnsignedDevelopmentBuild) {
     throw "This archive is unsigned and for development only. Re-run with -AcceptUnsignedDevelopmentBuild after reading README.txt."
 }
@@ -206,6 +262,9 @@ $backupRoot = Join-Path $InstallRoot "previous"
 $previous = Join-Path $backupRoot $timestamp
 $userBackup = Join-Path $UserDataRoot ("yunpin-preview-backups\" + $timestamp)
 New-Item -ItemType Directory -Path $InstallRoot, $backupRoot, $UserDataRoot -Force | Out-Null
+$existingRimeOverlay = Join-Path $UserDataRoot "rime_ice.custom.yaml"
+$preservePrivateCandidates = Get-YunPinBooleanOptIn -Path $existingRimeOverlay -Name 'yunpin/enabled'
+$preserveSessionLearning = Get-YunPinBooleanOptIn -Path $existingRimeOverlay -Name 'yunpin/session_learning'
 
 try {
     $supportRoot = Join-Path $InstallRoot "support"
@@ -237,6 +296,8 @@ try {
     Move-Item -LiteralPath $incoming -Destination $current
 
     Copy-OverlayWithBackup -SourceRoot (Join-Path $bundleRoot "rime-data") -DestinationRoot $UserDataRoot -BackupRoot $userBackup
+    Preserve-YunPinBooleanOptIns -Path (Join-Path $UserDataRoot "rime_ice.custom.yaml") `
+        -PrivateCandidates $preservePrivateCandidates -SessionLearning $preserveSessionLearning
 
     $setup = Join-Path $current "YunPinSetup.exe"
     $deployer = Join-Path $current "YunPinDeployer.exe"
