@@ -1,6 +1,6 @@
 # 云拼输入法（YunPin IME）
 
-云拼是一个隐私优先、可自托管同步的中文拼音输入法项目。目标平台是 Windows 10/11 与 macOS 13+；iOS 17+ 为第二阶段。界面采用简洁的横向编号候选窗，交互接近主流中文输入法，但不复制任何商业输入法的品牌、皮肤或专有资源。
+云拼是一个隐私优先、可自托管同步的中文拼音输入法项目。当前目标平台是 Windows 10/11 与 macOS 13+；Android 与 iOS 17+ 的共用候选核心已进入第二阶段开发。界面采用简洁的横向编号候选窗，交互接近主流中文输入法，但不复制任何商业输入法的品牌、皮肤或专有资源。
 
 > 当前状态：开发预览。仓库已经包含可运行的候选排序核心、离线词库迁移工具、密文同步服务、Rime 平台配置和自动化测试；尚未发布经签名的 Windows/macOS 安装器。
 
@@ -113,6 +113,7 @@ Copy-Item -LiteralPath "$PWD\platform\windows\rime\rime_ice.custom.yaml" -Destin
 ## 目录
 
 - `engine/`：Apache-2.0 共享候选召回与排名核心。
+- `mobile/`：Android/iOS 共用 C ABI 候选核心与平台实施路线。
 - `localstore/`：记录级加密 SQLite、本地学习阈值与快照生成参考。
 - `sync/`：Apache-2.0 Go 密文同步服务。
 - `integration/`：真实 `protocol.Seal/ToWire` 到同步 HTTP 接口的跨模块验收。

@@ -17,7 +17,10 @@ $taskName = "YunPinSyncAgent"
 if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw "Resident agent is absent." }
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 if ($registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $destination -or
-    $registered.Actions[0].Arguments -cne "run --interval 1m") {
+    $registered.Actions[0].Arguments -cne "run --interval 1m" -or
+    [string]$registered.Settings.ExecutionTimeLimit -cne "PT0S" -or
+    $registered.Settings.DisallowStartIfOnBatteries -or
+    $registered.Settings.StopIfGoingOnBatteries) {
     throw "Scheduled-task registration differs."
 }
 

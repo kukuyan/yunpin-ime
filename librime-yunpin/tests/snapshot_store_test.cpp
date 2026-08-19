@@ -73,6 +73,26 @@ void TestDuplicateSnapshotRowsAreRejectedBeforeIndexBuild() {
   assert(parsed.rejected_rows == 1);
 }
 
+void TestRecencyColumnIsParsedAndRanksAFirstUseImmediately() {
+  std::istringstream input(
+      "phrase\tpinyin\tsource\tuse_count\tpinned\n"
+      "旧高频\tjing zhun\tsynced_learning@20000\t50\tfalse\n"
+      "刚选一次\tjing zhun\tsynced_learning@21000\t1\tfalse\n"
+      "坏日期\tjing zhun\tsynced_learning@bad\t9\tfalse\n");
+  auto parsed = yunpin::ParsePrivateSnapshot(input);
+  assert(parsed.header_valid);
+  assert(parsed.accepted_rows == 2);
+  assert(parsed.rejected_rows == 1);
+  assert(parsed.entries[0].last_used_day == 20000);
+  assert(parsed.entries[1].last_used_day == 21000);
+
+  yunpin::SnapshotStore store;
+  store.Replace(std::move(parsed.entries));
+  const auto candidates = store.Query("jingzhun", 2);
+  assert(candidates.size() == 2);
+  assert(candidates.front().text == "刚选一次");
+}
+
 void TestLegacyPersonalSpellingsStaySnapshotLocal() {
   std::ostringstream snapshot;
   snapshot << "phrase\tpinyin\tsource\tuse_count\n"
@@ -248,6 +268,7 @@ int main() {
   TestImporterFormatAndPinnedLongPhrase();
   TestHeaderAndLimitsAreClosedByDefault();
   TestDuplicateSnapshotRowsAreRejectedBeforeIndexBuild();
+  TestRecencyColumnIsParsedAndRanksAFirstUseImmediately();
   TestLegacyPersonalSpellingsStaySnapshotLocal();
   TestRowsBeyondLegacyFiftyThousandLimitAreRetained();
   TestAtomicReplacementDuringQueries();

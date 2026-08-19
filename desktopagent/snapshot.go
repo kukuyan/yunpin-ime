@@ -37,11 +37,12 @@ type SnapshotSummary struct {
 }
 
 type snapshotRow struct {
-	Phrase   string
-	Pinyin   string
-	Source   string
-	UseCount uint64
-	Pinned   bool
+	Phrase      string
+	Pinyin      string
+	Source      string
+	UseCount    uint64
+	Pinned      bool
+	LastUsedDay int64
 }
 
 func validBaselinePinyin(value string) bool {
@@ -221,7 +222,7 @@ func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]s
 		if phrase.Deleted || phrase.UseCount == 0 || !validNativePhrase(phrase.Text) || !validNativePinyin(pinyin) {
 			continue
 		}
-		row := snapshotRow{Phrase: phrase.Text, Pinyin: pinyin, Source: "synced_learning", UseCount: phrase.UseCount, Pinned: phrase.Pinned}
+		row := snapshotRow{Phrase: phrase.Text, Pinyin: pinyin, Source: "synced_learning", UseCount: phrase.UseCount, Pinned: phrase.Pinned, LastUsedDay: phrase.LastUsedDay}
 		key := snapshotKey(row)
 		if _, found := baselinePhrases[protocol.CanonicalPhrase(row.Phrase)]; found {
 			// The reviewed static baseline is byte-semantic input, not learned
@@ -239,6 +240,9 @@ func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]s
 	sort.Slice(additions, func(left, right int) bool {
 		if additions[left].Pinned != additions[right].Pinned {
 			return additions[left].Pinned
+		}
+		if additions[left].LastUsedDay != additions[right].LastUsedDay {
+			return additions[left].LastUsedDay > additions[right].LastUsedDay
 		}
 		if additions[left].UseCount != additions[right].UseCount {
 			return additions[left].UseCount > additions[right].UseCount
@@ -261,10 +265,17 @@ func encodeSnapshot(rows []snapshotRow) ([]byte, error) {
 	output.WriteString(privateSnapshotHeader)
 	for _, row := range rows {
 		if !validNativePhrase(row.Phrase) || !validBaselinePinyin(row.Pinyin) ||
-			!validSnapshotSource(row.Source) || row.UseCount == 0 {
+			!validSnapshotSource(row.Source) || row.UseCount == 0 || row.LastUsedDay < 0 {
 			return nil, errors.New("snapshot row cannot be encoded safely")
 		}
-		fmt.Fprintf(&output, "%s\t%s\t%s\t%d\t%t\n", row.Phrase, row.Pinyin, row.Source, row.UseCount, row.Pinned)
+		source := row.Source
+		if row.LastUsedDay > 0 {
+			if source != "synced_learning" {
+				return nil, errors.New("only synchronized learning rows may encode recency")
+			}
+			source = fmt.Sprintf("synced_learning@%d", row.LastUsedDay)
+		}
+		fmt.Fprintf(&output, "%s\t%s\t%s\t%d\t%t\n", row.Phrase, row.Pinyin, source, row.UseCount, row.Pinned)
 	}
 	return output.Bytes(), nil
 }
