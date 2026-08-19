@@ -1,0 +1,35 @@
+From 2222222222222222222222222222222222222222 Mon Sep 17 00:00:00 2001
+From: YunPin contributors <noreply@yunpin.invalid>
+Date: Wed, 19 Aug 2026 06:21:00 -0700
+Subject: [PATCH] yunpin: enable learning in ordinary input sessions
+
+SPDX-License-Identifier: GPL-3.0-only
+
+Upstream-Base: rime/weasel@9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+
+Make the synchronized private snapshot and first-selection learning effective
+in ordinary Weasel sessions. Application options are applied afterwards and
+may still disable the capability for configured clients.
+---
+ RimeWithWeasel/RimeWithWeasel.cpp | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 4ce5d7e..e4a4380 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -501,6 +501,12 @@ void RimeWithWeaselHandler::_ReadClientInfo(WeaselSessionId ipc_id,
+   }
+   SessionStatus& session_status = get_session_status(ipc_id);
+   RimeSessionId session_id = session_status.session_id;
++  // YunPin's synchronized snapshot and first-use learning are opt-in at the
++  // Rime session boundary.  Weasel creates this session only for an active IME
++  // client; make ordinary desktop typing functional by default.  Application
++  // options are applied immediately afterwards and can explicitly disable the
++  // capability for a configured client.
++  rime_api->set_option(session_id, "yunpin_learning_allowed", True);
+   // set app specific options
+   if (!app_name.empty()) {
+     rime_api->set_property(session_id, "client_app", app_name.c_str());
+-- 
+2.50.1

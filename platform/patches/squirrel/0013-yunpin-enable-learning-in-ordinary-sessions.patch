@@ -1,0 +1,35 @@
+From 1111111111111111111111111111111111111111 Mon Sep 17 00:00:00 2001
+From: YunPin contributors <noreply@yunpin.invalid>
+Date: Wed, 19 Aug 2026 06:20:00 -0700
+Subject: [PATCH] yunpin: enable learning in ordinary input sessions
+
+SPDX-License-Identifier: GPL-3.0-only
+
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+
+Make the synchronized private snapshot and first-selection learning effective
+in ordinary Squirrel sessions. InputMethodKit owns secure-field suppression;
+per-application options are applied afterwards and may still disable it.
+---
+ sources/SquirrelInputController.swift | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index f5ead5d..45ea4aa 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -499,6 +499,12 @@ private extension SquirrelInputController {
+     schemaId = ""
+ 
+     if session != 0 {
++      // InputMethodKit removes third-party input methods from secure text
++      // contexts.  Ordinary Squirrel sessions explicitly opt in so YunPin's
++      // synchronized personal candidates and first-use learning are active
++      // during day-to-day typing.  Per-application options are applied next
++      // and may still turn the capability off for a configured client.
++      rimeAPI.set_option(session, "yunpin_learning_allowed", true)
+       updateAppOptions()
+     }
+   }
+-- 
+2.50.1
