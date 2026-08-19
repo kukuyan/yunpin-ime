@@ -156,6 +156,8 @@ func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *tes
 		"$previoustaskxml = export-scheduledtask",
 		"register-scheduledtask -taskname $taskname -xml $previoustaskxml",
 		"if ($previoustaskwasrunning)",
+		"[io.file]::replace($temporary, $destination, $replacebackup, $true)",
+		"remove-item -literalpath $temporary, $backup, $replacebackup",
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("Windows installer transactional boundary lacks %q", required)
@@ -165,6 +167,9 @@ func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *tes
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("Windows resident task uses a foreground command wrapper %q", forbidden)
 		}
+	}
+	if strings.Contains(lower, "[io.file]::replace($temporary, $destination, $null") {
+		t.Fatal("Windows installer still uses the unsupported null File.Replace backup path")
 	}
 }
 
