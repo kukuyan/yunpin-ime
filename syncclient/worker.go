@@ -68,6 +68,18 @@ type Result struct {
 	HasMore            bool
 }
 
+// UploadRejectionError is returned only for the relay's closed set of
+// fail-closed sequence-chain rejection codes. Callers can classify the error
+// without parsing or exposing transport text; the prepared upload remains
+// checkpointed for explicit diagnosis or repair.
+type UploadRejectionError struct {
+	Code string
+}
+
+func (err *UploadRejectionError) Error() string {
+	return "sync relay rejected the prepared upload"
+}
+
 func (worker *Worker) prepare(ctx context.Context, state localstore.SyncState) (localstore.SyncState, error) {
 	if state.Prepared != nil {
 		return state, nil
@@ -203,7 +215,7 @@ func (worker *Worker) SyncOnce(ctx context.Context) (Result, error) {
 			return Result{}, errors.New("sync relay both accepted and rejected one upload")
 		}
 		if seenRejected {
-			return Result{}, fmt.Errorf("prepared upload rejected: %s", response.RejectedSequences[0].Code)
+			return Result{}, &UploadRejectionError{Code: response.RejectedSequences[0].Code}
 		}
 		if !accepted {
 			return Result{}, errors.New("sync relay did not acknowledge the prepared upload")

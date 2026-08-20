@@ -18,12 +18,21 @@ namespace {
 constexpr std::size_t kMaxSnapshotBytes = 64U << 20;
 constexpr std::size_t kMaxInputBytes = 256;
 constexpr std::size_t kMaxCandidates = 8;
+constexpr std::uint32_t kKnownContextFlags =
+    YUNPIN_MOBILE_CONTEXT_PASSWORD | YUNPIN_MOBILE_CONTEXT_PRIVATE_MODE |
+    YUNPIN_MOBILE_CONTEXT_ONE_TIME_INPUT |
+    YUNPIN_MOBILE_CONTEXT_NO_PERSONALIZED_LEARNING |
+    YUNPIN_MOBILE_CONTEXT_SHARED_SNAPSHOT_UNAVAILABLE;
 
 }  // namespace
 
 struct YunPinMobileEngine {
   yunpin::SnapshotStore store;
 };
+
+extern "C" std::uint32_t yunpin_mobile_abi_version(void) {
+  return YUNPIN_MOBILE_ABI_VERSION;
+}
 
 extern "C" YunPinMobileEngine* yunpin_mobile_engine_create(void) {
   try {
@@ -59,7 +68,9 @@ extern "C" YunPinMobileStatus yunpin_mobile_engine_load_snapshot(
     if (rejected_rows) {
       *rejected_rows = parsed.rejected_rows;
     }
-    if (!parsed.header_valid) {
+    // Mobile publication is all-or-nothing: a malformed/duplicate row must
+    // not silently replace the last-known-good immutable index with a subset.
+    if (!parsed.header_valid || parsed.rejected_rows != 0) {
       return YUNPIN_MOBILE_INVALID_SNAPSHOT;
     }
     engine->store.Replace(std::move(parsed.entries));
@@ -71,14 +82,19 @@ extern "C" YunPinMobileStatus yunpin_mobile_engine_load_snapshot(
 
 extern "C" YunPinMobileStatus yunpin_mobile_engine_query(
     YunPinMobileEngine* engine, const char* input, std::size_t input_size,
-    std::size_t limit, YunPinMobileCandidateCallback callback, void* context,
+    std::size_t limit, std::uint32_t context_flags,
+    YunPinMobileCandidateCallback callback, void* context,
     std::size_t* returned_candidates) {
   if (returned_candidates) {
     *returned_candidates = 0;
   }
   if (!engine || !input || input_size == 0 || input_size > kMaxInputBytes ||
-      !callback || !returned_candidates || limit == 0) {
+      !callback || !returned_candidates || limit == 0 ||
+      (context_flags & ~kKnownContextFlags) != 0) {
     return YUNPIN_MOBILE_INVALID_ARGUMENT;
+  }
+  if (context_flags != YUNPIN_MOBILE_CONTEXT_NONE) {
+    return YUNPIN_MOBILE_OK;
   }
   try {
     const std::string_view query(input, input_size);

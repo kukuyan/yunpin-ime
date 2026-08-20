@@ -18,6 +18,7 @@ void Collect(void* context, const YunPinMobileCandidateView* candidate) {
 }  // namespace
 
 int main() {
+  assert(yunpin_mobile_abi_version() == YUNPIN_MOBILE_ABI_VERSION);
   YunPinMobileEngine* engine = yunpin_mobile_engine_create();
   assert(engine != nullptr);
 
@@ -37,7 +38,8 @@ int main() {
   std::size_t returned = 0;
   const std::string query = "shoucijizhu";
   assert(yunpin_mobile_engine_query(
-             engine, query.data(), query.size(), 8, Collect, &candidates,
+             engine, query.data(), query.size(), 8,
+             YUNPIN_MOBILE_CONTEXT_NONE, Collect, &candidates,
              &returned) == YUNPIN_MOBILE_OK);
   assert(returned == 1);
   assert(candidates.size() == 1);
@@ -50,10 +52,64 @@ int main() {
              &rejected) == YUNPIN_MOBILE_INVALID_SNAPSHOT);
   candidates.clear();
   assert(yunpin_mobile_engine_query(
-             engine, query.data(), query.size(), 8, Collect, &candidates,
+             engine, query.data(), query.size(), 8,
+             YUNPIN_MOBILE_CONTEXT_NONE, Collect, &candidates,
              &returned) == YUNPIN_MOBILE_OK);
   assert(returned == 1);
   assert(candidates.front() == "首次记住");
+
+  const std::string partially_invalid =
+      "phrase\tpinyin\tsource\tuse_count\tpinned\n"
+      "新的有效行\txin de you xiao hang\tsynced_learning\t2\tfalse\n"
+      "损坏行\tnot_a_valid_pinyin\tsynced_learning\t2\tfalse\n";
+  assert(yunpin_mobile_engine_load_snapshot(
+             engine,
+             reinterpret_cast<const std::uint8_t*>(partially_invalid.data()),
+             partially_invalid.size(), &accepted,
+             &rejected) == YUNPIN_MOBILE_INVALID_SNAPSHOT);
+  assert(accepted == 1);
+  assert(rejected == 1);
+  candidates.clear();
+  assert(yunpin_mobile_engine_query(
+             engine, query.data(), query.size(), 8,
+             YUNPIN_MOBILE_CONTEXT_NONE, Collect, &candidates,
+             &returned) == YUNPIN_MOBILE_OK);
+  assert(returned == 1);
+  assert(candidates.front() == "首次记住");
+
+  const std::string unsafe_text =
+      "phrase\tpinyin\tsource\tuse_count\tpinned\n"
+      "方向\xE2\x80\xAE控制\tfang xiang kong zhi\tsynced_learning\t2\tfalse\n";
+  assert(yunpin_mobile_engine_load_snapshot(
+             engine, reinterpret_cast<const std::uint8_t*>(unsafe_text.data()),
+             unsafe_text.size(), &accepted,
+             &rejected) == YUNPIN_MOBILE_INVALID_SNAPSHOT);
+  assert(accepted == 0);
+  assert(rejected == 1);
+
+  const std::string c1_control_text =
+      "phrase\tpinyin\tsource\tuse_count\tpinned\n"
+      "合成\xC2\x85控制\the cheng kong zhi\tsynced_learning\t2\tfalse\n";
+  assert(yunpin_mobile_engine_load_snapshot(
+             engine,
+             reinterpret_cast<const std::uint8_t*>(c1_control_text.data()),
+             c1_control_text.size(), &accepted,
+             &rejected) == YUNPIN_MOBILE_INVALID_SNAPSHOT);
+  assert(accepted == 0);
+  assert(rejected == 1);
+
+  candidates.clear();
+  assert(yunpin_mobile_engine_query(
+             engine, query.data(), query.size(), 8,
+             YUNPIN_MOBILE_CONTEXT_PASSWORD |
+                 YUNPIN_MOBILE_CONTEXT_NO_PERSONALIZED_LEARNING,
+             Collect, &candidates, &returned) == YUNPIN_MOBILE_OK);
+  assert(returned == 0);
+  assert(candidates.empty());
+
+  assert(yunpin_mobile_engine_query(
+             engine, query.data(), query.size(), 8, 1U << 31, Collect,
+             &candidates, &returned) == YUNPIN_MOBILE_INVALID_ARGUMENT);
 
   yunpin_mobile_engine_destroy(engine);
   return 0;
