@@ -82,6 +82,9 @@ jobs:
           key: windows-client-${{ hashFiles('platform/windows/dependencies.lock.json') }}
       - name: Verify Windows integration source
         run: python -m unittest discover -s platform/windows/tests -p "test_*.py" -v
+      - name: Verify installer UTF-8 opt-in preservation
+        shell: pwsh
+        run: .\platform\windows\tests\Test-Install-Preview-Utf8.ps1
       - name: Verify private snapshot E2E gate recovery fixtures
         shell: pwsh
         run: .\platform\windows\e2e\Test-Private-Snapshot-E2E.ps1
