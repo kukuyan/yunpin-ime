@@ -10,12 +10,23 @@ extern "C" {
 
 typedef struct YunPinMobileEngine YunPinMobileEngine;
 
+#define YUNPIN_MOBILE_ABI_VERSION 1U
+
 typedef enum YunPinMobileStatus {
   YUNPIN_MOBILE_OK = 0,
   YUNPIN_MOBILE_INVALID_ARGUMENT = 1,
   YUNPIN_MOBILE_INVALID_SNAPSHOT = 2,
   YUNPIN_MOBILE_RESOURCE_ERROR = 3,
 } YunPinMobileStatus;
+
+typedef enum YunPinMobileContextFlag {
+  YUNPIN_MOBILE_CONTEXT_NONE = 0,
+  YUNPIN_MOBILE_CONTEXT_PASSWORD = 1U << 0,
+  YUNPIN_MOBILE_CONTEXT_PRIVATE_MODE = 1U << 1,
+  YUNPIN_MOBILE_CONTEXT_ONE_TIME_INPUT = 1U << 2,
+  YUNPIN_MOBILE_CONTEXT_NO_PERSONALIZED_LEARNING = 1U << 3,
+  YUNPIN_MOBILE_CONTEXT_SHARED_SNAPSHOT_UNAVAILABLE = 1U << 4,
+} YunPinMobileContextFlag;
 
 typedef struct YunPinMobileCandidateView {
   const char* text;
@@ -32,6 +43,8 @@ typedef struct YunPinMobileCandidateView {
 typedef void (*YunPinMobileCandidateCallback)(
     void* context, const YunPinMobileCandidateView* candidate);
 
+uint32_t yunpin_mobile_abi_version(void);
+
 // Creates an empty, network-free candidate engine. The returned object is
 // shared by an Android InputMethodService or iOS keyboard extension, while the
 // containing app owns account login and background synchronization.
@@ -45,11 +58,13 @@ YunPinMobileStatus yunpin_mobile_engine_load_snapshot(
     YunPinMobileEngine* engine, const uint8_t* bytes, size_t size,
     size_t* accepted_rows, size_t* rejected_rows);
 
-// Invokes callback synchronously for at most eight bounded candidates. View
+// Invokes callback synchronously for at most eight bounded candidates. Any
+// protected-context flag fails closed with zero private candidates. View
 // pointers remain valid only for the duration of the callback.
 YunPinMobileStatus yunpin_mobile_engine_query(
     YunPinMobileEngine* engine, const char* input, size_t input_size,
-    size_t limit, YunPinMobileCandidateCallback callback, void* context,
+    size_t limit, uint32_t context_flags,
+    YunPinMobileCandidateCallback callback, void* context,
     size_t* returned_candidates);
 
 #ifdef __cplusplus

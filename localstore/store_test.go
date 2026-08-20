@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,6 +65,7 @@ func TestLearningThresholdAndProtectedContexts(t *testing.T) {
 
 	protected := []LearningContext{
 		{PasswordField: true}, {PrivateMode: true}, {OneTimeInput: true},
+		{NoPersonalizedLearning: true},
 	}
 	for _, learning := range protected {
 		result, err := store.RecordSelection(ctx, phrase, learning)
@@ -409,6 +411,45 @@ func TestCRDTOfflineMergeRemoveWinsAndExplicitReadd(t *testing.T) {
 	}
 	if len(snapshot.Phrases) != 1 || snapshot.Phrases[0].Deleted || snapshot.Phrases[0].UseCount != 6 {
 		t.Fatalf("materialized convergence mismatch: %#v", snapshot)
+	}
+}
+
+func TestRemotePayloadRejectsUnsafeOrOversizedContentBeforeMerge(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openDeviceStore(t, deviceA)
+	if err := store.SaveExplicit(ctx, Phrase{
+		Text: "合成远端校验", Pinyin: "he cheng yuan duan jiao yan", Source: "synthetic", UseCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base, err := onlyPending(t, store).ProtocolPayload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*PhrasePayload)
+	}{
+		{name: "oversized text", mutate: func(payload *PhrasePayload) { payload.Text = strings.Repeat("合", 513) }},
+		{name: "controlled pinyin", mutate: func(payload *PhrasePayload) { payload.Pinyin = "he cheng\n" }},
+		{name: "controlled source", mutate: func(payload *PhrasePayload) { payload.Source = "syn\tthetic" }},
+		{name: "c1 control text", mutate: func(payload *PhrasePayload) { payload.Text = "合成\u0085远端" }},
+		{name: "negative day", mutate: func(payload *PhrasePayload) { payload.LastUsedDay = -1 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := base
+			payload.State = clonePhraseState(base.State)
+			test.mutate(&payload)
+			objectID, err := protocol.OpaqueObjectID(store.idKey[:], payload.Text, payload.Pinyin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload.State.ObjectID = hex.EncodeToString(objectID[:])
+			if err := store.MergeRemotePayload(ctx, payload); err == nil {
+				t.Fatal("unsafe synthetic remote payload was accepted")
+			}
+		})
 	}
 }
 
