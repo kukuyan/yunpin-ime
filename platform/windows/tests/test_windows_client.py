@@ -440,6 +440,7 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("-ExpectedSha256 $bundleManifest[$syncManifestPath]", installer)
         self.assertIn('syncAgentRegistration = "disabled"', installer)
         for marker in (
+            "function Read-YunPinStrictUtf8File",
             "function Get-YunPinBooleanOptIn",
             "function Preserve-YunPinBooleanOptIns",
             "$preservePrivateCandidates = Get-YunPinBooleanOptIn",
@@ -447,6 +448,24 @@ class WindowsClientTests(unittest.TestCase):
             "[IO.File]::Replace($temporary, $Path, $metadataBackup, $true)",
         ):
             self.assertIn(marker, installer)
+        self.assertIn("New-Object Text.UTF8Encoding($false, $true)", installer)
+        self.assertIn("[IO.File]::ReadAllText($Path, $strictUtf8)", installer)
+        self.assertIn("contains the Unicode replacement character", installer)
+        self.assertIn(
+            "Read-YunPinStrictUtf8File -Path (Join-Path $bundleRoot",
+            installer,
+        )
+        self.assertNotIn("$content = Get-Content -LiteralPath $Path -Raw", installer)
+        utf8_fixture = (
+            WINDOWS / "tests" / "Test-Install-Preview-Utf8.ps1"
+        ).read_text(encoding="utf-8")
+        for evidence in (
+            "states: [拼音关, 拼音开]",
+            '"corrector": "［{comment}］"',
+            "Installer accepted malformed UTF-8",
+            "Installer accepted an already-corrupted replacement character",
+        ):
+            self.assertIn(evidence, utf8_fixture)
         self.assertLess(
             installer.index("$preservePrivateCandidates = Get-YunPinBooleanOptIn"),
             installer.index("Copy-OverlayWithBackup -SourceRoot"),

@@ -163,6 +163,22 @@ function Copy-OverlayWithBackup {
     }
 }
 
+function Read-YunPinStrictUtf8File {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+    try {
+        $content = [IO.File]::ReadAllText($Path, $strictUtf8)
+    } catch [Text.DecoderFallbackException] {
+        throw "YunPin text file is not valid UTF-8: $Path"
+    }
+    if ($content.Contains([char]0xfffd)) {
+        throw "YunPin text file contains the Unicode replacement character: $Path"
+    }
+    return $content
+}
+
 function Get-YunPinBooleanOptIn {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -171,7 +187,7 @@ function Get-YunPinBooleanOptIn {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return $false
     }
-    $content = Get-Content -LiteralPath $Path -Raw
+    $content = Read-YunPinStrictUtf8File -Path $Path
     $key = [regex]::Escape($Name)
     $truePattern = '(?m)^[ \t]*"' + $key + '"[ \t]*:[ \t]*true[ \t]*(?:#[^\r\n]*)?\r?$'
     $falsePattern = '(?m)^[ \t]*"' + $key + '"[ \t]*:[ \t]*false[ \t]*(?:#[^\r\n]*)?\r?$'
@@ -190,7 +206,7 @@ function Preserve-YunPinBooleanOptIns {
     if (-not $PrivateCandidates -and -not $SessionLearning) {
         return
     }
-    $content = Get-Content -LiteralPath $Path -Raw
+    $content = Read-YunPinStrictUtf8File -Path $Path
     foreach ($choice in @(
         @{ Name = 'yunpin/enabled'; Preserve = $PrivateCandidates },
         @{ Name = 'yunpin/session_learning'; Preserve = $SessionLearning }
@@ -210,7 +226,10 @@ function Preserve-YunPinBooleanOptIns {
     $temporary = $Path + '.preserve-' + $attempt + '.tmp'
     $metadataBackup = $Path + '.preserve-' + $attempt + '.bak'
     try {
-        [IO.File]::WriteAllText($temporary, $content, (New-Object Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText($temporary, $content, (New-Object Text.UTF8Encoding($false, $true)))
+        if ((Read-YunPinStrictUtf8File -Path $temporary) -cne $content) {
+            throw "UTF-8 overlay staging did not preserve the decoded configuration exactly."
+        }
         [IO.File]::Replace($temporary, $Path, $metadataBackup, $true)
     } finally {
         Remove-Item -LiteralPath $temporary, $metadataBackup -Force -ErrorAction SilentlyContinue
@@ -238,7 +257,7 @@ $metadata = Get-Content -LiteralPath (Join-Path $bundleRoot "BUILD-METADATA.json
 if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or $metadata.privateCandidateSnapshotEnabled -ne $false) {
     throw "Unexpected development-preview metadata"
 }
-$privateConfig = Get-Content -LiteralPath (Join-Path $bundleRoot "rime-data\rime_ice.custom.yaml") -Raw
+$privateConfig = Read-YunPinStrictUtf8File -Path (Join-Path $bundleRoot "rime-data\rime_ice.custom.yaml")
 if ($privateConfig -notmatch '(?m)^\s*"yunpin/enabled": false\s*$') {
     throw "Private candidate snapshot must remain disabled in this preview"
 }
