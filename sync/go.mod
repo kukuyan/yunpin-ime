@@ -3,7 +3,7 @@ module github.com/kukuyan/yunpin-ime/sync
 go 1.25.12
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.0
+	github.com/fxamacker/cbor/v2 v2.9.3
 	modernc.org/sqlite v1.39.1
 )
 
