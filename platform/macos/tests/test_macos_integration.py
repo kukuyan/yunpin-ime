@@ -446,6 +446,11 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("YunPinFavoriteCandidate", filter_source)
         self.assertNotIn("yunpin-search:", filter_source)
         self.assertNotIn("yunpin-fav:", filter_source)
+        self.assertIn(
+            "if ((enabled_ || session_learning_enabled_) && engine_ &&",
+            filter_source,
+        )
+        self.assertIn("IsLearnableCandidate(genuine)", filter_source)
 
     def test_reentrant_client_callbacks_hold_session_through_final_rime_use(self) -> None:
         controller = (

@@ -121,6 +121,8 @@ bool IsWordCandidateType(std::string_view type) noexcept {
          type == "user_table" || type == "completion";
 }
 
+using SessionRankingKey = std::pair<std::int32_t, std::uint64_t>;
+
 class YunPinCandidate : public SimpleCandidate {
  public:
   YunPinCandidate(std::string id,
@@ -137,6 +139,12 @@ class YunPinCandidate : public SimpleCandidate {
   std::string id_;
 };
 
+bool IsLearnableCandidate(const an<Candidate>& candidate) {
+  return candidate &&
+         (IsWordCandidateType(candidate->type()) ||
+          static_cast<bool>(As<YunPinCandidate>(candidate)));
+}
+
 // Ordering contract: bounded private phrases take the head of the list, then
 // the ordinary upstream translation. Expression actions are deliberately not
 // injected until a frontend can carry a typed, explicitly armed action without
@@ -147,8 +155,8 @@ class YunPinMergedTranslation : public Translation {
                           std::vector<of<Candidate>> front,
                           bool suppress_long_cjk_upstream,
                           bool protect_long_corrections,
-                          std::function<std::int32_t(std::string_view)>
-                              correction_score)
+                          std::function<SessionRankingKey(std::string_view)>
+                              ranking_key)
       : upstream_(std::move(upstream)),
         front_(std::move(front)),
         suppress_long_cjk_upstream_(suppress_long_cjk_upstream),
@@ -156,7 +164,9 @@ class YunPinMergedTranslation : public Translation {
     for (const auto& candidate : front_) {
       injected_text_.insert(candidate->text());
     }
-    PrepareUpstreamWindow(correction_score);
+    PrepareUpstreamWindow(ranking_key);
+    AlignInjectedCandidatesWithUpstream();
+    PromoteMostRecentSelection(ranking_key);
     RefreshExhausted();
   }
 
@@ -241,7 +251,7 @@ class YunPinMergedTranslation : public Translation {
   }
 
   void PrepareUpstreamWindow(
-      const std::function<std::int32_t(std::string_view)>& correction_score) {
+      const std::function<SessionRankingKey(std::string_view)>& ranking_key) {
     constexpr std::size_t kCandidatePageSize = 8;
     const std::size_t window_limit =
         front_.size() < kCandidatePageSize
@@ -257,6 +267,13 @@ class YunPinMergedTranslation : public Translation {
       // ProtectLongCorrections can choose at most one. Once this window has
       // been consumed, every later correction is dropped instead of leaking
       // onto another page.
+      if (candidate &&
+          injected_text_.find(candidate->text()) != injected_text_.end() &&
+          std::find(upstream_injected_order_.begin(),
+                    upstream_injected_order_.end(), candidate->text()) ==
+              upstream_injected_order_.end()) {
+        upstream_injected_order_.push_back(candidate->text());
+      }
       if (!Suppressed(candidate, false)) {
         upstream_window_.push_back(candidate);
       }
@@ -265,10 +282,62 @@ class YunPinMergedTranslation : public Translation {
     std::stable_sort(
         upstream_window_.begin(), upstream_window_.end(),
         [&](const of<Candidate>& left, const of<Candidate>& right) {
-          return correction_score(left->text()) > correction_score(right->text());
+          return ranking_key(left->text()) > ranking_key(right->text());
         });
     ProtectLongCorrections();
     SkipSuppressedUpstream();
+  }
+
+  void AlignInjectedCandidatesWithUpstream() {
+    // When every injected head candidate is also present in Rime's bounded
+    // first page, Rime has the freshest durable userdb evidence. Preserve the
+    // YunPin head slots but order those exact duplicates the same way instead
+    // of letting an older immutable snapshot mask Rime's learned choice.
+    if (front_.size() < 2 || upstream_injected_order_.size() < front_.size()) {
+      return;
+    }
+    for (const auto& candidate : front_) {
+      if (!candidate ||
+          std::find(upstream_injected_order_.begin(),
+                    upstream_injected_order_.end(), candidate->text()) ==
+              upstream_injected_order_.end()) {
+        return;
+      }
+    }
+    std::stable_sort(
+        front_.begin(), front_.end(),
+        [&](const of<Candidate>& left, const of<Candidate>& right) {
+          const auto left_order =
+              std::find(upstream_injected_order_.begin(),
+                        upstream_injected_order_.end(), left->text());
+          const auto right_order =
+              std::find(upstream_injected_order_.begin(),
+                        upstream_injected_order_.end(), right->text());
+          return left_order < right_order;
+        });
+  }
+
+  void PromoteMostRecentSelection(
+      const std::function<SessionRankingKey(std::string_view)>& ranking_key) {
+    const auto key_for = [&](const of<Candidate>& candidate) {
+      return candidate ? ranking_key(candidate->text()) : SessionRankingKey{};
+    };
+    std::stable_sort(front_.begin(), front_.end(),
+                     [&](const of<Candidate>& left,
+                         const of<Candidate>& right) {
+                       return key_for(left) > key_for(right);
+                     });
+
+    if (upstream_window_.empty()) {
+      return;
+    }
+    const SessionRankingKey front_key =
+        front_.empty() ? SessionRankingKey{} : key_for(front_.front());
+    const SessionRankingKey upstream_key = key_for(upstream_window_.front());
+    if (upstream_key > front_key && upstream_key != SessionRankingKey{}) {
+      front_.insert(front_.begin(), upstream_window_.front());
+      upstream_window_.erase(upstream_window_.begin());
+    }
   }
 
   void ProtectLongCorrections() {
@@ -323,6 +392,7 @@ class YunPinMergedTranslation : public Translation {
   an<Translation> upstream_;
   std::vector<of<Candidate>> front_;
   std::vector<of<Candidate>> upstream_window_;
+  std::vector<std::string> upstream_injected_order_;
   std::set<std::string> injected_text_;
   std::size_t front_cursor_{0};
   std::size_t window_cursor_{0};
@@ -391,7 +461,7 @@ class YunPinSessionLearningBridge {
     if (!candidate || segment.status < Segment::kSelected ||
         segment.start != 0 || segment.end != input.size() ||
         candidate->start() != 0 || candidate->end() != input.size() ||
-        !genuine || !IsWordCandidateType(genuine->type()) ||
+        !genuine || !IsLearnableCandidate(genuine) ||
         context->GetCommitText() != candidate->text()) {
       learning_.BreakAdjacency();
       return;
@@ -433,6 +503,11 @@ class YunPinSessionLearningBridge {
     return learning_.CorrectionScore(pinyin, phrase);
   }
 
+  [[nodiscard]] std::uint64_t SelectionOrder(
+      std::string_view pinyin, std::string_view phrase) const {
+    return learning_.SelectionOrder(pinyin, phrase);
+  }
+
   [[nodiscard]] std::vector<yunpin::HabitStat> QueryHabits(
       const yunpin::HabitQuery& query) const {
     return learning_.QueryHabits(query);
@@ -469,7 +544,12 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
   if (enabled_ && max_candidates_ > 0) {
     private_ready_ = LoadSnapshot(snapshot_path_);
   }
-  if (session_learning_enabled_ && engine_ && engine_->context()) {
+  // The schema is loaded before a Squirrel/Weasel host can set per-session
+  // options. Attach the bridge for an enabled YunPin overlay, then make every
+  // callback fail closed through LearningContextFor until the reviewed host
+  // supplies yunpin_learning_allowed.
+  if ((enabled_ || session_learning_enabled_) && engine_ &&
+      engine_->context()) {
     session_learning_ = std::make_shared<YunPinSessionLearningBridge>();
     const std::weak_ptr<YunPinSessionLearningBridge> weak_learning =
         session_learning_;
@@ -610,19 +690,21 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
       return translation;
     }
   }
-  const auto correction_score =
+  const auto ranking_key =
       [weak_learning =
            std::weak_ptr<YunPinSessionLearningBridge>(session_learning_),
        normalized](std::string_view text) {
         const auto learning = weak_learning.lock();
         return learning && !normalized.empty()
-                   ? learning->CorrectionScore(normalized, text)
-                   : std::int32_t{0};
+                   ? SessionRankingKey{
+                         learning->CorrectionScore(normalized, text),
+                         learning->SelectionOrder(normalized, text)}
+                   : SessionRankingKey{};
       };
   return New<YunPinMergedTranslation>(std::move(translation), std::move(front),
                                       suppress_long_cjk_upstream,
                                       protect_long_corrections,
-                                      correction_score);
+                                      ranking_key);
 }
 
 }  // namespace rime

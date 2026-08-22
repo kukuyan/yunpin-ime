@@ -73,6 +73,22 @@ void TestGoldenCorrectionAndHabitStats() {
         "replacement must enter word-level positive stats");
 }
 
+void TestLatestOrdinarySelectionGetsNewerRankingOrder() {
+  Harness harness;
+  Check(harness.learning.ObserveCommit(
+            SessionCommit{"办公是", "ban gong shi", LearningContext::kNormal}),
+        "first ordinary homophone selection must be accepted");
+  const std::uint64_t wrong =
+      harness.learning.SelectionOrder("bangongshi", "办公是");
+  Check(harness.learning.ObserveCommit(
+            SessionCommit{"办公室", "ban gong shi", LearningContext::kNormal}),
+        "replacement homophone selection must be accepted");
+  const std::uint64_t right =
+      harness.learning.SelectionOrder("bangongshi", "办公室");
+  Check(wrong > 0 && right > wrong,
+        "the latest ordinary homophone selection must have the newer order");
+}
+
 void TestBackspaceCountMustMatchUnicodeScalars() {
   Harness too_few;
   too_few.learning.ObserveCommit(
@@ -206,6 +222,7 @@ void TestHabitEntryLimitRejectsOnlyNewKeys() {
 int main() {
   try {
     TestGoldenCorrectionAndHabitStats();
+    TestLatestOrdinarySelectionGetsNewerRankingOrder();
     TestBackspaceCountMustMatchUnicodeScalars();
     TestDifferentPinyinOtherKeyAbortAndTimeoutFailClosed();
     TestSensitiveContextsNeverRecordOrBridgeChains();

@@ -207,6 +207,12 @@ bool SessionLearning::ObserveCommit(SessionCommit commit) {
   if (update.recorded && !known_stat) {
     tracked_stat_keys_.insert(stat_key);
   }
+  if (update.recorded) {
+    if (next_selection_order_ != std::numeric_limits<std::uint64_t>::max()) {
+      ++next_selection_order_;
+    }
+    selection_order_[entry_id] = next_selection_order_;
+  }
   if (valid_replacement && update.correction_completed &&
       update.requires_requery) {
     ApplyFeedbackLocked(update);
@@ -285,6 +291,18 @@ std::int32_t SessionLearning::CorrectionScore(
   std::lock_guard<std::mutex> lock(mutex_);
   const auto found = correction_scores_.find(id);
   return found == correction_scores_.end() ? 0 : found->second;
+}
+
+std::uint64_t SessionLearning::SelectionOrder(
+    std::string_view pinyin, std::string_view phrase) const {
+  const std::string normalized = NormalizePinyin(pinyin);
+  if (normalized.empty() || phrase.empty()) {
+    return 0;
+  }
+  const std::string id = EntryId(normalized, phrase);
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto found = selection_order_.find(id);
+  return found == selection_order_.end() ? 0 : found->second;
 }
 
 std::vector<HabitStat> SessionLearning::QueryHabits(
