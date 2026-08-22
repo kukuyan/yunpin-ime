@@ -55,9 +55,10 @@ class YunPinFilter : public Filter {
   // automatic correction may occupy total rank two or three; all remaining
   // correction candidates fail closed instead of spilling onto later pages.
   bool long_correction_guard_{false};
-  // Fail closed unless a reviewed platform overlay explicitly enables
-  // learning. Both shipped overlays remain false until their trusted
-  // secure/private-field bridges and real-host lifecycle tests pass.
+  // Legacy schema opt-in for a learning-only deployment.  An enabled YunPin
+  // overlay also attaches the inert bridge so a reviewed host can activate it
+  // later with yunpin_learning_allowed.  Every event is still rejected unless
+  // that positive host capability is present at event time.
   bool session_learning_enabled_{false};
   bool private_ready_{false};
   // Callbacks lock a weak reference to this state instead of capturing the

@@ -39,6 +39,8 @@ const std::string kPhrase = "你好世界";
 const std::string kLongPrivatePhrase = "长期个人候选";
 const std::string kPrivateFirst = "双个人候选一";
 const std::string kPrivateSecond = "双个人候选二";
+const std::string kOffice = "办公室";
+const std::string kOfficeWrong = "办公是";
 const std::string kSearchLikeText = "yunpin-search:nihaoshijie";
 const std::string kFavoriteLikeText = "yunpin-fav:nihaoshijie";
 const std::string kInactive = "<filter inactive>";
@@ -130,14 +132,18 @@ struct Harness {
 void WriteSnapshot(const std::filesystem::path& user_data_dir) {
   std::filesystem::create_directories(user_data_dir / "yunpin");
   std::ofstream out(user_data_dir / "yunpin" / "private.tsv");
-  out << "phrase\tpinyin\tsource\tuse_count\tpinned\n";
-  out << kPhrase << "\tni hao shi jie\tcodex_history\t9\ttrue\n";
+  out << "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\n";
+  out << kPhrase << "\tni hao shi jie\tcodex_history\t9\ttrue\t0\n";
   out << kLongPrivatePhrase
-      << "\tchang qi ge ren hou xuan\tcodex_history\t8\ttrue\n";
+      << "\tchang qi ge ren hou xuan\tcodex_history\t8\ttrue\t0\n";
   out << kPrivateFirst
-      << "\tshuang ge ren hou xuan\tcodex_history\t10\ttrue\n";
+      << "\tshuang ge ren hou xuan\tcodex_history\t10\ttrue\t0\n";
   out << kPrivateSecond
-      << "\tshuang ge ren hou xuan\tcodex_history\t9\ttrue\n";
+      << "\tshuang ge ren hou xuan\tcodex_history\t9\ttrue\t0\n";
+  out << kOfficeWrong
+      << "\tban gong shi\tsynced_learning@20679\t5\tfalse\t20679\n";
+  out << kOffice
+      << "\tban gong shi\tsogou_sgpybin\t165\tfalse\t0\n";
 }
 
 void EmitCommit(Harness& harness,
@@ -270,6 +276,46 @@ std::vector<std::string> Run(YunPinFilter& filter,
                              const std::string& input,
                              std::size_t limit) {
   return RunWithUpstream(filter, harness, input, Upstream(), limit);
+}
+
+bool SelectVisibleCandidateByText(YunPinFilter& filter,
+                                  Harness& harness,
+                                  const std::string& input,
+                                  const std::string& selected_text,
+                                  std::vector<std::string> upstream) {
+  harness.context.input_ = input;
+  Segment query_segment(0, static_cast<int>(input.size()));
+  query_segment.tags.insert("abc");
+  if (!filter.AppliesToSegment(&query_segment)) {
+    return false;
+  }
+  CandidateList candidates;
+  auto translation =
+      filter.Apply(New<FakeUpstream>(std::move(upstream)), &candidates);
+  while (translation && !translation->exhausted()) {
+    const auto selected = translation->Peek();
+    if (selected && selected->text() == selected_text) {
+      harness.context.commit_text_ = selected_text;
+      harness.context.composition_.clear();
+      Segment committed(0, static_cast<int>(input.size()));
+      committed.status = Segment::kSelected;
+      committed.selected_candidate_ = selected;
+      harness.context.composition_.push_back(std::move(committed));
+      harness.context.composition_.push_back(
+          Segment(static_cast<int>(input.size()),
+                  static_cast<int>(input.size())));
+      harness.context.commit_notifier()(&harness.context);
+      harness.context.input_.clear();
+      harness.context.commit_text_.clear();
+      harness.context.composition_.clear();
+      harness.context.update_notifier()(&harness.context);
+      return true;
+    }
+    if (!translation->Next()) {
+      break;
+    }
+  }
+  return false;
 }
 
 void Expect(const char* name,
@@ -445,6 +491,42 @@ void TestSessionCorrectionReranksBoundedUpstreamWindow() {
   assert((stats[0].phrase == "日长" || stats[1].phrase == "日长"));
 }
 
+void TestShippedOverlayLearnsSelectedYunPinHomophoneImmediately() {
+  DrainNativeSelectionEvents();
+  Harness harness;
+  // This is the shipped profile: the platform host supplies the positive
+  // per-session capability after schema construction while the legacy schema
+  // learning switch remains false.
+  harness.config.bools_["yunpin/session_learning"] = false;
+  YunPinFilter filter(harness.ticket());
+
+  const std::vector<std::string> upstream = {kOfficeWrong, kOffice, "tail"};
+  Expect("stale snapshot initially keeps the wrong homophone first",
+         RunWithUpstream(filter, harness, "bangongshi", upstream, 4),
+         {kOfficeWrong, kOffice, "tail"});
+  assert(SelectVisibleCandidateByText(filter, harness, "bangongshi", kOffice,
+                                      upstream));
+  Expect("one explicit office selection immediately becomes first",
+         RunWithUpstream(filter, harness, "bangongshi", upstream, 4),
+         {kOffice, kOfficeWrong, "tail"});
+
+  yunpin::NativeSelectionEvent event;
+  assert(yunpin::NativeSelectionEventQueue::Instance().TryPop(&event));
+  assert(event.phrase == kOffice);
+  assert(event.pinyin == "bangongshi");
+  DrainNativeSelectionEvents();
+}
+
+void TestPersistentRimeHomophoneOrderOverridesStaleSnapshotOrder() {
+  Harness harness;
+  harness.config.bools_["yunpin/session_learning"] = false;
+  YunPinFilter filter(harness.ticket());
+  Expect("fresh Rime userdb order wins among the same injected homophones",
+         RunWithUpstream(filter, harness, "bangongshi",
+                         {kOffice, kOfficeWrong, "tail"}, 4),
+         {kOffice, kOfficeWrong, "tail"});
+}
+
 void TestSessionBridgeFailsClosedOnUnprovenDeletion() {
   {
     Harness harness;
@@ -453,10 +535,12 @@ void TestSessionBridgeFailsClosedOnUnprovenDeletion() {
     EmitKey(harness, XK_BackSpace);
     EmitComposition(harness, "richang");
     EmitCommit(harness, "richang", "日常");
-    Expect("too few Backspaces keep upstream order",
+    Expect("latest explicit selection reranks without correction proof",
            RunWithUpstream(filter, harness, "richang", {"日长", "日常"},
                            4),
-           {"日长", "日常"});
+           {"日常", "日长"});
+    assert(filter.QueryHabits(
+               yunpin::HabitQuery{"", true, 8}).empty());
   }
   {
     Harness harness;
@@ -466,10 +550,12 @@ void TestSessionBridgeFailsClosedOnUnprovenDeletion() {
     EmitKey(harness, XK_BackSpace);
     EmitKey(harness, XK_BackSpace);
     EmitCommit(harness, "richang", "日常");
-    Expect("modified Backspace breaks adjacency",
+    Expect("modified Backspace prevents correction but keeps selection recall",
            RunWithUpstream(filter, harness, "richang", {"日长", "日常"},
                            4),
-           {"日长", "日常"});
+           {"日常", "日长"});
+    assert(filter.QueryHabits(
+               yunpin::HabitQuery{"", true, 8}).empty());
   }
   {
     Harness harness;
@@ -675,6 +761,8 @@ int main() {
   TestLongerInputAndPrivateDedupStayUnchanged();
   TestLongCorrectionGuardIsConservativeAndPageBounded();
   TestSessionCorrectionReranksBoundedUpstreamWindow();
+  TestPersistentRimeHomophoneOrderOverridesStaleSnapshotOrder();
+  TestShippedOverlayLearnsSelectedYunPinHomophoneImmediately();
   TestSessionBridgeFailsClosedOnUnprovenDeletion();
   TestLearningCallbacksDoNotOutliveFilter();
   TestNestedNotifierCanDestroyFilter();

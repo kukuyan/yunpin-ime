@@ -50,6 +50,11 @@ class SessionLearning {
 
   [[nodiscard]] std::int32_t CorrectionScore(
       std::string_view pinyin, std::string_view phrase) const;
+  // Monotonic, process-local order of accepted normal selections.  The host
+  // filter uses this only to put the most recently selected homophone ahead of
+  // a stale immutable snapshot while the background snapshot catches up.
+  [[nodiscard]] std::uint64_t SelectionOrder(
+      std::string_view pinyin, std::string_view phrase) const;
   [[nodiscard]] std::vector<HabitStat> QueryHabits(
       const HabitQuery& query = {}) const;
 
@@ -85,6 +90,8 @@ class SessionLearning {
   // method process from accumulating one row per word per day without limit.
   std::unordered_set<std::string> tracked_stat_keys_;
   std::unordered_map<std::string, std::int32_t> correction_scores_;
+  std::unordered_map<std::string, std::uint64_t> selection_order_;
+  std::uint64_t next_selection_order_{0};
   Phase phase_{Phase::kIdle};
   std::optional<PendingCommit> pending_;
 };
