@@ -50,13 +50,20 @@ const (
 	// Provisioning is crash-resumable from an OS-protected local journal. A
 	// seven-day remote window avoids stranding that journal during an outage;
 	// normal account APIs remain blocked until the account is explicitly sealed.
-	provisioningLife  = 7 * 24 * time.Hour
-	rateWindow        = time.Minute
+	provisioningLife = 7 * 24 * time.Hour
+	rateWindow       = time.Minute
 	// A first device may legitimately replay an entire personal dictionary.
 	// Keep login throttling separate, but allow the trusted sync API to drain a
 	// full local outbox without turning a one-time import into a multi-minute
 	// stop-and-wait loop.
 	requestsPerWindow = 4096
+	// Relay compaction is deliberately conservative. Every surviving
+	// (device_id, object_id) frontier is a complete client-encrypted CRDT state
+	// from that writer, so a newly paired device can still reconstruct the join
+	// without a plaintext checkpoint. Recent history remains available for
+	// diagnosis, and each sync request performs only one bounded delete batch.
+	envelopeRetentionPeriod  = 30 * 24 * time.Hour
+	maxEnvelopeGCDeleteBatch = 1024
 )
 
 var canonicalCBOR cbor.EncMode
@@ -1640,7 +1647,8 @@ func (s *Server) syncEnvelopes(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Cursor < 0 || input.AckCursor < 0 || len(input.Envelopes) > maxUploadBatch {
+	if input.Cursor < 0 || input.AckCursor < 0 || input.AckCursor > input.Cursor ||
+		len(input.Envelopes) > maxUploadBatch {
 		writeError(w, http.StatusBadRequest, "invalid_sync_batch")
 		return
 	}
@@ -1755,6 +1763,10 @@ func (s *Server) syncEnvelopes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
 	}
+	if _, err := s.gcAcknowledgedEnvelopes(r.Context(), tx, identity.AccountID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database_error")
+		return
+	}
 
 	rows, err := tx.QueryContext(r.Context(), `SELECT cursor, device_id, device_seq, version, object_id, key_epoch,
 		previous_hash, nonce, ciphertext, signature FROM envelopes
@@ -1824,6 +1836,43 @@ func (s *Server) syncEnvelopes(w http.ResponseWriter, r *http.Request) {
 		"has_more":           hasMore,
 		"current_key_epoch":  currentKeyEpoch,
 	})
+}
+
+// gcAcknowledgedEnvelopes removes only redundant opaque history. An envelope
+// is eligible when every non-revoked device has acknowledged its cursor, it is
+// outside the retention window, and a newer envelope from the same writer for
+// the same opaque object is still present. Keeping that per-writer/object
+// frontier also keeps each writer's sequence/hash chain head, while allowing a
+// newly paired cursor-zero device to rebuild the current CRDT join. Accounts
+// with no active devices fail closed and retain everything.
+func (s *Server) gcAcknowledgedEnvelopes(ctx context.Context, tx *sql.Tx, accountID string) (int64, error) {
+	var activeDevices int
+	var watermark sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), MIN(ack_cursor) FROM devices
+		WHERE account_id = ? AND revoked_at IS NULL`, accountID).Scan(&activeDevices, &watermark); err != nil {
+		return 0, err
+	}
+	if activeDevices == 0 || !watermark.Valid || watermark.Int64 <= 0 {
+		return 0, nil
+	}
+	cutoff := s.now().Add(-envelopeRetentionPeriod).UnixMilli()
+	result, err := tx.ExecContext(ctx, `DELETE FROM envelopes WHERE cursor IN (
+		SELECT candidate.cursor FROM envelopes AS candidate
+		WHERE candidate.account_id = ? AND candidate.cursor <= ? AND candidate.created_at < ?
+		  AND EXISTS (
+			SELECT 1 FROM envelopes AS newer
+			WHERE newer.account_id = candidate.account_id
+			  AND newer.device_id = candidate.device_id
+			  AND newer.object_id = candidate.object_id
+			  AND newer.cursor > candidate.cursor
+		  )
+		ORDER BY candidate.cursor
+		LIMIT ?
+	)`, accountID, watermark.Int64, cutoff, maxEnvelopeGCDeleteBatch)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {

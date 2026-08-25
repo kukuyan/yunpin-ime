@@ -170,6 +170,16 @@ synchronization.
 
 The Go service stores opaque signed envelopes in SQLite WAL. It has no phrase decryption key. `/v1/sync` performs idempotent exchange by `(device_id, device_seq)` and cursor. Network failure only grows a local outbox; input remains available.
 
+Relay retention uses the minimum `ack_cursor` of non-revoked devices and never
+trusts an acknowledgement beyond the request cursor. Once history is older
+than 30 days, compaction can remove only superseded envelopes while retaining
+the newest opaque state for each `(device_id, object_id)` writer frontier. This
+preserves cursor-zero reconstruction and the last sequence/hash-chain record
+for every writer without decrypting phrase data. Accounts with no active
+devices retain all rows, and each sync deletes at most 1024 rows. The frontier
+proof depends on the current full-state phrase CRDT payload; a new payload kind
+must supply its own safe retention contract or an encrypted signed checkpoint.
+
 The shared `syncclient` worker runs outside the input key-event path. It stages
 the exact ciphertext wire record before upload, maintains the signed device
 sequence/previous-hash chain, retries a lost response idempotently, verifies

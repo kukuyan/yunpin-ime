@@ -145,6 +145,11 @@
   after a simulated lost HTTP response without advancing the device sequence
   twice.
 - Duplicate device sequences are idempotent; tampering, wrong signatures, future versions, oversize batches, expired pairing, repeated claim, and revoked tokens fail closed.
+- Relay compaction rejects acknowledgements beyond the request cursor, uses the
+  minimum active-device acknowledgement while excluding revoked devices,
+  retains recent rows and every writer/object frontier, performs no deletion
+  with zero active devices, caps one transaction at 1024 deletions, supports a
+  cursor-zero rebuild, and accepts the next valid writer hash-chain record.
 - G-Counters, HLC-LWW fields, and remove-wins tombstones converge for duplicate and permuted events.
 - Server database and captured logs do not contain synthetic plaintext phrase/Pinyin probes.
 - Server outage, rate limiting, read-only storage, and disk-full simulation never enters the key-event path.
