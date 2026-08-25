@@ -12,12 +12,15 @@ $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalA
 if ([string]::IsNullOrWhiteSpace($localAppData)) { throw "Known Folder LOCALAPPDATA is unavailable." }
 $state = Join-Path $localAppData "YunPinIME\sync"
 $destination = Join-Path $state "bin\yunpin-sync-agent.exe"
+# The scheduled task runs the windowless resident; the interactive agent
+# stays installed for status, configuration and pairing.
+$residentDestination = Join-Path $state "bin\yunpin-sync-resident.exe"
 $taskName = "YunPinSyncAgent"
 
 if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw "Resident agent is absent." }
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-if ($registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $destination -or
-    $registered.Actions[0].Arguments -cne "run --interval 1m" -or
+if ($registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $residentDestination -or
+    $registered.Actions[0].Arguments -cne "--interval 1m" -or
     [string]$registered.Settings.ExecutionTimeLimit -cne "PT0S" -or
     $registered.Settings.DisallowStartIfOnBatteries -or
     $registered.Settings.StopIfGoingOnBatteries) {
@@ -38,14 +41,14 @@ try {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         Start-Sleep -Milliseconds 100
-        $process = Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-agent.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -eq $destination } |
+        $process = Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-resident.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -eq $residentDestination } |
             Select-Object -First 1
     } while ($null -eq $process -and [DateTime]::UtcNow -lt $deadline)
     if ($null -eq $process) { throw "YunPin sync resident process did not start." }
 } catch {
-    Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-agent.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -eq $destination } |
+    Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-resident.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -eq $residentDestination } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
     throw

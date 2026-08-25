@@ -7,6 +7,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot "..\..\.."))
+
 function Assert-BundleManifest {
     param([Parameter(Mandatory = $true)][string]$Root)
     $manifest = Join-Path $Root "MANIFEST.sha256"
@@ -141,6 +144,22 @@ if (-not (Test-Path $syncAgent -PathType Leaf)) {
 }
 if ((Get-PeMachine -Path $syncAgent) -ne 0x8664) {
     throw "Public sync agent is not an x64 PE executable"
+}
+# The scheduled task runs this one, and it must be windowless. The subsystem is
+# not observable until a user logs in, so the packaged image is checked here.
+$syncResident = Join-Path $syncAgentRoot "yunpin-sync-resident.exe"
+if (-not (Test-Path $syncResident -PathType Leaf)) {
+    throw "Windowless sync resident is missing"
+}
+if ((Get-PeMachine -Path $syncResident) -ne 0x8664) {
+    throw "Windowless sync resident is not an x64 PE executable"
+}
+$subsystemChecker = Join-Path $repoRoot "scripts\check_pe_subsystem.py"
+if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
+    & python $subsystemChecker gui $syncResident
+    if ($LASTEXITCODE -ne 0) { throw "Packaged sync resident is not linked for the Windows GUI subsystem" }
+    & python $subsystemChecker console $syncAgent
+    if ($LASTEXITCODE -ne 0) { throw "Packaged interactive sync agent must stay console-subsystem" }
 }
 foreach ($supportFile in @(
     "Install-SyncAgent.ps1", "Verify-SyncAgent.ps1",

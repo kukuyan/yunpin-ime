@@ -11,13 +11,24 @@ function Invoke-GoBuild {
     param(
         [Parameter(Mandatory = $true)][string]$AgentRoot,
         [Parameter(Mandatory = $true)][string]$Output,
-        [string]$BuildTag = ""
+        [string]$BuildTag = "",
+        [string]$Package = "./cmd/yunpin-sync-agent",
+        # Go links console-subsystem binaries by default. A scheduled task that
+        # starts a long-running console binary in the user's interactive session
+        # gets a console window allocated for it, and it stays for the life of
+        # the process rather than flashing. The resident is therefore linked for
+        # the GUI subsystem; the interactive binary writes JSON to stdout and
+        # must stay console-subsystem.
+        [switch]$WindowsGui
     )
     $arguments = @("build", "-trimpath", "-buildvcs=false")
     if (-not [string]::IsNullOrWhiteSpace($BuildTag)) {
         $arguments += ("-tags=" + $BuildTag)
     }
-    $arguments += @("-o", $Output, "./cmd/yunpin-sync-agent")
+    if ($WindowsGui) {
+        $arguments += @("-ldflags", "-H=windowsgui")
+    }
+    $arguments += @("-o", $Output, $Package)
     Push-Location $AgentRoot
     try {
         & go @arguments
@@ -170,8 +181,11 @@ Reset-PrivateE2EOutput -Path $privateRoot -AllowedParent $OutputRoot `
     -Create $hasPrivateE2ESupport
 New-Item -ItemType Directory -Path $publicRoot -Force | Out-Null
 $publicBinary = Join-Path $publicRoot "yunpin-sync-agent.exe"
+# The windowless background process the scheduled task runs. Separate from the
+# interactive binary only because of the subsystem it is linked for.
+$residentBinary = Join-Path $publicRoot "yunpin-sync-resident.exe"
 $privateBinary = Join-Path $privateRoot "yunpin-sync-agent.exe"
-Remove-Item -LiteralPath $publicBinary -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $publicBinary, $residentBinary -Force -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath $publicOverlayPath -PathType Leaf)) {
     throw "Same-run public Windows overlay is missing"
 }
@@ -194,6 +208,8 @@ try {
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
     Invoke-GoBuild -AgentRoot $agentRoot -Output $publicBinary
+    Invoke-GoBuild -AgentRoot $agentRoot -Output $residentBinary `
+        -Package "./cmd/yunpin-sync-resident" -WindowsGui
     if ($hasPrivateE2ESupport) {
         Invoke-GoBuild -AgentRoot $agentRoot -Output $privateBinary -BuildTag "yunpin_pairing_private"
     }
@@ -292,7 +308,19 @@ if ($hasPrivateE2ESupport) {
     [IO.File]::WriteAllLines((Join-Path $privateRoot "SHA256SUMS"), $hashRows, ([Text.UTF8Encoding]::new($false)))
 }
 
+# The subsystem is the whole point of building the resident separately, and it
+# is invisible in the source, so verify the linked image rather than trusting
+# the build flags.
+$subsystemChecker = Join-Path $repoRoot "scripts\check_pe_subsystem.py"
+if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
+    & python $subsystemChecker gui $residentBinary
+    if ($LASTEXITCODE -ne 0) { throw "Resident sync agent is not linked for the Windows GUI subsystem" }
+    & python $subsystemChecker console $publicBinary
+    if ($LASTEXITCODE -ne 0) { throw "Interactive sync agent must stay console-subsystem for its JSON output" }
+}
+
 Write-Host "Built public Windows sync agent: $publicBinary"
+Write-Host "Built windowless Windows sync resident: $residentBinary"
 if ($hasPrivateE2ESupport) {
     Write-Host "Built private E2E-only Windows sync agent: $privateBinary"
 } else {

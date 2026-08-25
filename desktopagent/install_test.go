@@ -152,12 +152,20 @@ func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *tes
 	for _, required := range []string{
 		"expectedsha256", "get-filehash -algorithm sha256",
 		"refusing to replace a different yunpinsyncagent scheduled task",
-		"new-scheduledtaskaction -execute $destination -argument \"run --interval 1m\"",
+		// The task runs the windowless resident, not the interactive agent:
+		// Go links console-subsystem binaries by default and a scheduled task
+		// starting one in the interactive session leaves a console window up
+		// for the life of the process. The resident implements only the
+		// background loop, so no "run" subcommand appears in the arguments.
+		"new-scheduledtaskaction -execute $residentdestination -argument \"--interval 1m\"",
 		"$previoustaskxml = export-scheduledtask",
 		"register-scheduledtask -taskname $taskname -xml $previoustaskxml",
 		"if ($previoustaskwasrunning)",
 		"[io.file]::replace($temporary, $destination, $replacebackup, $true)",
+		"[io.file]::replace($residenttemporary, $residentdestination, $residentreplacebackup, $true)",
 		"remove-item -literalpath $temporary, $backup, $replacebackup",
+		// Both binaries are hash-pinned against the bundle manifest.
+		"residentexpectedsha256",
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("Windows installer transactional boundary lacks %q", required)
@@ -170,6 +178,11 @@ func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *tes
 	}
 	if strings.Contains(lower, "[io.file]::replace($temporary, $destination, $null") {
 		t.Fatal("Windows installer still uses the unsupported null File.Replace backup path")
+	}
+	// A "run" subcommand in the task arguments would mean the task is back on
+	// the console-subsystem binary.
+	if strings.Contains(lower, "\"run --interval") {
+		t.Fatal("Windows scheduled task still runs the console-subsystem agent")
 	}
 }
 

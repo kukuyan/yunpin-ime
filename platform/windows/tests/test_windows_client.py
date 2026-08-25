@@ -746,6 +746,64 @@ class WindowsClientTests(unittest.TestCase):
         for library in ("Advapi32", "Shell32", "Ole32", "Uuid"):
             self.assertIn(library, cmake)
 
+    def test_background_resident_is_windowless_and_wired_end_to_end(self) -> None:
+        """The scheduled task must run a GUI-subsystem binary.
+
+        Go links console-subsystem binaries by default, so a scheduled task that
+        starts a long-running console binary in the user's interactive session
+        gets a console window allocated for it -- and because the resident runs
+        for the life of the session, that window stays on screen rather than
+        flashing. The interactive agent prints JSON to stdout and must remain
+        console-subsystem, so the two are separate binaries. Every link in that
+        chain is asserted here because none of it is observable until a user
+        actually logs in on Windows.
+        """
+        build = (WINDOWS / "scripts" / "Build-SyncAgents.ps1").read_text(encoding="utf-8")
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(encoding="utf-8")
+        installer = (WINDOWS / "package" / "Install-Preview.ps1").read_text(encoding="utf-8")
+        install_agent = (
+            ROOT / "desktopagent" / "install" / "windows" / "Install-SyncAgent.ps1"
+        ).read_text(encoding="utf-8")
+        enable_agent = (
+            ROOT / "desktopagent" / "install" / "windows" / "Enable-SyncAgent.ps1"
+        ).read_text(encoding="utf-8")
+
+        # Built as a separate GUI-subsystem image, and the linked image is
+        # verified rather than the build flags being trusted.
+        self.assertIn('"-ldflags", "-H=windowsgui"', build)
+        self.assertIn('-Package "./cmd/yunpin-sync-resident" -WindowsGui', build)
+        self.assertIn("check_pe_subsystem.py", build)
+        self.assertIn("gui $residentBinary", build)
+        self.assertIn("console $publicBinary", build)
+
+        # Staged into the bundle and installed next to the interactive agent.
+        self.assertIn("yunpin-sync-resident.exe", package)
+        self.assertIn("sync-agent/yunpin-sync-resident.exe", installer)
+        self.assertIn("-ResidentExpectedSha256", installer)
+        self.assertIn("$ResidentPath", install_agent)
+        self.assertIn("$ResidentExpectedSha256", install_agent)
+
+        # The task runs the resident, not the interactive agent. The resident
+        # implements only `run`, so the subcommand leaves the argument string.
+        self.assertIn(
+            'New-ScheduledTaskAction -Execute $residentDestination -Argument "--interval 1m"',
+            install_agent,
+        )
+        for script in (install_agent, enable_agent):
+            self.assertNotIn('"run --interval 1m"', script)
+        self.assertIn("$residentDestination", enable_agent)
+        self.assertIn("yunpin-sync-resident.exe", enable_agent)
+
+    def test_pe_subsystem_checker_reads_the_optional_header(self) -> None:
+        checker = (ROOT / "scripts" / "check_pe_subsystem.py").read_text(encoding="utf-8")
+        self.assertIn("IMAGE_SUBSYSTEM_WINDOWS_GUI = 2", checker)
+        self.assertIn("IMAGE_SUBSYSTEM_WINDOWS_CUI = 3", checker)
+        # PE signature (4) + COFF header (20); Subsystem sits at optional-header
+        # offset 68 in both PE32 and PE32+.
+        self.assertIn("pe_offset + 4 + 20", checker)
+        self.assertIn("optional_header + 68", checker)
+
+
 
 if __name__ == "__main__":
     unittest.main()
