@@ -18,6 +18,7 @@ jobs:
       - run: bash scripts/check_private_data.sh
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
+      - run: python3 -m unittest tests.test_mobile_contract -v
       - run: python3 scripts/check_release_workflow.py
       - run: python3 scripts/check_release_sbom.py
       - run: python3 -m unittest discover -s tests -p "test_release_*.py" -v
@@ -34,6 +35,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: mobile/synccore/go.mod
+          cache-dependency-path: |
+            mobile/synccore/go.sum
+            desktopagent/go.sum
+            syncclient/go.sum
+            localstore/go.sum
+            protocol/go.sum
       - run: make -C engine test benchmark
       - run: make -C mobile test
 
@@ -45,6 +55,22 @@ jobs:
       - run: cmake -S engine -B build/engine -A x64
       - run: cmake --build build/engine --config Release --parallel
       - run: ctest --test-dir build/engine -C Release --output-on-failure
+
+  mobile-ios:
+    name: mobile-ios
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test native iOS services and privacy boundary
+        run: >-
+          xcrun swift test --package-path mobile/ios --disable-sandbox
+          --scratch-path "$RUNNER_TEMP/yunpin-ios-swiftpm"
+      - name: Build unsigned app and keyboard extension
+        run: >-
+          xcodebuild -project mobile/ios/YunPinIOS.xcodeproj -scheme YunPin
+          -configuration Debug -destination 'generic/platform=iOS'
+          -derivedDataPath "$RUNNER_TEMP/yunpin-ios-derived"
+          CODE_SIGNING_ALLOWED=NO build
 
   windows-client:
     name: windows-client
@@ -393,13 +419,13 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [privacy-and-license, engine, engine-windows, windows-client, importer, localstore, replaylab, protocol, sync, syncclient, desktopagent, macos-client]
+    needs: [privacy-and-license, engine, engine-windows, mobile-ios, windows-client, importer, localstore, replaylab, protocol, sync, syncclient, desktopagent, macos-client]
     runs-on: ubuntu-24.04
     steps:
       - name: Verify required jobs
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        run: test "$RESULTS" = "success success success success success success success success success success success success"
+        run: test "$RESULTS" = "success success success success success success success success success success success success success"
 
   release-preview:
     name: release-preview

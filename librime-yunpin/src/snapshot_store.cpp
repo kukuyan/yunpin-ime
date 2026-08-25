@@ -20,6 +20,61 @@ constexpr std::size_t kMaxPhraseBytes = 512;
 constexpr std::size_t kMaxPinyinBytes = 256;
 constexpr std::size_t kMaxSourceBytes = 128;
 
+bool IsSafeUtf8Text(std::string_view value) noexcept {
+  if (value.empty()) {
+    return false;
+  }
+  for (std::size_t offset = 0; offset < value.size();) {
+    const unsigned char first = static_cast<unsigned char>(value[offset]);
+    std::uint32_t codepoint = 0;
+    std::size_t width = 0;
+    if (first < 0x80) {
+      codepoint = first;
+      width = 1;
+    } else if ((first & 0xe0) == 0xc0) {
+      codepoint = first & 0x1f;
+      width = 2;
+    } else if ((first & 0xf0) == 0xe0) {
+      codepoint = first & 0x0f;
+      width = 3;
+    } else if ((first & 0xf8) == 0xf0) {
+      codepoint = first & 0x07;
+      width = 4;
+    } else {
+      return false;
+    }
+    if (offset + width > value.size()) {
+      return false;
+    }
+    for (std::size_t index = 1; index < width; ++index) {
+      const unsigned char continuation =
+          static_cast<unsigned char>(value[offset + index]);
+      if ((continuation & 0xc0) != 0x80) {
+        return false;
+      }
+      codepoint = (codepoint << 6) | (continuation & 0x3f);
+    }
+    const bool overlong =
+        (width == 2 && codepoint < 0x80) ||
+        (width == 3 && codepoint < 0x800) ||
+        (width == 4 && codepoint < 0x10000);
+    const bool invalid_scalar =
+        codepoint > 0x10ffff ||
+        (codepoint >= 0xd800 && codepoint <= 0xdfff);
+    const bool forbidden_control =
+        codepoint < 0x20 || (codepoint >= 0x7f && codepoint <= 0x9f);
+    const bool directional_control =
+        (codepoint >= 0x202a && codepoint <= 0x202e) ||
+        (codepoint >= 0x2066 && codepoint <= 0x2069);
+    if (overlong || invalid_scalar || forbidden_control ||
+        directional_control) {
+      return false;
+    }
+    offset += width;
+  }
+  return true;
+}
+
 std::vector<std::string> SplitTabs(const std::string& line) {
   std::vector<std::string> fields;
   std::size_t start = 0;
@@ -195,8 +250,9 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     }
 
     const std::vector<std::string> fields = SplitTabs(line);
-    if (fields.size() != header.size() || fields[0].empty() ||
-        fields[0].size() > kMaxPhraseBytes || fields[1].empty() ||
+    if (fields.size() != header.size() ||
+        fields[0].size() > kMaxPhraseBytes || !IsSafeUtf8Text(fields[0]) ||
+        fields[1].empty() ||
         fields[1].size() > kMaxPinyinBytes ||
         fields[2].size() > kMaxSourceBytes) {
       ++result.rejected_rows;

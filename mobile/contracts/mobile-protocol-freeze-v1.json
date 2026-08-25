@@ -1,0 +1,201 @@
+{
+  "license": "Apache-2.0",
+  "contract_id": "yunpin-mobile-protocol-freeze-v1",
+  "status": "frozen",
+  "normative_document": "docs/MOBILE_PROTOCOL_FREEZE.md",
+  "authoritative_sources": [
+    "protocol/README.md",
+    "protocol/crypto.go",
+    "protocol/wire.go",
+    "protocol/boxes.go",
+    "protocol/crdt.go",
+    "sync/openapi.yaml",
+    "syncclient/worker.go",
+    "localstore/sync_state.go",
+    "desktopagent/credentials.go",
+    "desktopagent/snapshot.go",
+    "librime-yunpin/src/snapshot_store.cpp"
+  ],
+  "wire": {
+    "envelope_protocol_version": 1,
+    "canonical_header_integer_keys": [1, 2, 3, 4, 5, 6, 7, 8],
+    "identifier_bytes": 16,
+    "nonce_bytes": 24,
+    "signature": "Ed25519",
+    "encryption": "XChaCha20-Poly1305",
+    "padding_bucket_bytes": 512,
+    "max_plaintext_cbor_bytes": 524288,
+    "max_ciphertext_bytes": 524816,
+    "sealed_box": {
+      "magic": "YPBX",
+      "version": 1,
+      "encoding": "unpadded-base64url",
+      "decoded_max_bytes": 262144,
+      "framing_bytes": 33
+    }
+  },
+  "credential_bundle": {
+    "magic": "YPCB",
+    "write_version": 2,
+    "storage": "platform-secret-store-only",
+    "trust_source": "creator-signed-roster",
+    "recovery_material_present": false,
+    "endpoint_present": false
+  },
+  "snapshot_tsv": {
+    "encoding": "UTF-8",
+    "line_ending": "LF",
+    "writer_columns": [
+      "phrase",
+      "pinyin",
+      "source",
+      "use_count",
+      "pinned"
+    ],
+    "max_unique_rows": 100000,
+    "publication": "validated-fsync-atomic-replace",
+    "consumer_view": "immutable-generation",
+    "bundled_runtime_data": false
+  },
+  "relay": {
+    "required_for_input": false,
+    "selection": "user-runtime-profile",
+    "compiled_default_origin": false,
+    "https_default": true,
+    "private_http_requires_explicit_opt_in": true,
+    "content_blind": true
+  },
+  "sync": {
+    "path": "/v1/sync",
+    "outbox": "encrypted-coalescing-durable",
+    "prepared_upload": "persist-exact-wire-before-request",
+    "lost_response_retry": "byte-identical",
+    "acknowledgement": "exact-outbox-version-only",
+    "download_order": "strictly-increasing-cursor",
+    "verify_before_merge": true,
+    "cursor_advance": "compare-and-swap-after-durable-merge",
+    "empty_page_may_advance_cursor": false,
+    "bounded_background_rounds": true
+  },
+  "crdt": {
+    "usage": "per-device-g-counter-component-max",
+    "pinned": "hlc-lww",
+    "settings": "hlc-lww-retain-unknown",
+    "presence": "remove-wins-within-generation",
+    "resurrection": "explicit-readd-next-generation-only",
+    "remote_merge_echoes_outbox": false
+  },
+  "device_model": {
+    "data_plane": "dynamic-verified-roster",
+    "mobile_compiled_device_capacity": null,
+    "control_plane": "fixed-two-device-preview",
+    "third_device_attempt": "fail-closed-no-local-mutation",
+    "relay_device_list_is_trust_root": false,
+    "server_guard_source": "sync/internal/server/server.go:maxActiveDevices",
+    "server_guard_may_be_changed_to_enable_mobile": false,
+    "future_enablement_gate": "monotonic-signed-roster-chain-with-migration-tests"
+  },
+  "recovery": {
+    "enabled": false,
+    "ui_entrypoints": [],
+    "network_entrypoints": [],
+    "generate_material": false,
+    "import_material": false,
+    "display_material": false,
+    "silent_account_reset": false
+  },
+  "component_boundary": {
+    "candidate_abi_version": 1,
+    "protected_context_flags": [
+      "password",
+      "private-mode",
+      "one-time-input",
+      "no-personalized-learning",
+      "shared-snapshot-unavailable"
+    ],
+    "protected_context_result": "zero-private-candidates",
+    "unknown_context_flag": "invalid-argument",
+    "containing_app_owns": [
+      "relay-profile",
+      "future-login-and-pairing-after-roster-gate",
+      "platform-secret-store",
+      "encrypted-local-database",
+      "background-sync",
+      "outbox-and-cursor",
+      "crdt-merge",
+      "atomic-snapshot-publication",
+      "redacted-status"
+    ],
+    "keyboard_owns": [
+      "immutable-snapshot-read",
+      "bounded-candidate-query",
+      "composition",
+      "privacy-gated-local-learning-handoff"
+    ],
+    "keyboard_network_allowed": false,
+    "keyboard_secret_store_allowed": false,
+    "key_event_disk_or_network_wait_allowed": false,
+    "ios_without_full_access": "no-shared-container-zero-private-candidates"
+  },
+  "background": {
+    "android": "JobScheduler-periodic-and-one-shot",
+    "ios": "BGTask-and-app-activation",
+    "continuous_execution_assumed": false,
+    "single_flight": true,
+    "bounded_backoff_with_jitter": true,
+    "offline_preserves_outbox_and_snapshot": true
+  },
+  "observability": {
+    "redacted_status_only": true,
+    "allowed": [
+      "state",
+      "last-success-time",
+      "pending-count",
+      "attempt-category",
+      "failure-category",
+      "cursor-progress",
+      "has-more"
+    ],
+    "forbidden": [
+      "phrase-or-pinyin",
+      "input-events",
+      "snapshot-content",
+      "request-or-response-body",
+      "ciphertext",
+      "identifiers",
+      "endpoint-origin",
+      "credentials-or-keys",
+      "passwords",
+      "pairing-invitations",
+      "clipboard-content"
+    ]
+  },
+  "upgrade_rollback": {
+    "versioned_migrations_implemented": false,
+    "first_schema_change_gate": "add-explicit-version-forward-migration-and-rollback-tests",
+    "preserve_last_known_good_snapshot": true,
+    "preserve_encrypted_outbox": true,
+    "cursor_may_move_backward": false,
+    "silent_secret_regeneration": false,
+    "irreversible_migration_requires_human_gate": true
+  },
+  "repository_privacy": {
+    "test_data": "synthetic-only",
+    "personal_dictionary_allowed": false,
+    "third_party_private_dictionary_allowed": false,
+    "input_replay_allowed": false,
+    "committed_credential_fixture_allowed": false,
+    "private_import_allowed": false,
+    "live_endpoint_allowed": false,
+    "deployment_identity_allowed": false
+  },
+  "human_gates": [
+    "developer-signing-material",
+    "physical-device-authorization",
+    "system-keyboard-or-ime-enablement",
+    "ios-full-access",
+    "external-publication",
+    "live-relay-or-infrastructure-mutation",
+    "existing-account-or-roster-migration"
+  ]
+}

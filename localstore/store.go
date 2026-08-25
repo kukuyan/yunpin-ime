@@ -42,13 +42,15 @@ type Phrase struct {
 }
 
 type LearningContext struct {
-	PasswordField bool
-	PrivateMode   bool
-	OneTimeInput  bool
+	PasswordField          bool
+	PrivateMode            bool
+	OneTimeInput           bool
+	NoPersonalizedLearning bool
 }
 
 func (learning LearningContext) Disabled() bool {
-	return learning.PasswordField || learning.PrivateMode || learning.OneTimeInput
+	return learning.PasswordField || learning.PrivateMode || learning.OneTimeInput ||
+		learning.NoPersonalizedLearning
 }
 
 type LearnResult struct {

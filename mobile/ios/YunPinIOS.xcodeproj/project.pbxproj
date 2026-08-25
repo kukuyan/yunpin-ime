@@ -1,0 +1,329 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* YunPinApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* YunPinApp.swift */; };
+		100000000000000000000002 /* YunPinAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* YunPinAppDelegate.swift */; };
+		100000000000000000000003 /* YunPinAppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* YunPinAppConfiguration.swift */; };
+		100000000000000000000004 /* YunPinAppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* YunPinAppModel.swift */; };
+		100000000000000000000005 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* KeyboardViewController.swift */; };
+		100000000000000000000006 /* KeyboardConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* KeyboardConfiguration.swift */; };
+		10000000000000000000000A /* YunPinKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000C /* YunPinKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		10000000000000000000000B /* EndpointProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* EndpointProfile.swift */; };
+		10000000000000000000000C /* PrivateSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* PrivateSnapshot.swift */; };
+		10000000000000000000000D /* AtomicVersionedFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000F /* AtomicVersionedFileStore.swift */; };
+		10000000000000000000000E /* EndpointProfileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* EndpointProfileStore.swift */; };
+		10000000000000000000000F /* KeychainCredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000011 /* KeychainCredentialStore.swift */; };
+		100000000000000000000010 /* SyncCoreBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* SyncCoreBinding.swift */; };
+		100000000000000000000011 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000013 /* SyncCoordinator.swift */; };
+		100000000000000000000012 /* SyncStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000014 /* SyncStatus.swift */; };
+		100000000000000000000013 /* UpgradeRollbackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000015 /* UpgradeRollbackController.swift */; };
+		100000000000000000000014 /* PrivateSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* PrivateSnapshot.swift */; };
+		100000000000000000000015 /* KeyboardPrivacyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000016 /* KeyboardPrivacyPolicy.swift */; };
+		100000000000000000000016 /* BackgroundSyncRetryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000017 /* BackgroundSyncRetryController.swift */; };
+		100000000000000000000017 /* SyncCorePathResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000018 /* SyncCorePathResolver.swift */; };
+		100000000000000000000018 /* GeneratedSyncCoreBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000019 /* GeneratedSyncCoreBinding.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		300000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 400000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 500000000000000000000002;
+			remoteInfo = YunPinKeyboard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		600000000000000000000004 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				10000000000000000000000A /* YunPinKeyboard.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* YunPinApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YunPinApp.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* YunPinAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YunPinAppDelegate.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* YunPinAppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YunPinAppConfiguration.swift; sourceTree = "<group>"; };
+		200000000000000000000004 /* YunPinAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YunPinAppModel.swift; sourceTree = "<group>"; };
+		200000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		200000000000000000000006 /* YunPinApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = YunPinApp.entitlements; sourceTree = "<group>"; };
+		200000000000000000000007 /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
+		200000000000000000000008 /* KeyboardConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardConfiguration.swift; sourceTree = "<group>"; };
+		200000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		20000000000000000000000A /* YunPinKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = YunPinKeyboard.entitlements; sourceTree = "<group>"; };
+		20000000000000000000000B /* YunPin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = YunPin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		20000000000000000000000C /* YunPinKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = YunPinKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		20000000000000000000000D /* EndpointProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointProfile.swift; sourceTree = "<group>"; };
+		20000000000000000000000E /* PrivateSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateSnapshot.swift; sourceTree = "<group>"; };
+		20000000000000000000000F /* AtomicVersionedFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtomicVersionedFileStore.swift; sourceTree = "<group>"; };
+		200000000000000000000010 /* EndpointProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointProfileStore.swift; sourceTree = "<group>"; };
+		200000000000000000000011 /* KeychainCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainCredentialStore.swift; sourceTree = "<group>"; };
+		200000000000000000000012 /* SyncCoreBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoreBinding.swift; sourceTree = "<group>"; };
+		200000000000000000000013 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
+		200000000000000000000014 /* SyncStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatus.swift; sourceTree = "<group>"; };
+		200000000000000000000015 /* UpgradeRollbackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpgradeRollbackController.swift; sourceTree = "<group>"; };
+		200000000000000000000016 /* KeyboardPrivacyPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardPrivacyPolicy.swift; sourceTree = "<group>"; };
+		200000000000000000000017 /* BackgroundSyncRetryController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSyncRetryController.swift; sourceTree = "<group>"; };
+		200000000000000000000018 /* SyncCorePathResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCorePathResolver.swift; sourceTree = "<group>"; };
+		200000000000000000000019 /* GeneratedSyncCoreBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedSyncCoreBinding.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		600000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		600000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		700000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				700000000000000000000002 /* App */,
+				700000000000000000000003 /* KeyboardExtension */,
+				700000000000000000000005 /* PackageSources */,
+				700000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		700000000000000000000002 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* YunPinApp.swift */,
+				200000000000000000000002 /* YunPinAppDelegate.swift */,
+				200000000000000000000003 /* YunPinAppConfiguration.swift */,
+				200000000000000000000004 /* YunPinAppModel.swift */,
+				200000000000000000000005 /* Info.plist */,
+				200000000000000000000006 /* YunPinApp.entitlements */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		700000000000000000000003 /* KeyboardExtension */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000007 /* KeyboardViewController.swift */,
+				200000000000000000000008 /* KeyboardConfiguration.swift */,
+				200000000000000000000009 /* Info.plist */,
+				20000000000000000000000A /* YunPinKeyboard.entitlements */,
+			);
+			path = KeyboardExtension;
+			sourceTree = "<group>";
+		};
+		700000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				20000000000000000000000B /* YunPin.app */,
+				20000000000000000000000C /* YunPinKeyboard.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		700000000000000000000005 /* PackageSources */ = {
+			isa = PBXGroup;
+			children = (
+				700000000000000000000006 /* YunPinMobileCore */,
+				700000000000000000000007 /* YunPinAppServices */,
+				700000000000000000000008 /* YunPinKeyboardCore */,
+			);
+			name = PackageSources;
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		700000000000000000000006 /* YunPinMobileCore */ = {
+			isa = PBXGroup;
+			children = (
+				20000000000000000000000D /* EndpointProfile.swift */,
+				20000000000000000000000E /* PrivateSnapshot.swift */,
+			);
+			path = YunPinMobileCore;
+			sourceTree = "<group>";
+		};
+		700000000000000000000007 /* YunPinAppServices */ = {
+			isa = PBXGroup;
+			children = (
+				20000000000000000000000F /* AtomicVersionedFileStore.swift */,
+				200000000000000000000017 /* BackgroundSyncRetryController.swift */,
+				200000000000000000000010 /* EndpointProfileStore.swift */,
+				200000000000000000000019 /* GeneratedSyncCoreBinding.swift */,
+				200000000000000000000011 /* KeychainCredentialStore.swift */,
+				200000000000000000000012 /* SyncCoreBinding.swift */,
+				200000000000000000000018 /* SyncCorePathResolver.swift */,
+				200000000000000000000013 /* SyncCoordinator.swift */,
+				200000000000000000000014 /* SyncStatus.swift */,
+				200000000000000000000015 /* UpgradeRollbackController.swift */,
+			);
+			path = YunPinAppServices;
+			sourceTree = "<group>";
+		};
+		700000000000000000000008 /* YunPinKeyboardCore */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000016 /* KeyboardPrivacyPolicy.swift */,
+			);
+			path = YunPinKeyboardCore;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* YunPin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000002 /* Build configuration list for PBXNativeTarget "YunPin" */;
+			buildPhases = (
+				600000000000000000000001 /* Sources */,
+				600000000000000000000002 /* Frameworks */,
+				600000000000000000000003 /* Resources */,
+				600000000000000000000004 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				300000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = YunPin;
+			packageProductDependencies = (
+			);
+			productName = YunPin;
+			productReference = 20000000000000000000000B /* YunPin.app */;
+			productType = "com.apple.product-type.application";
+		};
+		500000000000000000000002 /* YunPinKeyboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000003 /* Build configuration list for PBXNativeTarget "YunPinKeyboard" */;
+			buildPhases = (
+				600000000000000000000005 /* Sources */,
+				600000000000000000000006 /* Frameworks */,
+				600000000000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = YunPinKeyboard;
+			packageProductDependencies = (
+			);
+			productName = YunPinKeyboard;
+			productReference = 20000000000000000000000C /* YunPinKeyboard.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		400000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2640;
+				LastUpgradeCheck = 2640;
+				TargetAttributes = {
+					500000000000000000000001 = { CreatedOnToolsVersion = 26.4; };
+					500000000000000000000002 = { CreatedOnToolsVersion = 26.4; };
+				};
+			};
+			buildConfigurationList = 800000000000000000000001 /* Build configuration list for PBXProject "YunPinIOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base, );
+			mainGroup = 700000000000000000000001;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = ();
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 700000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				500000000000000000000001 /* YunPin */,
+				500000000000000000000002 /* YunPinKeyboard */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		600000000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		600000000000000000000007 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		600000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000001 /* YunPinApp.swift in Sources */,
+				100000000000000000000002 /* YunPinAppDelegate.swift in Sources */,
+				100000000000000000000003 /* YunPinAppConfiguration.swift in Sources */,
+				100000000000000000000004 /* YunPinAppModel.swift in Sources */,
+				10000000000000000000000B /* EndpointProfile.swift in Sources */,
+				10000000000000000000000C /* PrivateSnapshot.swift in Sources */,
+				10000000000000000000000D /* AtomicVersionedFileStore.swift in Sources */,
+				100000000000000000000016 /* BackgroundSyncRetryController.swift in Sources */,
+				10000000000000000000000E /* EndpointProfileStore.swift in Sources */,
+				100000000000000000000018 /* GeneratedSyncCoreBinding.swift in Sources */,
+				10000000000000000000000F /* KeychainCredentialStore.swift in Sources */,
+				100000000000000000000010 /* SyncCoreBinding.swift in Sources */,
+				100000000000000000000017 /* SyncCorePathResolver.swift in Sources */,
+				100000000000000000000011 /* SyncCoordinator.swift in Sources */,
+				100000000000000000000012 /* SyncStatus.swift in Sources */,
+				100000000000000000000013 /* UpgradeRollbackController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		600000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000005 /* KeyboardViewController.swift in Sources */,
+				100000000000000000000006 /* KeyboardConfiguration.swift in Sources */,
+				100000000000000000000014 /* PrivateSnapshot.swift in Sources */,
+				100000000000000000000015 /* KeyboardPrivacyPolicy.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		300000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = 500000000000000000000002 /* YunPinKeyboard */; targetProxy = 300000000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		A00000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; VALIDATE_PRODUCT = YES; }; name = Release; };
+		A00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = App/YunPinApp.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = App/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", ); MARKETING_VERSION = 0.1; PRODUCT_BUNDLE_IDENTIFIER = io.github.kukuyan.yunpin.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; YUNPIN_APP_GROUP = group.io.github.kukuyan.yunpin; YUNPIN_BG_TASK_IDENTIFIER = io.github.kukuyan.yunpin.ios.sync; }; name = Debug; };
+		A00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = App/YunPinApp.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = App/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", ); MARKETING_VERSION = 0.1; PRODUCT_BUNDLE_IDENTIFIER = io.github.kukuyan.yunpin.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; YUNPIN_APP_GROUP = group.io.github.kukuyan.yunpin; YUNPIN_BG_TASK_IDENTIFIER = io.github.kukuyan.yunpin.ios.sync; }; name = Release; };
+		A00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = KeyboardExtension/YunPinKeyboard.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = KeyboardExtension/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks", ); MARKETING_VERSION = 0.1; PRODUCT_BUNDLE_IDENTIFIER = io.github.kukuyan.yunpin.ios.keyboard; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; YUNPIN_APP_GROUP = group.io.github.kukuyan.yunpin; }; name = Debug; };
+		A00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {APPLICATION_EXTENSION_API_ONLY = YES; CODE_SIGN_ENTITLEMENTS = KeyboardExtension/YunPinKeyboard.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = KeyboardExtension/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks", ); MARKETING_VERSION = 0.1; PRODUCT_BUNDLE_IDENTIFIER = io.github.kukuyan.yunpin.ios.keyboard; PRODUCT_NAME = "$(TARGET_NAME)"; SKIP_INSTALL = YES; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; YUNPIN_APP_GROUP = group.io.github.kukuyan.yunpin; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		800000000000000000000001 /* Build configuration list for PBXProject "YunPinIOS" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000001 /* Debug */, A00000000000000000000002 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000002 /* Build configuration list for PBXNativeTarget "YunPin" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000003 /* Debug */, A00000000000000000000004 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		800000000000000000000003 /* Build configuration list for PBXNativeTarget "YunPinKeyboard" */ = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000005 /* Debug */, A00000000000000000000006 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 400000000000000000000001 /* Project object */;
+}
