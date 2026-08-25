@@ -295,14 +295,12 @@ foreach ($dependency in $lock.librime.dependencies.PSObject.Properties) {
 Export-GitTree -Checkout (Join-Path $repoRoot "third_party\rime-ice") -Destination (Join-Path $sourceRoot "third_party\rime-ice") -ScratchRoot $scratchRoot
 Write-SourceCommitMarker -Path (Join-Path $sourceRoot "third_party\rime-ice") -Commit $lock.rimeIce.commit
 Export-GitSubtree -Checkout $repoRoot -Tree "librime-yunpin" -Destination (Join-Path $sourceRoot "librime-yunpin") -ScratchRoot $scratchRoot
-$sourceEngine = Join-Path $sourceRoot "engine"
-New-Item -ItemType Directory -Path $sourceEngine -Force | Out-Null
-foreach ($directory in @("include", "src", "tests")) {
-    Copy-TreeContent -Source (Join-Path (Join-Path $repoRoot "engine") $directory) -Destination (Join-Path $sourceEngine $directory)
-}
-foreach ($file in @(".gitignore", "CMakeLists.txt", "Makefile", "README.md")) {
-    Copy-Item -LiteralPath (Join-Path (Join-Path $repoRoot "engine") $file) -Destination $sourceEngine -Force
-}
+# Every other subtree in this archive comes from the git tree, so its contents
+# correspond to $repoCommit, which BUILD-SOURCE-METADATA.json records. The
+# engine was copied from the working tree instead, which meant the recorded
+# commit and the shipped engine sources could disagree -- and any untracked file
+# under engine/ would have been packaged. Use the same git export as the rest.
+Export-GitSubtree -Checkout $repoRoot -Tree "engine" -Destination (Join-Path $sourceRoot "engine") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/windows" -Destination (Join-Path $sourceRoot "platform\windows") -ScratchRoot $scratchRoot
 $privateE2ESource = [IO.Path]::GetFullPath((Join-Path $sourceRoot "platform\windows\e2e"))
 $sourcePrefixForExclusion = [IO.Path]::GetFullPath($sourceRoot).TrimEnd("\") + "\"
