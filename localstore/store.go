@@ -186,7 +186,11 @@ CREATE TABLE IF NOT EXISTS sync_state (
      prepared_device_sequence > 0 AND length(prepared_wire) > 0 AND length(prepared_hash) = 32)
   )
 );`
-	if _, err := store.db.ExecContext(ctx, schema+clockMetadata+syncSchema); err != nil {
+	// sync_health is a separate table rather than extra columns on sync_state,
+	// so an existing database picks it up through CREATE TABLE IF NOT EXISTS.
+	// Adding columns to a table that already exists would need a migration, and
+	// an observational record does not belong in the transactional checkpoint.
+	if _, err := store.db.ExecContext(ctx, schema+clockMetadata+syncSchema+syncHealthSchema); err != nil {
 		return fmt.Errorf("initialize local store: %w", err)
 	}
 	if store.syncEnabled {

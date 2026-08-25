@@ -35,10 +35,19 @@ type Agent struct {
 }
 
 type Status struct {
+	// Configuration readiness. These say the agent *can* run; they say nothing
+	// about whether synchronization is actually working, and must not be read
+	// as if they did.
 	Ready              bool `json:"ready"`
 	CredentialVersion  int  `json:"credential_version"`
 	EndpointConfigured bool `json:"endpoint_configured"`
 	DatabasePresent    bool `json:"database_present"`
+	// Observed health of the background loop. Timestamps are Unix
+	// milliseconds; zero means it has never happened. LastEventCode is a
+	// bounded category, never an error string. A failed round leaves
+	// LastSuccessAt untouched, so "when did this last work" survives the
+	// failure that made the question worth asking.
+	Health localstore.SyncHealth `json:"health"`
 }
 
 // ResidentReadiness is deliberately identifier-free. It is the only result
@@ -239,9 +248,20 @@ func (agent Agent) Status(ctx context.Context) (Status, error) {
 	if err := agent.validateLocalState(); err != nil {
 		return Status{}, err
 	}
-	return Status{
+	status := Status{
 		Ready: true, CredentialVersion: int(bundle.Version), EndpointConfigured: true, DatabasePresent: true,
-	}, nil
+	}
+	// Health is best effort: a database that cannot be opened must not make the
+	// configuration report fail, it just leaves the health record at zero.
+	if store, err := localstore.OpenForDevice(
+		ctx, agent.DatabasePath, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
+	); err == nil {
+		if health, healthErr := store.LoadSyncHealth(ctx); healthErr == nil {
+			status.Health = health
+		}
+		_ = store.Close()
+	}
+	return status, nil
 }
 
 // ResidentReady is a local, redacted, fail-closed activation gate. Unlike

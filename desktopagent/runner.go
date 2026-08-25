@@ -7,6 +7,8 @@ import (
 	"errors"
 	"math/big"
 	"time"
+
+	"github.com/kukuyan/yunpin-ime/localstore"
 )
 
 type RunEvent struct {
@@ -102,5 +104,52 @@ func (agent Agent) Run(ctx context.Context, options RunOptions) error {
 	if agent.RimeUserDBExportPath != "" && agent.RimeUserDBRefresh == nil {
 		return errors.New("resident Rime userdb ingestion requires the fixed platform maintenance refresher")
 	}
+	// Persist the outcome of every round before handing the event on. Without
+	// this the only externally visible fact about background synchronization is
+	// that a process exists, which is precisely what gets mistaken for it
+	// working.
+	caller := options.OnEvent
+	options.OnEvent = func(event RunEvent) {
+		agent.recordSyncHealth(ctx, event)
+		if caller != nil {
+			caller(event)
+		}
+	}
 	return runLoop(ctx, agent.SyncOnce, options)
+}
+
+// recordSyncHealth stores one round's outcome. It is best effort by design:
+// health is diagnostics, and failing to write it must never stop or fail the
+// synchronization it is describing.
+func (agent Agent) recordSyncHealth(ctx context.Context, event RunEvent) {
+	bundle, err := agent.loadBundle(ctx)
+	if err != nil {
+		return
+	}
+	defer bundle.Zero()
+	store, err := localstore.OpenForDevice(
+		ctx, agent.DatabasePath, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
+	)
+	if err != nil {
+		return
+	}
+	defer store.Close()
+
+	health, err := store.LoadSyncHealth(ctx)
+	if err != nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	health.LastEventAt = now
+	health.LastEventCode = event.Code
+	if event.Successful {
+		// A failed round must not clear this: "when did this last work" is the
+		// most useful thing to know once it stops working.
+		health.LastSuccessAt = now
+		health.Cursor = event.Summary.Cursor
+	}
+	if pending, err := store.PendingEventCount(ctx); err == nil {
+		health.PendingUploads = int64(pending)
+	}
+	_ = store.RecordSyncHealth(ctx, health)
 }
