@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"math/big"
+	"path/filepath"
 	"time"
 
 	"github.com/kukuyan/yunpin-ime/localstore"
@@ -43,14 +44,31 @@ func validateRunEvent(event RunEvent) error {
 }
 
 type RunOptions struct {
-	LockPath   string
-	Interval   time.Duration
-	MinBackoff time.Duration
-	MaxBackoff time.Duration
-	OnEvent    func(RunEvent)
+	// LockPath serializes one state-changing operation. It is held only for a
+	// synchronization round, so an explicit sync-once can run while the
+	// resident is waiting for its next interval.
+	LockPath string
+	// ResidentLockPath keeps exactly one background loop alive. When omitted it
+	// is derived from LockPath, preserving the fixed platform state root without
+	// adding a caller-controlled location.
+	ResidentLockPath string
+	Interval         time.Duration
+	MinBackoff       time.Duration
+	MaxBackoff       time.Duration
+	OnEvent          func(RunEvent)
 }
 
 func (options *RunOptions) defaults() error {
+	if options.LockPath == "" || !filepath.IsAbs(options.LockPath) {
+		return errors.New("agent operation lock path must be absolute")
+	}
+	if options.ResidentLockPath == "" {
+		options.ResidentLockPath = options.LockPath + ".resident"
+	}
+	if !filepath.IsAbs(options.ResidentLockPath) ||
+		filepath.Clean(options.ResidentLockPath) == filepath.Clean(options.LockPath) {
+		return errors.New("resident instance lock must be a distinct absolute path")
+	}
 	if options.Interval == 0 {
 		options.Interval = time.Minute
 	}
@@ -77,7 +95,7 @@ func jitter(duration time.Duration) time.Duration {
 }
 
 func classifyRunResult(summary SyncSummary, syncErr error, options RunOptions, backoff time.Duration) (RunEvent, time.Duration, time.Duration) {
-	if errors.Is(syncErr, ErrRimeMaintenanceBusy) {
+	if errors.Is(syncErr, ErrRimeMaintenanceBusy) || errors.Is(syncErr, ErrAlreadyRunning) {
 		return RunEvent{Code: "sync_deferred_busy", FailureClass: localstore.SyncFailureNone}, options.MinBackoff, options.MinBackoff
 	}
 	if syncErr != nil {
@@ -129,17 +147,22 @@ func runLoop(ctx context.Context, syncNow func(context.Context) (SyncSummary, er
 	if err := options.defaults(); err != nil {
 		return err
 	}
-	lock, err := acquireProcessLock(options.LockPath)
+	residentLock, err := acquireProcessLock(options.ResidentLockPath)
 	if err != nil {
 		return err
 	}
-	defer lock.Release()
+	defer residentLock.Release()
 	backoff := options.MinBackoff
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		summary, syncErr := syncNow(ctx)
+		var summary SyncSummary
+		syncErr := WithProcessLock(options.LockPath, func() error {
+			var operationErr error
+			summary, operationErr = syncNow(ctx)
+			return operationErr
+		})
 		event, delay, nextBackoff := classifyRunResult(summary, syncErr, options, backoff)
 		backoff = nextBackoff
 		if options.OnEvent != nil {
