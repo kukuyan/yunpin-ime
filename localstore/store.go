@@ -192,12 +192,14 @@ CREATE TABLE IF NOT EXISTS sync_state (
      prepared_device_sequence > 0 AND length(prepared_wire) > 0 AND length(prepared_hash) = 32)
   )
 );`
-	// sync_health is a separate table rather than extra columns on sync_state,
-	// so an existing database picks it up through CREATE TABLE IF NOT EXISTS.
-	// Adding columns to a table that already exists would need a migration, and
-	// an observational record does not belong in the transactional checkpoint.
+	// sync_health is separate from the transactional sync checkpoint. P1-04
+	// adds one observational column through an explicit migration below so an
+	// existing database keeps its prior success timestamp and event history.
 	if _, err := store.db.ExecContext(ctx, schema+clockMetadata+syncSchema+syncHealthSchema); err != nil {
 		return fmt.Errorf("initialize local store: %w", err)
+	}
+	if err := store.migrateSyncHealth(ctx); err != nil {
+		return fmt.Errorf("migrate sync health: %w", err)
 	}
 	if store.syncEnabled {
 		if _, err := store.db.ExecContext(ctx, `INSERT OR IGNORE INTO sync_state(singleton, device_id)

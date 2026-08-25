@@ -665,18 +665,12 @@ func commandRun(ctx context.Context, defaults desktopagent.Paths, arguments []st
 	if _, _, err := common.components(); err != nil {
 		return err
 	}
-	log, err := desktopagent.OpenEventLog(defaults)
-	if err != nil {
-		return err
-	}
-	defer log.Close()
 	return desktopagent.RunResident(ctx, defaults, desktopagent.ResidentOptions{
 		Interval: *interval,
 		Events: func(event desktopagent.RunEvent) {
 			// Events carry only a stable code and a numeric summary. They go to
-			// the bounded log so a background run stays diagnosable, and to
-			// stderr so an operator running this in a terminal still sees them.
-			log.Write(event)
+			// the bounded log inside RunResident; stderr lets an operator running
+			// this command in a terminal see the same redacted event.
 			encoded, _ := json.Marshal(event)
 			_, _ = fmt.Fprintln(os.Stderr, string(encoded))
 		},

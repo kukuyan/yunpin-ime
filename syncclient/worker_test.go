@@ -67,6 +67,11 @@ func TestWorkerRejectsUnrelatedAcknowledgementAndKeepsExactRetry(t *testing.T) {
 	}
 	if _, err := worker.SyncOnce(context.Background()); err == nil {
 		t.Fatal("relay acknowledgement for an unrelated sequence was accepted")
+	} else {
+		var protocolError *RelayProtocolError
+		if !errors.As(err, &protocolError) {
+			t.Fatalf("invalid relay response lost its typed boundary: %T %v", err, err)
+		}
 	}
 	state, err := store.LoadSyncState(context.Background())
 	if err != nil || state.Prepared == nil || state.NextDeviceSequence != 1 {

@@ -215,6 +215,28 @@ state, and fixed private Rime bridge metadata. Its Rime check never invokes
 maintenance or reads vocabulary rows; it validates only configuration,
 filesystem identity, permissions, and bounded metadata.
 
+`status` separates configuration readiness from observability. A ready device
+reports `health_available=false` when its health row cannot be opened or read,
+instead of presenting that condition as a never-synchronized zero record. It
+also reports `event_log_available`; the resident continues synchronizing when
+the bounded log cannot be opened. Existing and rotated log generations must be
+private regular non-link files, and rotation retains exactly one prior
+generation.
+
+Failed rounds persist only the closed `last_failure_class` values `network`,
+`auth`, `relay_protocol`, or `local_store`; successful and deferred rounds use
+`none`. Original error text, endpoint, account and device identifiers never
+enter health or the run-event log. Historical `sync_failed` rows created before
+classification migrate to the explicit value `unknown` rather than having a
+cause invented retroactively.
+
+Health is observational, not part of the relay checkpoint transaction. The
+agent writes it through the same already-open local store, after the sync work
+and before that store is closed; it no longer reloads credentials or reopens the
+database after `SyncOnce`. A power loss between a committed cursor/outbox change
+and the best-effort health write can therefore leave health stale, but can never
+roll back synchronization or make logging a prerequisite for it.
+
 Private-tag CI binaries expose one clean-device bootstrap command:
 `e2e-init-empty-baseline --confirm-create-empty-baseline`. It holds the fixed
 agent process lock and performs an OS-level no-replace publish of only the exact

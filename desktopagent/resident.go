@@ -67,11 +67,37 @@ func RunResident(ctx context.Context, defaults Paths, options ResidentOptions) e
 	if err != nil {
 		return err
 	}
+	events, closeLog := residentEventSink(defaults, options.Events)
+	defer closeLog()
 	return agent.Run(ctx, RunOptions{
 		LockPath: defaults.LockPath,
 		Interval: options.Interval,
-		OnEvent:  options.Events,
+		OnEvent:  events,
 	})
+}
+
+func residentEventSink(defaults Paths, caller func(RunEvent)) (func(RunEvent), func()) {
+	// Diagnostics are optional. A linked, permission-invalid or otherwise
+	// unavailable log is dropped while the synchronization loop continues; the
+	// status command exposes event_log_available=false.
+	log, logErr := OpenEventLog(defaults)
+	if logErr != nil {
+		log = nil
+	}
+	events := func(event RunEvent) {
+		if log != nil {
+			log.Write(event)
+		}
+		if caller != nil {
+			caller(event)
+		}
+	}
+	closeLog := func() {
+		if log != nil {
+			_ = log.Close()
+		}
+	}
+	return events, closeLog
 }
 
 // WriteRunEvent renders one run event as a single redacted JSON line and
@@ -85,16 +111,21 @@ func WriteRunEvent(writer io.Writer, event RunEvent, now time.Time) (int, error)
 	if writer == nil {
 		return 0, nil
 	}
+	if err := validateRunEvent(event); err != nil {
+		return 0, err
+	}
 	encoded, err := json.Marshal(struct {
-		Time       string      `json:"time"`
-		Code       string      `json:"code"`
-		Successful bool        `json:"successful"`
-		Summary    SyncSummary `json:"summary"`
+		Time         string      `json:"time"`
+		Code         string      `json:"code"`
+		FailureClass string      `json:"failure_class"`
+		Successful   bool        `json:"successful"`
+		Summary      SyncSummary `json:"summary"`
 	}{
-		Time:       now.UTC().Format(time.RFC3339),
-		Code:       event.Code,
-		Successful: event.Successful,
-		Summary:    event.Summary,
+		Time:         now.UTC().Format(time.RFC3339),
+		Code:         event.Code,
+		FailureClass: event.FailureClass,
+		Successful:   event.Successful,
+		Summary:      event.Summary,
 	})
 	if err != nil {
 		return 0, err

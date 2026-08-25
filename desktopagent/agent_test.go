@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kukuyan/yunpin-ime/localstore"
 	"github.com/kukuyan/yunpin-ime/protocol"
 	"github.com/kukuyan/yunpin-ime/syncclient"
 )
@@ -461,6 +462,9 @@ func TestStatusIsLocalOnlyAndReturnsNoIdentifiers(t *testing.T) {
 	if !status.Ready || !status.EndpointConfigured || !status.DatabasePresent || status.CredentialVersion != CredentialBundleVersion {
 		t.Fatalf("unexpected status %#v", status)
 	}
+	if status.HealthAvailable {
+		t.Fatal("an unreadable health database was presented as an available zero-value record")
+	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(database, 0644); err != nil {
 			t.Fatal(err)
@@ -470,6 +474,88 @@ func TestStatusIsLocalOnlyAndReturnsNoIdentifiers(t *testing.T) {
 		}).Status(context.Background()); err == nil {
 			t.Fatal("status accepted a non-private encrypted database")
 		}
+	}
+}
+
+func TestSyncOnceRecordsNetworkFailureWithoutOverwritingLastSuccess(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/seal"):
+			response.WriteHeader(http.StatusNoContent)
+		case request.URL.Path == "/v1/sync":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"accepted_sequences":[],"rejected_sequences":[],"envelopes":[],"next_cursor":0,"has_more":false,"current_key_epoch":1}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+
+	root := privateTestPath(t, "state")
+	makePrivateTestDirectory(t, root)
+	endpoint := filepath.Join(root, "sync.json")
+	if err := ConfigureEndpoint(endpoint, relay.URL, true); err != nil {
+		relay.Close()
+		t.Fatal(err)
+	}
+	bundle := testCredentials()
+	defer bundle.Zero()
+	database := filepath.Join(root, "private.db")
+	if err := ensureEncryptedStore(context.Background(), database, bundle, nil); err != nil {
+		relay.Close()
+		t.Fatal(err)
+	}
+	encoded, err := EncodeCredentialBundle(bundle)
+	if err != nil {
+		relay.Close()
+		t.Fatal(err)
+	}
+	secrets := newMemorySecretStore()
+	if err := secrets.Save(context.Background(), "default", encoded); err != nil {
+		zeroBytes(encoded)
+		relay.Close()
+		t.Fatal(err)
+	}
+	zeroBytes(encoded)
+	agent := Agent{
+		Secrets: secrets, Profile: "default", StateDirectory: root,
+		EndpointConfigPath: endpoint, DatabasePath: database,
+	}
+	if _, err := agent.SyncOnce(context.Background()); err != nil {
+		relay.Close()
+		t.Fatalf("successful baseline round: %v", err)
+	}
+	readHealth := func() localstore.SyncHealth {
+		store, err := localstore.OpenForDevice(context.Background(), database,
+			bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex())
+		if err != nil {
+			t.Fatal(err)
+		}
+		health, loadErr := store.LoadSyncHealth(context.Background())
+		closeErr := store.Close()
+		if loadErr != nil || closeErr != nil {
+			t.Fatalf("load health: load=%v close=%v", loadErr, closeErr)
+		}
+		return health
+	}
+	success := readHealth()
+	if success.LastSuccessAt == 0 || success.LastEventCode != "sync_complete" ||
+		success.LastFailureClass != localstore.SyncFailureNone {
+		t.Fatalf("successful round health=%+v", success)
+	}
+	relay.Close()
+	if _, err := agent.SyncOnce(context.Background()); err == nil {
+		t.Fatal("network outage unexpectedly synchronized")
+	}
+	failure := readHealth()
+	if failure.LastEventCode != "sync_failed" || failure.LastFailureClass != localstore.SyncFailureNetwork {
+		t.Fatalf("network outage was not classified: %+v", failure)
+	}
+	if failure.LastSuccessAt != success.LastSuccessAt {
+		t.Fatalf("network failure overwrote last success: before=%d after=%d", success.LastSuccessAt, failure.LastSuccessAt)
+	}
+	status, err := agent.Status(context.Background())
+	if err != nil || !status.HealthAvailable || status.Health.LastFailureClass != localstore.SyncFailureNetwork {
+		t.Fatalf("status did not expose classified health: status=%+v err=%v", status, err)
 	}
 }
 

@@ -23,6 +23,34 @@ type dropFirstResponse struct {
 	drop bool
 }
 
+func TestClientClassifiesTransportAndProtocolFailures(t *testing.T) {
+	endpoint, err := ParseEndpoint("https://relay.invalid", EndpointPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transportFailure := workerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("synthetic transport detail")
+	})
+	_, err = New(endpoint, WithTransport(transportFailure)).Sync(context.Background(), "token", SyncRequest{})
+	var networkError *NetworkError
+	if !errors.As(err, &networkError) {
+		t.Fatalf("transport error lost its typed boundary: %T %v", err, err)
+	}
+	invalidResponse := workerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("not-json")),
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	})
+	_, err = New(endpoint, WithTransport(invalidResponse)).Sync(context.Background(), "token", SyncRequest{})
+	var protocolError *RelayProtocolError
+	if !errors.As(err, &protocolError) {
+		t.Fatalf("invalid response lost its typed boundary: %T %v", err, err)
+	}
+}
+
 func (transport *dropFirstResponse) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := transport.base.RoundTrip(request)
 	if err != nil || !transport.drop {

@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kukuyan/yunpin-ime/localstore"
+	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
 func TestProcessLockRejectsConcurrentAgent(t *testing.T) {
@@ -68,7 +71,7 @@ func TestRunLoopRetriesWithRedactedEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := <-events
-	if first.Code != "sync_failed" || first.Successful {
+	if first.Code != "sync_failed" || first.FailureClass != localstore.SyncFailureLocalStore || first.Successful {
 		t.Fatalf("unexpected redacted event %#v", first)
 	}
 }
@@ -97,8 +100,28 @@ func TestRimeMaintenanceBusyIsDeferredWithoutGrowingFailureBackoff(t *testing.T)
 		t.Fatalf("busy host response polluted failure backoff: event=%#v delay=%v next=%v", event, delay, nextBackoff)
 	}
 	failure, failureDelay, failureBackoff := classifyRunResult(SyncSummary{}, errors.New("synthetic failure"), options, 8*time.Second)
-	if failure.Code != "sync_failed" || failure.Successful || failureDelay != 8*time.Second || failureBackoff != options.MaxBackoff {
+	if failure.Code != "sync_failed" || failure.FailureClass != localstore.SyncFailureLocalStore ||
+		failure.Successful || failureDelay != 8*time.Second || failureBackoff != options.MaxBackoff {
 		t.Fatalf("ordinary failure no longer uses exponential backoff: event=%#v delay=%v next=%v", failure, failureDelay, failureBackoff)
+	}
+}
+
+func TestSyncFailureClassificationUsesTypedRedactedBoundaries(t *testing.T) {
+	checks := []struct {
+		err  error
+		want string
+	}{
+		{&syncclient.NetworkError{Err: errors.New("private endpoint detail")}, localstore.SyncFailureNetwork},
+		{&syncclient.APIError{Status: 401, Code: "invalid_device_token"}, localstore.SyncFailureAuth},
+		{&syncclient.APIError{Status: 503, Code: "temporarily_unavailable"}, localstore.SyncFailureRelayProtocol},
+		{&syncclient.RelayProtocolError{Err: errors.New("private response detail")}, localstore.SyncFailureRelayProtocol},
+		{&syncclient.LocalStoreError{Err: errors.New("private path detail")}, localstore.SyncFailureLocalStore},
+		{errors.New("local snapshot detail"), localstore.SyncFailureLocalStore},
+	}
+	for _, check := range checks {
+		if got := classifySyncFailure(fmt.Errorf("wrapped: %w", check.err)); got != check.want {
+			t.Fatalf("classify %T=%q, want %q", check.err, got, check.want)
+		}
 	}
 }
 

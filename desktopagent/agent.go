@@ -42,6 +42,13 @@ type Status struct {
 	CredentialVersion  int  `json:"credential_version"`
 	EndpointConfigured bool `json:"endpoint_configured"`
 	DatabasePresent    bool `json:"database_present"`
+	// HealthAvailable distinguishes an unreadable health record from a device
+	// that has simply never synchronized.
+	HealthAvailable bool `json:"health_available"`
+	// EventLogAvailable reports whether the bounded redacted log path currently
+	// satisfies its private regular-file contract. Logging remains optional and
+	// never controls whether synchronization runs.
+	EventLogAvailable bool `json:"event_log_available"`
 	// Observed health of the background loop. Timestamps are Unix
 	// milliseconds; zero means it has never happened. LastEventCode is a
 	// bounded category, never an error string. A failed round leaves
@@ -250,14 +257,17 @@ func (agent Agent) Status(ctx context.Context) (Status, error) {
 	}
 	status := Status{
 		Ready: true, CredentialVersion: int(bundle.Version), EndpointConfigured: true, DatabasePresent: true,
+		EventLogAvailable: EventLogAvailable(Paths{StateDirectory: agent.StateDirectory}),
+		Health:            localstore.SyncHealth{LastFailureClass: localstore.SyncFailureNone},
 	}
-	// Health is best effort: a database that cannot be opened must not make the
-	// configuration report fail, it just leaves the health record at zero.
+	// Health is best effort for configuration readiness, but its availability is
+	// explicit: an unreadable record is never presented as "never synchronized".
 	if store, err := localstore.OpenForDevice(
 		ctx, agent.DatabasePath, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
 	); err == nil {
 		if health, healthErr := store.LoadSyncHealth(ctx); healthErr == nil {
 			status.Health = health
+			status.HealthAvailable = true
 		}
 		_ = store.Close()
 	}
@@ -379,13 +389,8 @@ func (agent Agent) nativeEventIngestionEnabled() bool {
 // SyncOnce is the only network-bearing desktop operation. Native input event
 // handlers never call it; they continue using their current memory snapshot.
 func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr error) {
-	if agent.RimeUserDBRefresh != nil {
-		if agent.RimeUserDBExportPath == "" {
-			return SyncSummary{}, errors.New("Rime userdb refresh requires a fixed private staging path")
-		}
-		if err := agent.RimeUserDBRefresh(ctx); err != nil {
-			return SyncSummary{}, fmt.Errorf("refresh Rime userdb snapshot: %w", err)
-		}
+	if agent.RimeUserDBRefresh != nil && agent.RimeUserDBExportPath == "" {
+		return SyncSummary{}, errors.New("Rime userdb refresh requires a fixed private staging path")
 	}
 	bundle, err := agent.loadBundle(ctx)
 	if err != nil {
@@ -423,8 +428,17 @@ func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr
 			returnErr = fmt.Errorf("protect encrypted local database and sidecar permissions: %w", permissionErr)
 		}
 	}()
+	// Register after the close defer so the health write runs first, through
+	// this exact store handle. This removes the former credential reload and
+	// second database open between a sync result and its health observation.
+	defer func() { recordSyncHealth(ctx, store, summary, returnErr) }()
 	if err := protectPrivateDatabaseFiles(agent.DatabasePath); err != nil {
 		return SyncSummary{}, fmt.Errorf("protect opened encrypted local database and sidecars: %w", err)
+	}
+	if agent.RimeUserDBRefresh != nil {
+		if err := agent.RimeUserDBRefresh(ctx); err != nil {
+			return SyncSummary{}, fmt.Errorf("refresh Rime userdb snapshot: %w", err)
+		}
 	}
 	var nativeSummary NativeEventSummary
 	var rimeSummary localstore.RimeUserDBImportResult
