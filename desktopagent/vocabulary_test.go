@@ -37,13 +37,15 @@ func newVocabularyAgent(t *testing.T) Agent {
 	}
 	zeroBytes(encoded)
 
-	// A baseline must exist for the snapshot rebuild to run; an empty one keeps
-	// the test's expectations about row counts about the edits alone.
+	// An empty baseline keeps the test's expectations about the edits alone.
+	//
+	// It is written through the production writer rather than os.WriteFile:
+	// readBoundedRegular rejects anything privateFilePermissionsOK does not
+	// accept, and on Windows a hand-created file inherits the parent directory's
+	// DACL instead of the restricted one protectPrivateFile applies. Building a
+	// private file by hand therefore passes on macOS and fails on Windows.
 	baseline := filepath.Join(root, "rime", "baseline.tsv")
-	if err := os.MkdirAll(filepath.Dir(baseline), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(baseline, []byte("phrase\tpinyin\tsource\tuse_count\tpinned\n"), 0600); err != nil {
+	if _, err := writeAtomicPrivateFile(baseline, []byte("phrase\tpinyin\tsource\tuse_count\tpinned\n")); err != nil {
 		t.Fatal(err)
 	}
 	reloads := 0
