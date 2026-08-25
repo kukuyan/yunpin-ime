@@ -157,6 +157,7 @@ foreach ($mapping in $lock.package.runtimeFiles.PSObject.Properties) {
 $publicSyncAgent = Join-Path $OutputRoot "desktopagent\public\yunpin-sync-agent.exe"
 $publicSyncResident = Join-Path $OutputRoot "desktopagent\public\yunpin-sync-resident.exe"
 $publicSettings = Join-Path $OutputRoot "desktopagent\public\yunpin-settings.exe"
+$publicReplayLab = Join-Path $OutputRoot "desktopagent\public\yunpin-replay-lab.exe"
 if (-not (Test-Path $publicSyncAgent -PathType Leaf)) {
     throw "Public default-tag sync agent is missing: $publicSyncAgent"
 }
@@ -169,11 +170,20 @@ if (-not (Test-Path -LiteralPath $publicSettings -PathType Leaf)) {
     throw "Windowless settings launcher is missing; run Build-SyncAgents.ps1 first"
 }
 Copy-Item -LiteralPath $publicSettings -Destination (Join-Path $syncAgentRoot "yunpin-settings.exe") -Force
+if (-not (Test-Path -LiteralPath $publicReplayLab -PathType Leaf)) {
+    throw "Replay Lab CLI is missing; run Build-SyncAgents.ps1 first"
+}
+Copy-Item -LiteralPath $publicReplayLab -Destination (Join-Path $syncAgentRoot "yunpin-replay-lab.exe") -Force
 $syncAgentLicenses = Join-Path $OutputRoot "desktopagent\licenses"
 if (-not (Test-Path (Join-Path $syncAgentLicenses "LICENSES.json") -PathType Leaf)) {
     throw "Public sync-agent license-text bundle is missing"
 }
 Copy-TreeContent -Source $syncAgentLicenses -Destination (Join-Path $licenseRoot "YunPin-Sync-Agent-Go")
+$replayLicenses = Join-Path $OutputRoot "replaylab\licenses"
+if (-not (Test-Path (Join-Path $replayLicenses "LICENSES.json") -PathType Leaf)) {
+    throw "Replay Lab license-text bundle is missing"
+}
+Copy-TreeContent -Source $replayLicenses -Destination (Join-Path $licenseRoot "YunPin-Replay-Lab-Go")
 foreach ($supportScript in @(
     "Install-SyncAgent.ps1", "Verify-SyncAgent.ps1",
     "Enable-SyncAgent.ps1", "Uninstall-SyncAgent.ps1"
@@ -323,7 +333,7 @@ if (Test-Path -LiteralPath $privateE2ESource) {
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/rime" -Destination (Join-Path $sourceRoot "platform\rime") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/weasel" -Destination (Join-Path $sourceRoot "platform\patches\weasel") -ScratchRoot $scratchRoot
 Export-GitSubtree -Checkout $repoRoot -Tree "platform/patches/librime-1.17" -Destination (Join-Path $sourceRoot "platform\patches\librime-1.17") -ScratchRoot $scratchRoot
-foreach ($tree in @("desktopagent", "localstore", "protocol", "syncclient")) {
+foreach ($tree in @("desktopagent", "localstore", "protocol", "replaylab", "syncclient")) {
     Export-GitSubtree -Checkout $repoRoot -Tree $tree -Destination (Join-Path $sourceRoot $tree) -ScratchRoot $scratchRoot
 }
 foreach ($file in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {

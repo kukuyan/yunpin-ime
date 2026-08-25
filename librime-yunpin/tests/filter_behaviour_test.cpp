@@ -15,6 +15,7 @@
 
 #include "rime_yunpin_filter.hpp"
 #include "yunpin/native_selection_events.hpp"
+#include "yunpin/replay_native.hpp"
 
 #include <rime/engine.h>
 #include <rime/key_event.h>
@@ -209,6 +210,16 @@ void DrainNativeSelectionEvents() {
   yunpin::NativeSelectionEvent event;
   while (yunpin::NativeSelectionEventQueue::Instance().TryPop(&event)) {
   }
+}
+
+std::vector<std::string> DrainReplayEvents() {
+  std::vector<std::string> events;
+  char json[yunpin::kReplayJsonLimit + 1]{};
+  auto& producer = yunpin::GlobalReplayNativeProducer();
+  while (const std::size_t size = producer.DrainJson(json, sizeof(json))) {
+    events.emplace_back(json, size);
+  }
+  return events;
 }
 
 // Drives the filter the way librime does: AppliesToSegment, then Apply, then
@@ -669,6 +680,101 @@ void TestProtectedContextsPublishNoNativeEvents() {
   DrainNativeSelectionEvents();
 }
 
+void TestReplayCaptureIsExplicitAndUsesTheVisibleCandidatePage() {
+  auto& producer = yunpin::GlobalReplayNativeProducer();
+  producer.SetEnabled(false);
+  (void)producer.DiscardAll();
+
+  Harness disabled;
+  disabled.config.bools_["yunpin/enabled"] = false;
+  disabled.config.bools_["yunpin/short_input_guard"] = false;
+  disabled.config.bools_["yunpin/long_correction_guard"] = false;
+  YunPinFilter disabled_filter(disabled.ticket());
+  (void)RunWithTaggedUpstream(
+      disabled_filter, disabled, "synthetic",
+      {Correction("synthetic correction"), Ordinary("synthetic exact")}, 2);
+  assert(DrainReplayEvents().empty() &&
+         "disabled Replay Lab captured a candidate page");
+
+  producer.SetEnabled(false);
+  Harness normal;
+  normal.config.bools_["yunpin/enabled"] = false;
+  normal.config.bools_["yunpin/session_learning"] = false;
+  normal.config.bools_["yunpin/short_input_guard"] = false;
+  normal.config.bools_["yunpin/long_correction_guard"] = false;
+  YunPinFilter normal_filter(normal.ticket());
+  producer.SetEnabled(true);
+  (void)RunWithTaggedUpstream(
+      normal_filter, normal, "synthetic",
+      {Correction("synthetic correction"), Ordinary("synthetic exact")}, 2);
+  const auto captured = DrainReplayEvents();
+  assert(captured.size() == 1);
+  assert(captured[0].find("\"type\":\"composition_snapshot\"") !=
+         std::string::npos);
+  assert(captured[0].find("\"text\":\"synthetic correction\",\"is_correction\":true,\"highlighted\":true") !=
+         std::string::npos);
+  assert(captured[0].find("\"text\":\"synthetic exact\",\"is_correction\":false") !=
+         std::string::npos);
+
+  Harness refilled;
+  refilled.config.bools_["yunpin/enabled"] = false;
+  refilled.config.bools_["yunpin/session_learning"] = false;
+  refilled.config.bools_["yunpin/short_input_guard"] = false;
+  refilled.config.bools_["yunpin/long_correction_guard"] = true;
+  YunPinFilter refilled_filter(refilled.ticket());
+  (void)RunWithTaggedUpstream(
+      refilled_filter, refilled, "changshuruhuigui",
+      {Correction("c0"), Correction("c1"), Ordinary("o0"),
+       Correction("c2"), Ordinary("o1"), Correction("c3"),
+       Ordinary("o2"), Correction("c4"), Ordinary("refilled-visible"),
+       Ordinary("tail")},
+      10);
+  const auto refilled_capture = DrainReplayEvents();
+  assert(refilled_capture.size() == 1);
+  assert(refilled_capture[0].find("\"text\":\"refilled-visible\"") !=
+         std::string::npos &&
+         "Replay Lab candidate page did not include the visible refill");
+
+  Harness protected_context;
+  protected_context.context.options_["password_mode"] = true;
+  protected_context.config.bools_["yunpin/enabled"] = false;
+  protected_context.config.bools_["yunpin/short_input_guard"] = false;
+  protected_context.config.bools_["yunpin/long_correction_guard"] = false;
+  YunPinFilter protected_filter(protected_context.ticket());
+  (void)RunWithUpstream(protected_filter, protected_context, "secret",
+                        {"first", "second"}, 2);
+  assert(DrainReplayEvents().empty() &&
+         "protected context published Replay Lab text");
+
+  producer.SetEnabled(false);
+  (void)producer.DiscardAll();
+}
+
+void TestReplayCommitCarriesTheSelectedVisibleRank() {
+  auto& producer = yunpin::GlobalReplayNativeProducer();
+  producer.SetEnabled(true);
+  (void)producer.DiscardAll();
+
+  Harness harness;
+  harness.config.bools_["yunpin/enabled"] = false;
+  harness.config.bools_["yunpin/short_input_guard"] = false;
+  harness.config.bools_["yunpin/long_correction_guard"] = false;
+  YunPinFilter filter(harness.ticket());
+  (void)RunWithUpstream(filter, harness, "synthetic", {"first", "second"},
+                        2);
+  EmitCommit(harness, "synthetic", "second");
+  const auto captured = DrainReplayEvents();
+  assert(captured.size() == 3);
+  assert(captured[1].find("\"type\":\"select\"") != std::string::npos);
+  assert(captured[1].find("\"rank\":2") != std::string::npos);
+  assert(captured[2].find("\"type\":\"commit\"") != std::string::npos);
+  assert(captured[2].find("\"final_text\":\"second\"") !=
+         std::string::npos);
+
+  producer.SetEnabled(false);
+  (void)producer.DiscardAll();
+}
+
 void TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable() {
   const auto empty = std::filesystem::temp_directory_path() /
                      "yunpin-filter-behaviour" / "no-snapshot";
@@ -823,6 +929,8 @@ int main() {
   TestNestedNotifierCanDestroyFilter();
   TestRapidSessionLearningChurn();
   TestProtectedContextsPublishNoNativeEvents();
+  TestReplayCaptureIsExplicitAndUsesTheVisibleCandidatePage();
+  TestReplayCommitCarriesTheSelectedVisibleRank();
   TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable();
   TestPrivateSwitchDoesNotDisableShortGuard();
   TestBothFeatureSwitchesOffStayInactive();

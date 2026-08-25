@@ -13,6 +13,10 @@ command -v lipo >/dev/null 2>&1 || die "lipo is required to build universal sync
   cd "$REPO_ROOT/desktopagent"
   go mod verify
 )
+(
+  cd "$REPO_ROOT/replaylab"
+  go mod verify
+)
 
 build_root="${YUNPIN_MACOS_BUILD_ROOT:-${REPO_ROOT}/build/macos}"
 agent_root="$build_root/sync-agent"
@@ -21,11 +25,14 @@ public_root="$agent_root/public"
 private_root="$build_root/e2e-private/macos"
 public_binary="$public_root/yunpin-sync-agent"
 private_binary="$private_root/yunpin-sync-agent"
+replay_binary="$public_root/yunpin-replay-lab"
 
 mkdir -p "$slice_root" "$public_root" "$private_root"
 rm -f \
   "$slice_root"/yunpin-sync-agent-* \
+  "$slice_root"/yunpin-replay-lab-* \
   "$public_binary" "$private_binary" \
+  "$replay_binary" \
   "$private_root/BUILD-METADATA.json" "$private_root/SHA256SUMS"
 
 go_quote_argument() {
@@ -67,6 +74,25 @@ build_slice() {
   )
 }
 
+build_replay_slice() {
+  local goarch="$1"
+  local clang_arch="$2"
+  local output="$3"
+  (
+    cd "$REPO_ROOT/replaylab"
+    CGO_ENABLED=1 \
+      GOOS=darwin \
+      GOARCH="$goarch" \
+      CC="$go_cc" \
+      SDKROOT="$sdkroot" \
+      MACOSX_DEPLOYMENT_TARGET=13.0 \
+      CGO_CFLAGS="-arch $clang_arch -isysroot $go_sdkroot -mmacosx-version-min=13.0" \
+      CGO_LDFLAGS="-arch $clang_arch -isysroot $go_sdkroot -mmacosx-version-min=13.0" \
+      go build -trimpath -buildvcs=false -ldflags=-linkmode=external \
+        -o "$output" ./cmd/yunpin-replay-lab
+  )
+}
+
 for variant in public private; do
   if [[ "$variant" == public ]]; then
     build_slice arm64 arm64 "$slice_root/yunpin-sync-agent-$variant-arm64"
@@ -93,9 +119,29 @@ for variant in public private; do
   [[ "$minos_values" == "13.0" ]] || die "$variant sync agent minOS is not exactly 13.0: $minos_values"
 done
 
+build_replay_slice arm64 arm64 "$slice_root/yunpin-replay-lab-arm64"
+build_replay_slice amd64 x86_64 "$slice_root/yunpin-replay-lab-x86_64"
+lipo -create \
+  "$slice_root/yunpin-replay-lab-arm64" \
+  "$slice_root/yunpin-replay-lab-x86_64" \
+  -output "$replay_binary"
+chmod 755 "$replay_binary"
+replay_architectures="$(lipo -archs "$replay_binary")"
+[[ " $replay_architectures " == *" arm64 "* && " $replay_architectures " == *" x86_64 "* ]] ||
+  die "Replay Lab CLI is not universal: $replay_architectures"
+replay_minos_values="$(xcrun vtool -show-build "$replay_binary" | awk '/^[[:space:]]*minos / {print $2}' | LC_ALL=C sort -u)"
+[[ "$replay_minos_values" == "13.0" ]] ||
+  die "Replay Lab CLI minOS is not exactly 13.0: $replay_minos_values"
+
 license_root="$agent_root/licenses"
 /usr/bin/python3 "$REPO_ROOT/scripts/package_go_licenses.py" \
   --go-module "$REPO_ROOT/desktopagent" --output "$license_root"
+replay_license_root="$agent_root/replay-licenses"
+/usr/bin/python3 "$REPO_ROOT/scripts/package_go_licenses.py" \
+  --go-module "$REPO_ROOT/replaylab" \
+  --go-package ./cmd/yunpin-replay-lab \
+  --artifact yunpin-replay-lab \
+  --output "$replay_license_root"
 ditto "$license_root" "$private_root/licenses"
 
 "$public_binary" install-probe >/dev/null
@@ -111,6 +157,12 @@ public_baseline_status=$?
 set -e
 [[ "$public_baseline_status" -ne 0 && "$public_baseline_output" == "yunpin-sync-agent: unknown command" ]] ||
   die "public sync agent exposes the private empty-baseline command"
+set +e
+replay_usage_output="$("$replay_binary" 2>&1)"
+replay_usage_status=$?
+set -e
+[[ "$replay_usage_status" -ne 0 && "$replay_usage_output" == "error: usage: yunpin-replay-lab"* ]] ||
+  die "Replay Lab CLI usage probe failed"
 
 codesign --force --sign - --timestamp=none "$private_binary"
 codesign --verify --strict "$private_binary"
@@ -152,4 +204,5 @@ PY
 )
 
 printf 'built public macOS sync agent: %s\n' "$public_binary"
+printf 'built public macOS Replay Lab CLI: %s\n' "$replay_binary"
 printf 'built private E2E-only macOS sync agent: %s\n' "$private_binary"

@@ -145,12 +145,26 @@ implements a disabled-by-default fixed 64-slot single-producer/single-consumer
 ring, bounded native frames, an 8 KiB JSON limit and drop counting. Native-frame
 parsing and synthetic conversion into `EventV1` are tested.
 
-Neither Squirrel nor Weasel currently produces these native events, and no
-background sink continuously drains the ring into the store. `start` creates a
-local session/resume record only; it is not evidence that monitoring is active.
-The future producer must do bounded memory writes only on the key path, while a
-separate local process performs disk I/O. Replay traces are private data and
-remain outside Git and synchronization.
+The merged filter publishes the actual bounded first candidate page plus
+selection, commit and composition-backspace frames. Each session keeps its own
+candidate snapshot, so concurrent host sessions cannot borrow one another's
+selection rank. Squirrel and Weasel start a dormant watcher at their fixed
+per-user Replay Lab root. The watcher observes `active.json` on a background
+thread and enables the producer only for a valid `running` session created by
+an explicit `yunpin-replay-lab start` or `resume`; ordinary IME startup records
+nothing. `pause`, an invalid session file, or host shutdown disables production
+and discards queued content at the boundary. Contexts that Rime marks as
+password/private/one-shot, plus host-opted-out contexts, fail closed through
+the same predicate as learning; installed native secure-field propagation is
+part of the remaining manual gate.
+
+The input path performs only fixed-memory copies and a nonblocking ring push.
+File polling, append, flush and the 64 MiB per-session native-file cap are on the
+background watcher. A cross-language synthetic test drives native frames into
+the spool and verifies that the Go report recognizes a correction candidate
+displacing a viable ordinary candidate. Installed Squirrel/Weasel capture is
+still a manual gate. Replay traces are private data and remain outside Git and
+synchronization.
 
 ## Sync service
 

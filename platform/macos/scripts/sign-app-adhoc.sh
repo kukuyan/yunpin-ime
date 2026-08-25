@@ -35,8 +35,11 @@ while IFS= read -r helper; do
 done < <(find "$app/Contents/MacOS" -maxdepth 1 -type f -perm -111 -name 'rime*' | sort)
 
 sync_agent="$app/Contents/MacOS/yunpin-sync-agent"
+replay_lab="$app/Contents/MacOS/yunpin-replay-lab"
 [[ -x "$sync_agent" ]] || die "bundled public sync agent is missing"
+[[ -x "$replay_lab" ]] || die "bundled Replay Lab CLI is missing"
 sign_adhoc "$sync_agent"
+sign_adhoc "$replay_lab"
 
 sign_adhoc "$app"
 codesign --verify --deep --strict --verbose=2 "$app"

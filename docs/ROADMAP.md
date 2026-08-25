@@ -20,9 +20,11 @@
   allow one forward/reverse exact bridge at one input offset, with 32 searches
   total and at most 16 correction edges per searched offset. Long correction
   display is capped to one item at total rank #2 or #3.
-- Local Replay Lab `EventV1`, append-only store, lifecycle CLI/export/report and
-  disabled fixed C++ ring foundation. Native Squirrel/Weasel producers and the
-  background sink are not connected; `start` does not activate monitoring.
+- Local Replay Lab `EventV1`, append-only store, lifecycle CLI/export/report,
+  disabled fixed C++ ring, merged candidate/selection/commit callbacks, and
+  dormant Squirrel/Weasel background watchers. Capture activates only after an
+  explicit `start`/`resume`; the synthetic host-to-report chain is automated,
+  while installed-host real-text acceptance remains manual.
 - Desktop-agent skeleton for non-synchronizing macOS Keychain, current-user
   Windows DPAPI, local status, one-shot sync and single-instance retry loop;
   production account creation remains fail-closed.
@@ -105,10 +107,11 @@ keyboard extension network access.
   protected-context and host-deletion evidence, then connect its word-level
   aggregates and scores to encrypted local persistence and an explicit local
   habit-monitor UI/CLI.
-- Connect Replay Lab's reviewed native producers and background sink on both
-  frontends. Prove that `start` plus an active sink produces bounded events,
-  pause/protected contexts stop capture, queue overflow reports `drop_count`,
-  and no file operation occurs on the key path.
+- Complete installed-host Replay Lab acceptance on both frontends: prove that
+  `start` plus the packaged watcher produces bounded real IME events,
+  pause/protected contexts stop capture within the documented poll interval,
+  queue overflow reports `drop_count`, and no file operation occurs on the key
+  path. The equivalent synthetic chain is already automated.
 - Rebuild immutable candidate snapshots after learning or sync, atomically swap
   generations and trigger Rime reload; transport-only tests do not satisfy this
   desktop gate.

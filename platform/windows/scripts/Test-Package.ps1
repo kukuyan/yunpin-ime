@@ -161,6 +161,13 @@ if (-not (Test-Path $settingsLauncher -PathType Leaf)) {
 if ((Get-PeMachine -Path $settingsLauncher) -ne 0x8664) {
     throw "Windowless settings launcher is not an x64 PE executable"
 }
+$replayLab = Join-Path $syncAgentRoot "yunpin-replay-lab.exe"
+if (-not (Test-Path $replayLab -PathType Leaf)) {
+    throw "Replay Lab CLI is missing"
+}
+if ((Get-PeMachine -Path $replayLab) -ne 0x8664) {
+    throw "Replay Lab CLI is not an x64 PE executable"
+}
 $subsystemChecker = Join-Path $repoRoot "scripts\check_pe_subsystem.py"
 if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
     & python $subsystemChecker gui $syncResident
@@ -169,6 +176,8 @@ if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
     if ($LASTEXITCODE -ne 0) { throw "Packaged settings launcher is not linked for the Windows GUI subsystem" }
     & python $subsystemChecker console $syncAgent
     if ($LASTEXITCODE -ne 0) { throw "Packaged interactive sync agent must stay console-subsystem" }
+    & python $subsystemChecker console $replayLab
+    if ($LASTEXITCODE -ne 0) { throw "Packaged Replay Lab CLI must stay console-subsystem" }
 }
 foreach ($supportFile in @(
     "Install-SyncAgent.ps1", "Verify-SyncAgent.ps1",
@@ -186,6 +195,14 @@ foreach ($privateArtifactFile in @("BUILD-METADATA.json", "SHA256SUMS")) {
 if (-not (Test-Path (Join-Path $BundleRoot "licenses\YunPin-Sync-Agent-Go\LICENSES.json") -PathType Leaf)) {
     throw "Public sync-agent license-text bundle is missing"
 }
+if (-not (Test-Path (Join-Path $BundleRoot "licenses\YunPin-Replay-Lab-Go\LICENSES.json") -PathType Leaf)) {
+    throw "Replay Lab license-text bundle is missing"
+}
+$replayLicenseManifest = Get-Content -LiteralPath `
+    (Join-Path $BundleRoot "licenses\YunPin-Replay-Lab-Go\LICENSES.json") -Raw | ConvertFrom-Json
+if ([string]$replayLicenseManifest.artifact -cne "yunpin-replay-lab") {
+    throw "Replay Lab license manifest names the wrong artifact"
+}
 $probe = Invoke-AgentCapture -Executable $syncAgent -Arguments @("install-probe")
 if ($probe.ExitCode -ne 0) {
     throw "Public sync agent install-probe failed"
@@ -198,6 +215,11 @@ $privateBaselineCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments 
 if ($privateBaselineCommand.ExitCode -eq 0 -or
     $privateBaselineCommand.Output -cne "yunpin-sync-agent: unknown command") {
     throw "Public Windows package exposes the private empty-baseline E2E command"
+}
+$replayUsage = Invoke-AgentCapture -Executable $replayLab -Arguments @("help")
+if ($replayUsage.ExitCode -eq 0 -or
+    -not $replayUsage.Output.StartsWith("error: usage: yunpin-replay-lab")) {
+    throw "Packaged Replay Lab CLI usage probe failed"
 }
 
 $setupBinaryText = [Text.Encoding]::Unicode.GetString(

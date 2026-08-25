@@ -134,21 +134,28 @@ class ReplayNativeProducer {
   // Called only by the background platform sink. Returns one JSON object
   // without a trailing newline, or zero when the queue is empty.
   std::size_t DrainJson(char* output, std::size_t capacity);
-
-  void RememberComposition(const ReplayComposition& composition) noexcept;
-  [[nodiscard]] ReplayComposition LastComposition() const noexcept;
+  // Disables no producer state by itself. The background sink calls this only
+  // after SetEnabled(false) when a Replay Lab session is paused, replaced, or
+  // stopped, so queued text cannot cross an opt-in session boundary.
+  std::size_t DiscardAll() noexcept;
 
   [[nodiscard]] std::uint64_t dropped() const noexcept;
 
  private:
-  bool TryPop(ReplayNativeEvent* event) noexcept;
+  bool TryPop(ReplayNativeEvent* event,
+              std::uint64_t* capture_generation) noexcept;
 
   std::array<ReplayNativeEvent, kReplayRingCapacity> ring_{};
+  std::array<std::uint64_t, kReplayRingCapacity> ring_generations_{};
   std::atomic<std::size_t> head_{0};
   std::atomic<std::size_t> tail_{0};
   std::atomic<std::uint64_t> dropped_{0};
-  std::atomic<bool> enabled_{false};
-  ReplayComposition last_composition_{};
+  // Even values are disabled; odd values are enabled. The value changes
+  // atomically on every transition. A producer that was already in flight at
+  // pause can still publish its reserved slot after the consumer's discard
+  // pass; tagging the slot with this state keeps that text from entering a
+  // later explicitly started session.
+  std::atomic<std::uint64_t> capture_state_{0};
 };
 
 ReplayNativeProducer& GlobalReplayNativeProducer() noexcept;
@@ -156,3 +163,24 @@ std::uint64_t ReplayMonotonicMicros() noexcept;
 std::uint64_t ReplayUtcUnixMicros() noexcept;
 
 }  // namespace yunpin
+
+#if defined(_WIN32)
+#define YUNPIN_REPLAY_API __declspec(dllexport)
+#elif defined(__GNUC__)
+#define YUNPIN_REPLAY_API __attribute__((visibility("default")))
+#else
+#define YUNPIN_REPLAY_API
+#endif
+
+extern "C" {
+
+// Starts a dormant background watcher for the fixed Replay Lab root. Merely
+// starting the watcher never enables capture: active.json must contain a
+// valid running session created by an explicit `yunpin-replay-lab start`.
+YUNPIN_REPLAY_API bool YunPinStartReplaySpoolerV1(
+    const char* absolute_utf8_root) noexcept;
+YUNPIN_REPLAY_API bool YunPinStartDefaultReplaySpoolerV1() noexcept;
+YUNPIN_REPLAY_API void YunPinStopReplaySpoolerV1() noexcept;
+YUNPIN_REPLAY_API std::uint64_t YunPinReplaySpoolDropCountV1() noexcept;
+
+}  // extern "C"

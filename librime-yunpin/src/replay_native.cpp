@@ -231,15 +231,22 @@ bool IsValidEvent(const ReplayNativeEvent& event) noexcept {
 }  // namespace
 
 void ReplayNativeProducer::SetEnabled(bool enabled) noexcept {
-  enabled_.store(enabled, std::memory_order_release);
+  std::uint64_t state = capture_state_.load(std::memory_order_acquire);
+  while (((state & 1U) != 0) != enabled &&
+         !capture_state_.compare_exchange_weak(
+             state, state + 1, std::memory_order_acq_rel,
+             std::memory_order_acquire)) {
+  }
 }
 
 bool ReplayNativeProducer::enabled() const noexcept {
-  return enabled_.load(std::memory_order_acquire);
+  return (capture_state_.load(std::memory_order_acquire) & 1U) != 0;
 }
 
 bool ReplayNativeProducer::TryPush(const ReplayNativeEvent& event) noexcept {
-  if (!enabled()) {
+  const std::uint64_t generation =
+      capture_state_.load(std::memory_order_acquire);
+  if ((generation & 1U) == 0) {
     return false;
   }
   if (!IsValidEvent(event)) {
@@ -253,16 +260,21 @@ bool ReplayNativeProducer::TryPush(const ReplayNativeEvent& event) noexcept {
     return false;
   }
   ring_[head] = event;
+  ring_generations_[head] = generation;
   head_.store(next, std::memory_order_release);
   return true;
 }
 
-bool ReplayNativeProducer::TryPop(ReplayNativeEvent* event) noexcept {
+bool ReplayNativeProducer::TryPop(
+    ReplayNativeEvent* event, std::uint64_t* capture_generation) noexcept {
   const std::size_t tail = tail_.load(std::memory_order_relaxed);
   if (tail == head_.load(std::memory_order_acquire)) {
     return false;
   }
   *event = ring_[tail];
+  if (capture_generation) {
+    *capture_generation = ring_generations_[tail];
+  }
   tail_.store((tail + 1) % kReplayRingCapacity, std::memory_order_release);
   return true;
 }
@@ -285,7 +297,12 @@ std::size_t ReplayNativeProducer::DrainJson(char* output,
   }
 
   ReplayNativeEvent event;
-  while (TryPop(&event)) {
+  std::uint64_t event_generation = 0;
+  while (TryPop(&event, &event_generation)) {
+    if (event_generation !=
+        capture_state_.load(std::memory_order_acquire)) {
+      continue;
+    }
     const std::string encoded = SerializeEvent(event);
     if (encoded.size() >= capacity || encoded.size() > kReplayJsonLimit) {
       dropped_.fetch_add(1, std::memory_order_relaxed);
@@ -299,13 +316,14 @@ std::size_t ReplayNativeProducer::DrainJson(char* output,
   return 0;
 }
 
-void ReplayNativeProducer::RememberComposition(
-    const ReplayComposition& composition) noexcept {
-  last_composition_ = composition;
-}
-
-ReplayComposition ReplayNativeProducer::LastComposition() const noexcept {
-  return last_composition_;
+std::size_t ReplayNativeProducer::DiscardAll() noexcept {
+  std::size_t discarded = 0;
+  ReplayNativeEvent event;
+  while (TryPop(&event, nullptr)) {
+    ++discarded;
+  }
+  dropped_.store(0, std::memory_order_relaxed);
+  return discarded;
 }
 
 std::uint64_t ReplayNativeProducer::dropped() const noexcept {

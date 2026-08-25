@@ -94,6 +94,10 @@
     {
       "path": "platform/patches/squirrel/0015-yunpin-open-local-settings.patch",
       "sha256": "7f57c15806a0829f56057804f2c1c3a79e8531d085ea7efd1668d5b1e56aff3e"
+    },
+    {
+      "path": "platform/patches/squirrel/0016-yunpin-start-replay-lab-spooler.patch",
+      "sha256": "639b97be4a0713b8e5e2196cee813521f3ea9dccdcb2624f1aaa53e33306c32f"
     }
   ],
   "archives": [

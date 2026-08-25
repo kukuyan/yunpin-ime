@@ -111,6 +111,27 @@ void TestMalformedEventsAreRejectedBeforeTheRing() {
         "rejected native event was not observable as trace loss");
 }
 
+void TestCaptureGenerationDoesNotCrossSessionBoundary() {
+  yunpin::ReplayNativeProducer producer;
+  producer.SetEnabled(true);
+  Check(producer.TryPush(SyntheticEvent("old-session")),
+        "old session event was not queued");
+  producer.SetEnabled(false);
+  producer.SetEnabled(true);
+  Check(producer.TryPush(SyntheticEvent("new-session")),
+        "new session event was not queued");
+
+  char json[yunpin::kReplayJsonLimit + 1]{};
+  const std::size_t size = producer.DrainJson(json, sizeof(json));
+  const std::string encoded(json, size);
+  Check(encoded.find("new-session") != std::string::npos,
+        "new session event did not drain");
+  Check(encoded.find("old-session") == std::string::npos,
+        "queued text crossed the explicit session boundary");
+  Check(producer.DrainJson(json, sizeof(json)) == 0,
+        "stale session event remained queued");
+}
+
 }  // namespace
 
 int main() {
@@ -119,6 +140,7 @@ int main() {
     TestRingOverflowIsObservable();
     TestUtf8TruncationNeverSplitsScalar();
     TestMalformedEventsAreRejectedBeforeTheRing();
+    TestCaptureGenerationDoesNotCrossSessionBoundary();
     std::cout << "replay native tests passed\n";
     return 0;
   } catch (const std::exception& error) {

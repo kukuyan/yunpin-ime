@@ -12,9 +12,14 @@
 - 对退格重打、候选位次、正确路径被纠错候选抢首位、同拼音分词替换的确定性分析；
 - 默认关闭的固定大小 C++ native event、64 槽单生产者/单消费者 ring、8 KiB JSON 边界和 `drop_count`；
 - native frame 到 EventV1/报告器的严格解析与合成端到端测试；
+- `librime-yunpin` 已接实际候选页、选择、提交和组合区退格回调；
+- Squirrel/Weasel 已启动默认休眠的后台 watcher，只在显式实验会话为
+  `running` 时启用 producer；
 - 所有真实轨迹的 Git 忽略与 CI 私人数据扫描。
 
-当前 MVP **尚未把 producer 接入 Windows TSF/Weasel 或 macOS Squirrel 的真实 composition/candidate 回调，也尚无平台后台 sink**，因此不能宣称“持续监控已经启用”。即使执行 `start`，当前已安装的 YunPin 也不会自动产生记录。`ingest` 只留给 YunPin 原生 sidecar 或专用实验宿主接入。它不扫描系统按键，不注册全局键盘钩子，也不包含网络、云同步或模型调用。
+代码和安装包管线已经接通原生 producer 与后台落盘，并用同一条合成轨迹验证到 Go `report`。但这**不等于当前机器上已经安装的旧版本也具备该功能**；真实 Squirrel/Weasel 宿主采集仍须安装新包后人工验收。它不扫描系统按键、不注册全局键盘钩子，也不包含网络、云同步或模型调用。
+
+输入热路径只做固定大小内存复制和非阻塞 ring push。`active.json` 轮询、文件追加和 flush 都在后台线程；每个 native 会话文件上限 64 MiB。watcher 每 50 ms 复核一次状态，`pause`、无效状态或宿主退出会关闭 producer 并丢弃边界队列，避免文字跨实验会话。被 Rime 标记为密码、隐私、一次性输入以及宿主未明确允许学习的上下文均为零记录；原生宿主对真实安全输入框的标记传递仍须在实机门禁中验证。
 
 ## 生命周期
 
@@ -33,6 +38,13 @@ yunpin-replay-lab status
 yunpin-replay-lab pause
 yunpin-replay-lab resume
 ```
+
+开发预览安装后的 CLI 位置为：
+
+- macOS：`/Library/Input Methods/YunPin.app/Contents/MacOS/yunpin-replay-lab`
+- Windows：`%LOCALAPPDATA%\Programs\YunPinIME\Preview\support\sync-agent\yunpin-replay-lab.exe`
+
+`init` 只需执行一次；之后用 `start` 开始第一段会话，用 `pause` 停止采集、`resume` 继续。仅启动输入法不会自动创建实验会话，也不会记录任何文字。
 
 原生 sidecar 或专用实验宿主以一行一个事件的方式接入。MVP 采用单写入者模型：一个持久 sidecar 保持一个 ingest 进程，不允许多个进程并发追加同一会话：
 
@@ -82,16 +94,18 @@ yunpin-replay-lab clear --confirm
 
 原始轨迹始终是事实层；迭代建议是派生层。后续即使加入本地模型，也只能离线读取导出的实验片段，不能在按键热路径中阻塞输入或改写事实记录。
 
-## P0：完成原生接入
+## 原生接入状态与剩余人工门禁
 
-当前已经实现第 2 项所需的有界 ring/序列化器，以及报告端 native frame 解析器；下列平台 producer、后台 sink 和实机验证仍是 P0，完成前不能把实验室描述为持续监控：
+代码层已经完成：
 
-1. `librime` 插件在组合更新、实际候选页形成、选择、提交和组合区删改时创建固定大小的 native event；
-2. 按键热路径只尝试写入已有的有界 ring buffer，不能等待文件、网络或模型；队列满时只累加 `drop_count`；
-3. macOS Squirrel 与 Windows Weasel 分别增加后台 `message_sink`，将 native event 写入仓库外的本地实验目录，并交给与 `ingest` 等价的严格验证逻辑；
-4. `pause` 必须让 producer 停止生成内容事件，而不仅仅停止落盘；
-5. 密码框、安全输入、隐私模式和一次性输入继续强制不采集；
-6. 原生接入完成后，必须用合成专用宿主验证事件顺序、队列溢出、崩溃恢复和输入热路径延迟，之后才能让用户开启真实实验。
+1. `librime` 插件在实际候选页形成、选择、提交和组合区退格时创建固定大小的 native event；
+2. 按键热路径只尝试写入有界 ring buffer，不等待文件、网络或模型；队列满时累计 `drop_count`；
+3. macOS Squirrel 与 Windows Weasel 启动后台 watcher，把 native event 写入仓库外固定本地目录；
+4. `pause` 会关闭 producer，而不只是停止落盘；
+5. Rime 已标记为密码、安全输入、隐私模式和一次性输入的上下文继续强制不采集；
+6. 合成宿主已验证 producer → ring → native 文件 → Go report，能识别“正确候选被纠错候选抢首位”。
+
+剩余门禁是安装新开发预览后，在 macOS 与 Windows 各做一次明确授权的真实输入实验，核对：启动/暂停延迟、跨应用会话隔离、报告内容、队列丢帧计数，以及输入延迟没有可感知回退。在这项人工验收完成前，只能称“代码与自动化链路已接通”，不能称“当前已安装版本持续监控已验收”。
 
 原生接口固定为：
 
@@ -101,4 +115,4 @@ ReplayMessageSink::Drain() -> EventV1 JSONL
 ReplayIngestor::Accept(EventV1) -> accepted | validation_error
 ```
 
-这使采集、持久化和分析可以分别测试，也保证当前 MVP 不会被误认为已安装的系统级持续监控器。macOS 与 Windows 平台桥必须分别构建并通过专用宿主测试后，才可以把对应平台从 P0 标记为完成。
+这使采集、持久化和分析可以分别测试，也保证默认关闭、显式启用和实机验收三个状态不会被混为一谈。
