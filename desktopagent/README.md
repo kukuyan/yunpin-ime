@@ -196,6 +196,28 @@ which also prints a warning to stderr: that flag is the single place this tool
 puts personal vocabulary on a terminal. No vocabulary reaches the run-event log,
 the health record, or `status` through any of these commands.
 
+## Local settings page
+
+`settings` opens one temporary browser page bound only to an ephemeral
+`127.0.0.1` port. A per-process unguessable path scopes every GET and POST;
+responses are non-cacheable and the process exits after 30 minutes. The page
+contains only four product functions: the three ranking/correction booleans,
+redacted synchronization health, a real `sync-once` action, and the existing
+personal-vocabulary operations. It has no endpoint, account/device identifier,
+credential, recovery, reset, clear or re-pair field.
+
+Saving guards replaces only the exact `yunpin/short_input_guard`,
+`yunpin/long_correction_guard`, and `yunpin/typo_correction` boolean tokens in
+`rime_ice.custom.yaml`; comments and every unrelated byte are preserved. The
+write is same-directory atomic and the fixed platform deployer is invoked even
+when the selected values were already on disk.
+
+The resident now holds a distinct instance lock for its lifetime and the
+ordinary operation lock only during a synchronization round. This preserves
+exactly one resident while allowing the settings page or CLI `sync-once` to run
+during the interval between rounds. A collision with an active round remains a
+bounded busy/deferred result rather than a second concurrent database writer.
+
 ## Background installation
 
 `install/` contains reviewed per-user resident-service install, rollback, and

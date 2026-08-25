@@ -210,6 +210,11 @@ manually. The installer registers and persistently enables YunPin, temporarily
 selects it only as part of reconciliation, restores the previously active input
 source, and does not overwrite unrecognised Rime settings.
 
+After installation, YunPin's input-menu **Settings…** item launches the public
+agent bundled inside `YunPin.app` and opens the same temporary local-only
+settings page used on Windows. It does not open the raw Rime folder and does not
+expose endpoint, account/device, credential or recovery controls.
+
 To inject or intentionally refresh the reviewed overlays without installing:
 
 ```sh

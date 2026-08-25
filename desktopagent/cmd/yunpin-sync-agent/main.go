@@ -679,7 +679,7 @@ func commandRun(ctx context.Context, defaults desktopagent.Paths, arguments []st
 
 func run(ctx context.Context, arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: yunpin-sync-agent <install-probe|configure|configure-server|configure-rime-bridge|register|login|logout|claim-account|prepare-account|init-account|abort-account|sync-once|run|status|resident-ready|phrase> [options]\n  phrase <" + phraseCommandNames() + ">")
+		return errors.New("usage: yunpin-sync-agent <install-probe|settings|configure|configure-server|configure-rime-bridge|register|login|logout|claim-account|prepare-account|init-account|abort-account|sync-once|run|status|resident-ready|phrase> [options]\n  phrase <" + phraseCommandNames() + ">")
 	}
 	// Keep the package/install health probe ahead of DefaultPaths: even a broken
 	// or unavailable user state root must not make binary installation look like
@@ -695,6 +695,8 @@ func run(ctx context.Context, arguments []string) error {
 		return err
 	}
 	switch arguments[0] {
+	case "settings":
+		return commandSettings(ctx, defaults, arguments[1:])
 	case "configure":
 		return commandConfigure(defaults, arguments[1:])
 	case "configure-server":

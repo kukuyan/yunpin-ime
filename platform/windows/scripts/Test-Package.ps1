@@ -154,10 +154,19 @@ if (-not (Test-Path $syncResident -PathType Leaf)) {
 if ((Get-PeMachine -Path $syncResident) -ne 0x8664) {
     throw "Windowless sync resident is not an x64 PE executable"
 }
+$settingsLauncher = Join-Path $syncAgentRoot "yunpin-settings.exe"
+if (-not (Test-Path $settingsLauncher -PathType Leaf)) {
+    throw "Windowless settings launcher is missing"
+}
+if ((Get-PeMachine -Path $settingsLauncher) -ne 0x8664) {
+    throw "Windowless settings launcher is not an x64 PE executable"
+}
 $subsystemChecker = Join-Path $repoRoot "scripts\check_pe_subsystem.py"
 if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
     & python $subsystemChecker gui $syncResident
     if ($LASTEXITCODE -ne 0) { throw "Packaged sync resident is not linked for the Windows GUI subsystem" }
+    & python $subsystemChecker gui $settingsLauncher
+    if ($LASTEXITCODE -ne 0) { throw "Packaged settings launcher is not linked for the Windows GUI subsystem" }
     & python $subsystemChecker console $syncAgent
     if ($LASTEXITCODE -ne 0) { throw "Packaged interactive sync agent must stay console-subsystem" }
 }
