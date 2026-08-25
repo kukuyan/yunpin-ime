@@ -21,6 +21,7 @@ jobs:
       - run: rg --version
       - run: bash scripts/check_private_data.sh
       - run: python3 -m unittest tests.test_privacy_gate -v
+      - run: python3 -m unittest tests.test_schema_overlay_contract -v
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
       - run: python3 -m unittest tests.test_mobile_contract -v
