@@ -17,7 +17,10 @@ $destination = Join-Path $state "bin\yunpin-sync-agent.exe"
 $residentDestination = Join-Path $state "bin\yunpin-sync-resident.exe"
 $taskName = "YunPinSyncAgent"
 
-if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw "Resident agent is absent." }
+if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw "Interactive agent is absent." }
+# This is what the task starts, so enabling without it would leave a
+# registration that fails on every trigger.
+if (-not (Test-Path -LiteralPath $residentDestination -PathType Leaf)) { throw "Resident agent is absent." }
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 if ($registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $residentDestination -or
     $registered.Actions[0].Arguments -cne "--interval 1m" -or

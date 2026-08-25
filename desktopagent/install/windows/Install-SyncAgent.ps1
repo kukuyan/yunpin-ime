@@ -75,9 +75,27 @@ $previousTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyConti
 $previousTaskXml = $null
 $previousTaskWasRunning = $false
 if ($null -ne $previousTask) {
-    if ($previousTask.Actions.Count -ne 1 -or
-        $previousTask.Actions[0].Execute -cne $residentDestination -or
-        $previousTask.Actions[0].Arguments -cne "--interval 1m") {
+    # Only a task this installer created may be replaced; anything else is
+    # someone else's registration and stays untouched. Two shapes qualify:
+    # the current one, and the one earlier versions registered before the
+    # background loop moved to its own windowless binary. Without the legacy
+    # shape, upgrading over an existing install would refuse to proceed and
+    # require a manual uninstall first.
+    $knownActions = @(
+        @{ Execute = $residentDestination; Arguments = "--interval 1m" },
+        @{ Execute = $destination; Arguments = "run --interval 1m" }
+    )
+    $recognized = $false
+    if ($previousTask.Actions.Count -eq 1) {
+        foreach ($known in $knownActions) {
+            if ($previousTask.Actions[0].Execute -ceq $known.Execute -and
+                $previousTask.Actions[0].Arguments -ceq $known.Arguments) {
+                $recognized = $true
+                break
+            }
+        }
+    }
+    if (-not $recognized) {
         throw "Refusing to replace a different YunPinSyncAgent scheduled task."
     }
     $previousTaskXml = Export-ScheduledTask -TaskName $taskName
