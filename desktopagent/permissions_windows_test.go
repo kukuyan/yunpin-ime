@@ -167,6 +167,30 @@ func TestWindowsPrivateACLRequiresProtectedExactUserAndSystemACEs(t *testing.T) 
 	}
 }
 
+func TestWindowsEventLogRejectsUnsafeExistingACL(t *testing.T) {
+	root := windowsPrivateTestRoot(t)
+	paths := Paths{StateDirectory: root}
+	log, err := OpenEventLog(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	user, _, err := currentUserAndSystemSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyWindowsTestDACL(t, EventLogPath(paths),
+		"D:P(A;;FA;;;SY)(A;;FA;;;"+user.String()+")(A;;FR;;;BA)")
+	if EventLogAvailable(paths) {
+		t.Fatal("event log with an extra Windows principal was reported available")
+	}
+	if _, err := OpenEventLog(paths); err == nil {
+		t.Fatal("OpenEventLog accepted an unsafe Windows DACL")
+	}
+}
+
 func TestWindowsFileACLValidatesEffectiveNormalizedACEFlags(t *testing.T) {
 	root := windowsPrivateTestRoot(t)
 	path := filepath.Join(root, "normalized-file-ace-flags.dat")

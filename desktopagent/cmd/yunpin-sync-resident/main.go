@@ -46,15 +46,8 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
-	log, err := desktopagent.OpenEventLog(defaults)
-	if err != nil {
-		return err
-	}
-	defer log.Close()
-
 	return desktopagent.RunResident(ctx, defaults, desktopagent.ResidentOptions{
 		Interval: *interval,
-		Events:   log.Write,
 	})
 }
 

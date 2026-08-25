@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 
@@ -85,8 +84,11 @@ func (worker *Worker) prepare(ctx context.Context, state localstore.SyncState) (
 		return state, nil
 	}
 	events, err := worker.Store.PendingEvents(ctx, 1)
-	if err != nil || len(events) == 0 {
-		return state, err
+	if err != nil {
+		return state, localStoreError(err)
+	}
+	if len(events) == 0 {
+		return state, nil
 	}
 	random := worker.Random
 	if random == nil {
@@ -117,9 +119,10 @@ func (worker *Worker) prepare(ctx context.Context, state localstore.SyncState) (
 		EventID: events[0].ID, EventVersion: events[0].Version,
 		DeviceSequence: state.NextDeviceSequence, Wire: encoded, EnvelopeHash: hash,
 	}); err != nil {
-		return state, err
+		return state, localStoreError(err)
 	}
-	return worker.Store.LoadSyncState(ctx)
+	state, err = worker.Store.LoadSyncState(ctx)
+	return state, localStoreError(err)
 }
 
 func (worker *Worker) decodeDownloads(response SyncResponse, cursor int64) ([]localstore.PhrasePayload, error) {
@@ -127,32 +130,32 @@ func (worker *Worker) decodeDownloads(response SyncResponse, cursor int64) ([]lo
 	lastCursor := cursor
 	for _, wire := range response.Envelopes {
 		if wire.Cursor > math.MaxInt64 || int64(wire.Cursor) <= lastCursor || int64(wire.Cursor) > response.NextCursor {
-			return nil, errors.New("sync relay returned out-of-order download cursors")
+			return nil, relayProtocolError(errors.New("out-of-order download cursors"))
 		}
 		lastCursor = int64(wire.Cursor)
 		envelope, err := protocol.EnvelopeFromDownload(worker.Session.AccountID, wire)
 		if err != nil {
-			return nil, err
+			return nil, relayProtocolError(err)
 		}
 		verificationKey := worker.Session.VerificationKeys[wire.DeviceID]
 		if len(verificationKey) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("no trusted verification key for device %s", wire.DeviceID)
+			return nil, relayProtocolError(errors.New("download references an untrusted device"))
 		}
 		epochKey := worker.Session.EpochKeys[wire.KeyEpoch]
 		if len(epochKey) != 32 {
-			return nil, fmt.Errorf("no local key for epoch %d", wire.KeyEpoch)
+			return nil, relayProtocolError(errors.New("download references an unavailable key epoch"))
 		}
 		var payload localstore.PhrasePayload
 		if err := protocol.Open(epochKey, envelope, verificationKey, &payload); err != nil {
-			return nil, err
+			return nil, relayProtocolError(err)
 		}
 		payloads = append(payloads, payload)
 	}
 	if len(response.Envelopes) == 0 && response.NextCursor != cursor {
-		return nil, errors.New("sync relay advanced cursor without a downloaded envelope")
+		return nil, relayProtocolError(errors.New("cursor advanced without a downloaded envelope"))
 	}
 	if len(response.Envelopes) > 0 && lastCursor != response.NextCursor {
-		return nil, errors.New("sync relay next cursor does not match the downloaded page")
+		return nil, relayProtocolError(errors.New("next cursor does not match the downloaded page"))
 	}
 	return payloads, nil
 }
@@ -169,7 +172,7 @@ func (worker *Worker) SyncOnce(ctx context.Context) (Result, error) {
 	}
 	state, err := worker.Store.LoadSyncState(ctx)
 	if err != nil {
-		return Result{}, err
+		return Result{}, localStoreError(err)
 	}
 	if state.DeviceID != hex.EncodeToString(worker.Session.DeviceID) {
 		return Result{}, errors.New("sync session device does not match the local store")
@@ -182,10 +185,10 @@ func (worker *Worker) SyncOnce(ctx context.Context) (Result, error) {
 	if state.Prepared != nil {
 		var wire protocol.WireEnvelope
 		if err := json.Unmarshal(state.Prepared.Wire, &wire); err != nil {
-			return Result{}, errors.New("prepared upload is not valid wire JSON")
+			return Result{}, localStoreError(errors.New("prepared upload is not valid wire JSON"))
 		}
 		if wire.DeviceSeq != state.Prepared.DeviceSequence || wire.DeviceID != "" || wire.Cursor != 0 {
-			return Result{}, errors.New("prepared upload metadata does not match checkpoint")
+			return Result{}, localStoreError(errors.New("prepared upload metadata does not match checkpoint"))
 		}
 		request.Envelopes = []protocol.WireEnvelope{wire}
 	}
@@ -200,28 +203,28 @@ func (worker *Worker) SyncOnce(ctx context.Context) (Result, error) {
 		for _, rejection := range response.RejectedSequences {
 			if rejection.DeviceSequence != state.Prepared.DeviceSequence || seenRejected ||
 				(rejection.Code != "sequence_conflict" && rejection.Code != "sequence_gap" && rejection.Code != "previous_hash_mismatch") {
-				return Result{}, errors.New("sync relay returned an unexpected upload rejection")
+				return Result{}, relayProtocolError(errors.New("unexpected upload rejection"))
 			}
 			seenRejected = true
 		}
 		for _, sequence := range response.AcceptedSequences {
 			if sequence != state.Prepared.DeviceSequence || seenAccepted {
-				return Result{}, errors.New("sync relay returned an unexpected upload acknowledgement")
+				return Result{}, relayProtocolError(errors.New("unexpected upload acknowledgement"))
 			}
 			seenAccepted = true
 			accepted = true
 		}
 		if seenRejected && seenAccepted {
-			return Result{}, errors.New("sync relay both accepted and rejected one upload")
+			return Result{}, relayProtocolError(errors.New("upload was both accepted and rejected"))
 		}
 		if seenRejected {
 			return Result{}, &UploadRejectionError{Code: response.RejectedSequences[0].Code}
 		}
 		if !accepted {
-			return Result{}, errors.New("sync relay did not acknowledge the prepared upload")
+			return Result{}, relayProtocolError(errors.New("prepared upload was not acknowledged"))
 		}
 	} else if len(response.AcceptedSequences) != 0 || len(response.RejectedSequences) != 0 {
-		return Result{}, errors.New("sync relay reported results for an empty upload")
+		return Result{}, relayProtocolError(errors.New("upload results were returned for an empty upload"))
 	}
 	payloads, err := worker.decodeDownloads(response, state.Cursor)
 	if err != nil {
@@ -229,18 +232,18 @@ func (worker *Worker) SyncOnce(ctx context.Context) (Result, error) {
 	}
 	for _, payload := range payloads {
 		if err := worker.Store.MergeRemotePayload(ctx, payload); err != nil {
-			return Result{}, err
+			return Result{}, localStoreError(err)
 		}
 	}
 	result := Result{Uploaded: state.Prepared != nil, Downloaded: len(payloads), Cursor: response.NextCursor, HasMore: response.HasMore}
 	if state.Prepared != nil {
 		result.AcknowledgedOutbox, err = worker.Store.CommitPreparedUpload(ctx)
 		if err != nil {
-			return Result{}, err
+			return Result{}, localStoreError(err)
 		}
 	}
 	if err := worker.Store.AdvanceSyncCursor(ctx, state.Cursor, response.NextCursor); err != nil {
-		return Result{}, err
+		return Result{}, localStoreError(err)
 	}
 	return result, nil
 }
@@ -260,11 +263,11 @@ func (worker *Worker) SyncUntilIdle(ctx context.Context, maxRounds int) ([]Resul
 		results = append(results, result)
 		pending, err := worker.Store.PendingEventCount(ctx)
 		if err != nil {
-			return results, err
+			return results, localStoreError(err)
 		}
 		if !result.HasMore && pending == 0 {
 			return results, nil
 		}
 	}
-	return results, errors.New("sync did not become idle before the round limit")
+	return results, relayProtocolError(errors.New("sync did not become idle before the round limit"))
 }

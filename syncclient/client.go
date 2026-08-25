@@ -129,16 +129,16 @@ func (client *Client) doJSON(ctx context.Context, method, path, token string, in
 	}
 	response, err := client.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("sync relay request failed: %w", err)
+		return networkError(err)
 	}
 	defer response.Body.Close()
 	limited := io.LimitReader(response.Body, maxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {
-		return fmt.Errorf("read sync relay response: %w", err)
+		return networkError(err)
 	}
 	if len(payload) > maxResponseBytes {
-		return errors.New("sync relay response exceeds size limit")
+		return relayProtocolError(errors.New("response exceeds size limit"))
 	}
 	if response.StatusCode != expectedStatus {
 		var api struct {
@@ -155,10 +155,10 @@ func (client *Client) doJSON(ctx context.Context, method, path, token string, in
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
-		return errors.New("sync relay returned invalid JSON")
+		return relayProtocolError(errors.New("response is invalid JSON"))
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return errors.New("sync relay returned invalid JSON")
+		return relayProtocolError(errors.New("response is invalid JSON"))
 	}
 	return nil
 }
@@ -1039,7 +1039,7 @@ func (client *Client) Sync(ctx context.Context, token string, request SyncReques
 		return SyncResponse{}, err
 	}
 	if response.NextCursor < request.Cursor || len(response.Envelopes) > 256 {
-		return SyncResponse{}, errors.New("sync relay returned an invalid cursor or page")
+		return SyncResponse{}, relayProtocolError(errors.New("invalid cursor or page"))
 	}
 	return response, nil
 }

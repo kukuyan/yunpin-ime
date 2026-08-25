@@ -2,6 +2,7 @@
 package desktopagent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -45,19 +46,104 @@ func EventLogPath(defaults Paths) string {
 	return filepath.Join(defaults.StateDirectory, eventLogDirectory, eventLogName)
 }
 
+func openExistingPrivateLog(path string, flags int) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 ||
+		!privateFilePermissionsOK(path, before) {
+		return nil, nil, errors.New("event log must be a private regular file")
+	}
+	file, err := os.OpenFile(path, flags, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	opened, statErr := file.Stat()
+	after, lstatErr := os.Lstat(path)
+	if statErr != nil || lstatErr != nil || !os.SameFile(before, opened) || !os.SameFile(opened, after) ||
+		!openedPrivateFilePermissionsOK(path, file, false) {
+		_ = file.Close()
+		return nil, nil, errors.New("event log changed during validated open")
+	}
+	return file, opened, nil
+}
+
+func createPrivateLog(path string) (*os.File, os.FileInfo, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := protectPrivateFile(file); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, nil, err
+	}
+	opened, statErr := file.Stat()
+	after, lstatErr := os.Lstat(path)
+	if statErr != nil || lstatErr != nil || !after.Mode().IsRegular() || after.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(opened, after) || !privateFilePermissionsOK(path, after) ||
+		!openedPrivateFilePermissionsOK(path, file, false) {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, nil, errors.New("new event log could not be verified")
+	}
+	return file, opened, nil
+}
+
+func validateOptionalLogGeneration(path string) error {
+	file, _, err := openExistingPrivateLog(path, os.O_RDONLY)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+// EventLogAvailable reports whether the current and optional rotated
+// generation are private regular files in a private real directory. Missing,
+// linked or permission-invalid state is explicit rather than confused with an
+// empty healthy log.
+func EventLogAvailable(defaults Paths) bool {
+	path := EventLogPath(defaults)
+	if defaults.StateDirectory == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	directory := filepath.Dir(path)
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		!privateDirectoryPermissionsOK(directory, info) {
+		return false
+	}
+	file, _, err := openExistingPrivateLog(path, os.O_RDONLY)
+	if err != nil {
+		return false
+	}
+	if err := file.Close(); err != nil {
+		return false
+	}
+	return validateOptionalLogGeneration(path+".1") == nil
+}
+
 // OpenEventLog opens (creating if needed) the bounded run-event log.
 func OpenEventLog(defaults Paths) (*EventLog, error) {
 	path := EventLogPath(defaults)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if defaults.StateDirectory == "" || !filepath.IsAbs(path) {
+		return nil, errors.New("event log path must be absolute")
+	}
+	if err := ensurePrivateDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
+	if err := validateOptionalLogGeneration(path + ".1"); err != nil {
 		return nil, err
 	}
-	info, err := file.Stat()
+	file, info, err := openExistingPrivateLog(path, os.O_WRONLY|os.O_APPEND)
+	if errors.Is(err, os.ErrNotExist) {
+		file, info, err = createPrivateLog(path)
+	}
 	if err != nil {
-		_ = file.Close()
 		return nil, err
 	}
 	return &EventLog{
@@ -108,16 +194,39 @@ func (log *EventLog) rotateLocked() {
 		log.file = nil
 		return
 	}
-	// A failed rename must not leave the log closed and silent; fall through to
-	// reopening the same path in that case.
-	_ = os.Rename(log.path, log.path+".1")
-	file, err := os.OpenFile(log.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	log.file = nil
+	previous := log.path + ".1"
+	if _, err := os.Lstat(previous); err == nil {
+		if err := validateOptionalLogGeneration(previous); err != nil || removePrivateFile(previous) != nil {
+			log.reopenCurrentLocked()
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		log.reopenCurrentLocked()
+		return
+	}
+	if err := os.Rename(log.path, previous); err != nil {
+		// Keep the current generation bounded: reopen it so the next event can
+		// retry rotation, but do not append while it remains over the limit.
+		log.reopenCurrentLocked()
+		return
+	}
+	file, _, err := createPrivateLog(log.path)
+	if err != nil {
+		return
+	}
+	log.file = file
+	log.written = 0
+}
+
+func (log *EventLog) reopenCurrentLocked() {
+	file, info, err := openExistingPrivateLog(log.path, os.O_WRONLY|os.O_APPEND)
 	if err != nil {
 		log.file = nil
 		return
 	}
 	log.file = file
-	log.written = 0
+	log.written = info.Size()
 }
 
 // Close releases the underlying file. Further writes are discarded.
