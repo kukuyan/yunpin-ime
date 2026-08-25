@@ -549,7 +549,10 @@ paths:
         Uploads at most 256 signed opaque envelopes and downloads records after
         cursor. The account and upload device IDs are inferred from the bearer
         token. Exact sequence replays are idempotent; conflicts and chain gaps
-        are reported per sequence.
+        are reported per sequence. Acknowledgements cannot exceed the request
+        cursor. History older than 30 days is compacted only below the minimum
+        non-revoked-device acknowledgement while retaining every opaque
+        writer/object frontier.
       requestBody:
         required: true
         content:
@@ -969,6 +972,7 @@ components:
           type: integer
           format: int64
           minimum: 0
+          description: Last fully applied relay cursor; must not exceed cursor.
         limit:
           type: integer
           minimum: 1

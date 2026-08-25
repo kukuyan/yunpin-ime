@@ -221,6 +221,208 @@ func TestSequenceConflictGapAndPreviousHashChain(t *testing.T) {
 	}
 }
 
+func TestSyncRejectsAcknowledgementBeyondCursor(t *testing.T) {
+	device := newTestAccount(t)
+	defer device.server.Close()
+	response := apiRequest(t, device.server, http.MethodPost, "/v1/sync", device.token, map[string]any{
+		"cursor": 0, "ack_cursor": 1,
+	})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_sync_batch") {
+		t.Fatalf("future acknowledgement status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestEnvelopeGCKeepsCursorZeroFrontierAndWriterChainHead(t *testing.T) {
+	device := newTestAccount(t)
+	defer device.server.Close()
+	createdAt := time.Unix(1_900_000_000, 0).UTC()
+	device.server.now = func() time.Time { return createdAt }
+	ciphertext := bytes.Repeat([]byte{0x61}, paddingBucket+16)
+
+	first, firstHash := signedTestEnvelope(t, device, 1, 0x10, ciphertext, nil)
+	second, secondHash := signedTestEnvelope(t, device, 2, 0x10, ciphertext, firstHash)
+	third, thirdHash := signedTestEnvelope(t, device, 3, 0x20, ciphertext, secondHash)
+	for sequence, envelope := range []Envelope{first, second, third} {
+		if result := syncRequest(t, device, []Envelope{envelope}); result.AcceptedCount() != 1 {
+			t.Fatalf("upload %d was not accepted: %+v", sequence+1, result)
+		}
+	}
+	var cursor int64
+	if err := device.server.db.QueryRow("SELECT MAX(cursor) FROM envelopes WHERE account_id = ?", device.accountID).Scan(&cursor); err != nil {
+		t.Fatal(err)
+	}
+	device.server.now = func() time.Time { return createdAt.Add(envelopeRetentionPeriod + time.Second) }
+	ack := apiRequest(t, device.server, http.MethodPost, "/v1/sync", device.token, map[string]any{
+		"cursor": cursor, "ack_cursor": cursor,
+	})
+	if ack.Code != http.StatusOK {
+		t.Fatalf("acknowledgement status=%d body=%s", ack.Code, ack.Body.String())
+	}
+	assertEnvelopeSequences(t, device, 2, 3)
+
+	// The last surviving row is still the writer's global sequence/hash head,
+	// even though it belongs to a different opaque object.
+	fourth, _ := signedTestEnvelope(t, device, 4, 0x10, ciphertext, thirdHash)
+	if result := syncRequest(t, device, []Envelope{fourth}); result.AcceptedCount() != 1 {
+		t.Fatalf("post-GC chain continuation was not accepted: %+v", result)
+	}
+	assertEnvelopeSequences(t, device, 3, 4)
+
+	read := apiRequest(t, device.server, http.MethodPost, "/v1/sync", device.token, map[string]any{
+		"cursor": 0, "ack_cursor": 0,
+	})
+	if read.Code != http.StatusOK {
+		t.Fatalf("cursor-zero rebuild status=%d body=%s", read.Code, read.Body.String())
+	}
+	var rebuilt struct {
+		Envelopes []Envelope `json:"envelopes"`
+	}
+	decodeResponse(t, read, &rebuilt)
+	if len(rebuilt.Envelopes) != 2 || rebuilt.Envelopes[0].DeviceSeq != 3 || rebuilt.Envelopes[1].DeviceSeq != 4 {
+		t.Fatalf("cursor-zero frontier is incomplete: %+v", rebuilt.Envelopes)
+	}
+}
+
+func TestEnvelopeGCUsesOnlyActiveDeviceWatermarkAndRetention(t *testing.T) {
+	device := newTestAccount(t)
+	defer device.server.Close()
+	createdAt := time.Unix(1_900_100_000, 0).UTC()
+	device.server.now = func() time.Time { return createdAt }
+	ciphertext := bytes.Repeat([]byte{0x62}, paddingBucket+16)
+	var previousHash []byte
+	for sequence := uint64(1); sequence <= 4; sequence++ {
+		envelope, recordHash := signedTestEnvelope(t, device, sequence, 0x30, ciphertext, previousHash)
+		if result := syncRequest(t, device, []Envelope{envelope}); result.AcceptedCount() != 1 {
+			t.Fatalf("upload %d was not accepted: %+v", sequence, result)
+		}
+		previousHash = recordHash
+	}
+
+	secondDeviceID := strings.Repeat("d", 32)
+	if _, err := device.server.db.Exec(`INSERT INTO devices(
+		id, account_id, name_ciphertext, token_hash, ed25519_public_key, x25519_public_key, ack_cursor, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, 1, ?)`, secondDeviceID, device.accountID,
+		bytes.Repeat([]byte{0x41}, 32), bytes.Repeat([]byte{0x42}, 32), bytes.Repeat([]byte{0x43}, 32),
+		bytes.Repeat([]byte{0x44}, 32), createdAt.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := device.server.db.Exec("UPDATE devices SET ack_cursor = 4 WHERE id = ?", device.deviceID); err != nil {
+		t.Fatal(err)
+	}
+	now := createdAt.Add(envelopeRetentionPeriod + time.Hour)
+	device.server.now = func() time.Time { return now }
+	if _, err := device.server.db.Exec(`UPDATE envelopes SET created_at = ?
+		WHERE account_id = ? AND device_id = ? AND device_seq = 3`, now.UnixMilli(), device.accountID, device.deviceID); err != nil {
+		t.Fatal(err)
+	}
+
+	if deleted := runEnvelopeGC(t, device.server, device.accountID); deleted != 1 {
+		t.Fatalf("low active watermark deleted %d envelopes, want 1", deleted)
+	}
+	assertEnvelopeSequences(t, device, 2, 3, 4)
+	if _, err := device.server.db.Exec("UPDATE devices SET revoked_at = ? WHERE id = ?", now.UnixMilli(), secondDeviceID); err != nil {
+		t.Fatal(err)
+	}
+	if deleted := runEnvelopeGC(t, device.server, device.accountID); deleted != 1 {
+		t.Fatalf("revoked device still constrained watermark: deleted=%d want=1", deleted)
+	}
+	// Sequence 3 is recent; sequence 4 is the retained writer/object frontier.
+	assertEnvelopeSequences(t, device, 3, 4)
+
+	if _, err := device.server.db.Exec("UPDATE devices SET revoked_at = ? WHERE id = ?", now.UnixMilli(), device.deviceID); err != nil {
+		t.Fatal(err)
+	}
+	if deleted := runEnvelopeGC(t, device.server, device.accountID); deleted != 0 {
+		t.Fatalf("account with no active devices deleted %d envelopes", deleted)
+	}
+	assertEnvelopeSequences(t, device, 3, 4)
+}
+
+func TestEnvelopeGCIsBoundedAndPreservesChainContinuation(t *testing.T) {
+	device := newTestAccount(t)
+	defer device.server.Close()
+	createdAt := time.Unix(1_900_200_000, 0).UTC()
+	device.server.now = func() time.Time { return createdAt }
+	ciphertext := bytes.Repeat([]byte{0x63}, paddingBucket+16)
+	total := maxEnvelopeGCDeleteBatch + 2
+	batch := make([]Envelope, 0, maxUploadBatch)
+	var previousHash []byte
+	for sequence := 1; sequence <= total; sequence++ {
+		envelope, recordHash := signedTestEnvelope(t, device, uint64(sequence), 0x50, ciphertext, previousHash)
+		batch = append(batch, envelope)
+		previousHash = recordHash
+		if len(batch) == maxUploadBatch || sequence == total {
+			if result := syncRequest(t, device, batch); result.AcceptedCount() != len(batch) {
+				t.Fatalf("batch ending at %d accepted %d of %d: %+v", sequence, result.AcceptedCount(), len(batch), result)
+			}
+			batch = make([]Envelope, 0, maxUploadBatch)
+		}
+	}
+	if _, err := device.server.db.Exec("UPDATE devices SET ack_cursor = ? WHERE id = ?", total, device.deviceID); err != nil {
+		t.Fatal(err)
+	}
+	device.server.now = func() time.Time { return createdAt.Add(envelopeRetentionPeriod + time.Second) }
+	if deleted := runEnvelopeGC(t, device.server, device.accountID); deleted != maxEnvelopeGCDeleteBatch {
+		t.Fatalf("first GC batch deleted %d, want %d", deleted, maxEnvelopeGCDeleteBatch)
+	}
+	assertEnvelopeSequences(t, device, uint64(total-1), uint64(total))
+	if deleted := runEnvelopeGC(t, device.server, device.accountID); deleted != 1 {
+		t.Fatalf("second GC batch deleted %d, want 1", deleted)
+	}
+	assertEnvelopeSequences(t, device, uint64(total))
+
+	next, _ := signedTestEnvelope(t, device, uint64(total+1), 0x50, ciphertext, previousHash)
+	if result := syncRequest(t, device, []Envelope{next}); result.AcceptedCount() != 1 {
+		t.Fatalf("chain could not continue after bounded GC: %+v", result)
+	}
+}
+
+func runEnvelopeGC(t *testing.T, application *Server, accountID string) int64 {
+	t.Helper()
+	tx, err := application.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	deleted, err := application.gcAcknowledgedEnvelopes(context.Background(), tx, accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return deleted
+}
+
+func assertEnvelopeSequences(t *testing.T, device testDevice, want ...uint64) {
+	t.Helper()
+	rows, err := device.server.db.Query(`SELECT device_seq FROM envelopes
+		WHERE account_id = ? AND device_id = ? ORDER BY device_seq`, device.accountID, device.deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make([]uint64, 0, len(want))
+	for rows.Next() {
+		var sequence uint64
+		if err := rows.Scan(&sequence); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, sequence)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("envelope sequences=%v want=%v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("envelope sequences=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestConflictingSequenceInsideOneBatchStoresNeitherRecord(t *testing.T) {
 	device := newTestAccount(t)
 	defer device.server.Close()
@@ -2018,7 +2220,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 		FROM schema_migrations WHERE name = '001_init.sql'`).Scan(&count, &checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count != 3 || checksum != hex.EncodeToString(expected[:]) {
+	if count != 4 || checksum != hex.EncodeToString(expected[:]) {
 		t.Fatalf("migration ledger mismatch: count=%d checksum=%q", count, checksum)
 	}
 	if err := application.Close(); err != nil {
@@ -2028,7 +2230,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 3 {
+	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 4 {
 		t.Fatalf("migration reapplied: count=%d err=%v", count, err)
 	}
 	if _, err := application.db.Exec("UPDATE schema_migrations SET checksum = ? WHERE name = ?", strings.Repeat("0", 64), "001_init.sql"); err != nil {
@@ -2090,7 +2292,7 @@ func TestUserAuthMigrationPreservesExistingEncryptedAccount(t *testing.T) {
 		FROM accounts WHERE id = ?`, accountID).Scan(&userID, &devices, &migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if userID.Valid || devices != 1 || migrationCount != 3 {
+	if userID.Valid || devices != 1 || migrationCount != 4 {
 		t.Fatalf("legacy account changed by login migration: user=%#v devices=%d migrations=%d", userID, devices, migrationCount)
 	}
 }
