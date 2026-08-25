@@ -175,6 +175,27 @@ package. Even nominal read-only LevelDB opens may create or update database
 metadata, so resident synchronization uses only the fixed installed host's
 maintenance/export boundary and its platform acknowledgement contract.
 
+## Vocabulary management
+
+`phrase add|pin|unpin|remove|list` are the supported way to correct the personal
+vocabulary. Before them the only reachable lever was hand-editing
+`yunpin/private.tsv`, which is a generated snapshot the next rebuild overwrites,
+so corrections did not survive.
+
+Every edit goes through the same `SaveExplicit`/`Delete` path a learned phrase
+takes, so it lands in the same mutation-plus-outbox transaction and converges on
+the other devices by the ordinary merge rules. Each edit also republishes the
+snapshot and reloads the host, because a change that only reached the database
+would leave the user seeing no difference in the candidate window.
+
+An explicit add carries a use count of one. A count of zero is filtered out of
+the generated snapshot, so without it the phrase would never become a candidate.
+
+`phrase list` reports counts only. Phrases and readings require `--show-text`,
+which also prints a warning to stderr: that flag is the single place this tool
+puts personal vocabulary on a terminal. No vocabulary reaches the run-event log,
+the health record, or `status` through any of these commands.
+
 ## Background installation
 
 `install/` contains reviewed per-user resident-service install, rollback, and
