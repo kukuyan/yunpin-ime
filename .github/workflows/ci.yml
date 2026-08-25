@@ -15,7 +15,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The privacy gate now requires ripgrep instead of silently passing
+      # without it. Fail here with a clear message if a future runner image
+      # stops providing it, rather than inside the gate.
+      - run: rg --version
       - run: bash scripts/check_private_data.sh
+      - run: python3 -m unittest tests.test_privacy_gate -v
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
       - run: python3 -m unittest tests.test_mobile_contract -v
