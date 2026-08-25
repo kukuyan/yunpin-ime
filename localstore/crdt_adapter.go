@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kukuyan/yunpin-ime/protocol"
 )
@@ -47,6 +48,20 @@ func validSyncDeviceID(deviceID string) bool {
 
 func isZeroClock(clock protocol.HLC) bool {
 	return clock.WallMillis == 0 && clock.Counter == 0 && clock.Node == ""
+}
+
+func validPayloadString(value string, maximumBytes int) bool {
+	if len(value) == 0 || len(value) > maximumBytes || !utf8.ValidString(value) || strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || (character >= 0x7f && character <= 0x9f) ||
+			(character >= 0x202a && character <= 0x202e) ||
+			(character >= 0x2066 && character <= 0x2069) {
+			return false
+		}
+	}
+	return true
 }
 
 func clonePhraseState(state protocol.PhraseState) protocol.PhraseState {
@@ -170,8 +185,9 @@ func (store *Store) observeHLC(ctx context.Context, observed protocol.HLC) error
 }
 
 func validatePayloadObject(payload PhrasePayload, idKey []byte) ([16]byte, error) {
-	if strings.TrimSpace(payload.Text) == "" || strings.TrimSpace(payload.Pinyin) == "" {
-		return [16]byte{}, errors.New("phrase payload text and Pinyin are required")
+	if !validPayloadString(payload.Text, 512) || !validPayloadString(payload.Pinyin, 256) ||
+		!validPayloadString(payload.Source, 128) || payload.LastUsedDay < 0 {
+		return [16]byte{}, errors.New("phrase payload content is invalid")
 	}
 	objectID, err := protocol.OpaqueObjectID(idKey, payload.Text, payload.Pinyin)
 	if err != nil {
