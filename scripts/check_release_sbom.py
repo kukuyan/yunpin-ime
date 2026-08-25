@@ -170,6 +170,10 @@ def validate_document(document: dict[str, Any], tag: str, commit: str) -> None:
     # accompanying regenerated document.
     windows = generator.load_json(generator.WINDOWS_LOCK)
     macos = generator.load_json(generator.MACOS_LOCK)
+    if any(row.get("name") == "Sparkle" for row in macos["nested_components"]):
+        raise CheckError("removed Sparkle component returned to the macOS lock")
+    if any(package.get("name") == "Sparkle" for package in packages):
+        raise CheckError("release SBOM must not contain the removed Sparkle runtime")
     for boost_version in (
         str(windows["boost"]["version"]),
         str(macos["boost_version"]),
@@ -177,14 +181,6 @@ def validate_document(document: dict[str, Any], tag: str, commit: str) -> None:
         boost = _package(packages, "Boost", boost_version)
         if boost.get("licenseDeclared") != "BSL-1.0":
             raise CheckError(f"Boost@{boost_version} lacks its locked BSL-1.0 license")
-    sparkle_components = [
-        row for row in macos["nested_components"] if row.get("name") == "Sparkle"
-    ]
-    if len(sparkle_components) != 1:
-        raise CheckError("macOS lock must contain one structured Sparkle component")
-    sparkle = _package(packages, "Sparkle", str(sparkle_components[0]["version"]))
-    if sparkle.get("licenseDeclared") != sparkle_components[0].get("license"):
-        raise CheckError("Sparkle license does not match the macOS lock")
     for name in ("weasel", "squirrel", "librime", "rime-ice", "rime-essay"):
         if not any(str(package.get("name", "")).lower() == name for package in packages):
             raise CheckError(f"release-critical upstream is absent: {name}")

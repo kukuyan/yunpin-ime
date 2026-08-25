@@ -21,10 +21,17 @@ plutil -lint "$plist" >/dev/null
 [[ "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected bundle identifier"
 [[ "$(plutil -extract TISInputSourceID raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected input-source identifier"
 [[ "$(plutil -extract InputMethodConnectionName raw -o - "$plist")" == "YunPin_Connection" ]] || die "unexpected IMK connection name"
-[[ "$(plutil -extract SUEnableAutomaticChecks raw -o - "$plist")" == "false" ]] || die "automatic updates must be disabled"
-if plutil -extract SUFeedURL raw -o - "$plist" >/dev/null 2>&1; then
-  die "development preview must not retain the upstream update feed"
-fi
+for update_key in SUEnableAutomaticChecks SUFeedURL SUPublicEDKey SUEnableInstallerLauncherService; do
+  if plutil -extract "$update_key" raw -o - "$plist" >/dev/null 2>&1; then
+    die "YunPin must not retain Sparkle metadata: $update_key"
+  fi
+done
+for forbidden_name in Sparkle.framework Updater.app Autoupdate Installer.xpc Downloader.xpc; do
+  forbidden_path="$(find "$app" -name "$forbidden_name" -print -quit)"
+  [[ -z "$forbidden_path" ]] || die "YunPin app contains removed updater component: $forbidden_path"
+done
+linked_libraries="$(otool -L "$executable")"
+[[ "$linked_libraries" != *Sparkle* ]] || die "YunPin executable still links Sparkle"
 
 architectures="$(lipo -archs "$executable")"
 if [[ "$require_universal" -eq 1 ]]; then

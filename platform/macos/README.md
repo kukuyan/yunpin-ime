@@ -62,11 +62,11 @@ Squirrel input method:
 - user data: `~/Library/Application Support/YunPin/Rime`;
 - temporary logs: the `yunpin.ime` temporary directory.
 
-Squirrel's upstream Sparkle feed and menu are disabled, and its built-in Rime
-sync command is disabled so it cannot be mistaken for YunPin's encrypted cloud
-protocol. No input event performs network access. The package seeds versioned
-public overlays only when no user file or symbolic link exists. One reviewed
-upgrade migration recognizes the exact hashes of YunPin's previously shipped
+Squirrel's upstream automatic-update framework and menu entry are removed, and
+its built-in Rime sync command is disabled so it cannot be mistaken for YunPin's
+encrypted cloud protocol. No input event performs network access. The package
+seeds versioned public overlays only when no user file or symbolic link exists.
+One reviewed upgrade migration recognizes the exact hashes of YunPin's previously shipped
 aggressive correction overlay and the immediately previous conservative
 overlay, saves a mode-600 backup, and atomically replaces only those known files
 with the current conservative default. A separate exact-hash migration updates
@@ -97,11 +97,10 @@ freshly seeded database with a structurally valid `Bundle: ... 0 units` table
 is also accepted because that table cardinality proves no bundle path can be
 active; a missing table, count mismatch, malformed record or active exact path
 still fails closed. Parse failures emit only structural counts, never the other
-applications' paths. Recursively registered nested helpers such as Sparkle's
-Updater are distinct descendant bundles and do not count as the exact generated
-input-method path. On current macOS versions an already-disabled removable-
-volume tombstone can make the unregister request return a nonzero status; the
-build accepts that status only after the database check proves the exact path
+applications' paths. Any recursively registered descendant helper is distinct
+from the exact generated input-method path. On current macOS versions an
+already-disabled removable-volume tombstone can make the unregister request
+return a nonzero status; the build accepts that status only after the database check proves the exact path
 is inactive. It does not delete the build artifact or unregister the installed
 `/Library/Input Methods/YunPin.app`.
 

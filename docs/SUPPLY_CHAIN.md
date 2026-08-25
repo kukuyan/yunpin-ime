@@ -88,8 +88,8 @@ only these allow-listed inputs:
 
 The macOS lock keeps structured `nested_components` records so a nested
 component's repository, version, commit and reviewed SPDX license are all
-machine-readable. Its Boost and Sparkle source archive records likewise carry
-explicit versions and licenses alongside their immutable URL and SHA-256.
+machine-readable. Its Boost source archive record likewise carries an explicit
+version and license alongside its immutable URL and SHA-256.
 Legacy `nested_submodules` values remain the build-time commit map; SBOM
 generation fails if the structured component records disagree with it.
 

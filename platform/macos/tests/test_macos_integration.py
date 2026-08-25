@@ -52,8 +52,10 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertEqual(EXPECTED_COMMIT, platform_squirrel["commit"])
         self.assertEqual(EXPECTED_COMMIT, run("git", "-C", str(SQUIRREL), "rev-parse", "HEAD").stdout.strip())
         self.assertEqual("1.89.0", lock["boost_version"])
+        self.assertNotIn("Sparkle", lock["nested_submodules"])
+        self.assertFalse(any("Sparkle" in archive["name"] for archive in lock["archives"]))
 
-        tree = run("git", "-C", str(SQUIRREL), "ls-tree", "HEAD", "librime", "plum", "Sparkle").stdout
+        tree = run("git", "-C", str(SQUIRREL), "ls-tree", "HEAD", "librime", "plum").stdout
         for name, commit in lock["nested_submodules"].items():
             self.assertIn(f"{commit}\t{name}", tree)
 
@@ -74,7 +76,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(13, len(patches))
+        self.assertEqual(14, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -151,9 +153,13 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertEqual("YunPin", info["CFBundleExecutable"])
         self.assertEqual("YunPin_Connection", info["InputMethodConnectionName"])
         self.assertEqual("YunPin.SquirrelInputController", info["InputMethodServerControllerClass"])
-        self.assertFalse(info["SUEnableAutomaticChecks"])
-        self.assertNotIn("SUFeedURL", info)
-        self.assertNotIn("SUPublicEDKey", info)
+        for update_key in (
+            "SUEnableAutomaticChecks",
+            "SUEnableInstallerLauncherService",
+            "SUFeedURL",
+            "SUPublicEDKey",
+        ):
+            self.assertNotIn(update_key, info)
         modes = info["ComponentInputModeDict"]["tsInputModeListKey"]
         self.assertEqual({f"{bundle}.Hans", f"{bundle}.Hant"}, set(modes))
 
@@ -161,6 +167,14 @@ class MacOSIntegrationTests(unittest.TestCase):
             path.read_text(encoding="utf-8")
         for path in (self.prepared / "sources").glob("*.swift")
         )
+        for removed_update_api in ("import Sparkle", "SPUStandardUpdaterController", "checkForUpdates"):
+            self.assertNotIn(removed_update_api, sources)
+        project = (self.prepared / "Squirrel.xcodeproj" / "project.pbxproj").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("Sparkle.framework", project)
+        self.assertNotIn("Sparkle", (self.prepared / "Makefile").read_text(encoding="utf-8"))
+        self.assertFalse((self.prepared / "Sparkle").exists())
         self.assertIn("/Library/Input Methods/YunPin.app", sources)
         self.assertIn('"Application Support", "YunPin", "Rime"', sources)
         self.assertIn("SquirrelApp.userDir.path(percentEncoded: false)", sources)
@@ -939,19 +953,17 @@ class MacOSIntegrationTests(unittest.TestCase):
         signing = (MACOS_DIR / "scripts" / "sign-app-adhoc.sh").read_text(
             encoding="utf-8"
         )
-        xpc_executable = signing.index("-path '*/Contents/MacOS/*'")
-        xpc_bundle = signing.index("-name '*.xpc'")
-        updater = signing.index('sign_adhoc "$updater"')
-        sparkle = signing.index('sign_adhoc "$sparkle"')
         librime = signing.index("-name 'librime*.dylib'")
         plugin = signing.index("-name '*.dylib'")
         helper = signing.index("-name 'rime*'")
+        sync_agent = signing.index('sign_adhoc "$sync_agent"')
         root = signing.rindex('sign_adhoc "$app"')
         verify = signing.index('codesign --verify --deep --strict --verbose=2 "$app"')
         self.assertEqual(
-            sorted([xpc_executable, xpc_bundle, updater, sparkle, librime, plugin, helper, root, verify]),
-            [xpc_executable, xpc_bundle, updater, sparkle, librime, plugin, helper, root, verify],
+            sorted([librime, plugin, helper, sync_agent, root, verify]),
+            [librime, plugin, helper, sync_agent, root, verify],
         )
+        self.assertNotIn("Sparkle", signing)
 
         verifier = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(
             encoding="utf-8"
@@ -961,6 +973,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         )
         self.assertIn("codesign --verify --deep --strict", verifier)
         self.assertIn("does not have a valid strict deep signature", verifier)
+        self.assertIn("YunPin executable still links Sparkle", verifier)
+        self.assertIn("Sparkle.framework Updater.app Autoupdate Installer.xpc Downloader.xpc", verifier)
         self.assertIn("codesign --verify --deep --strict", package)
         self.assertIn("does not have a valid strict deep signature", package)
         self.assertNotIn("skipping strict", verifier + package)
@@ -1076,16 +1090,15 @@ class MacOSIntegrationTests(unittest.TestCase):
             absent = run_dump(records((root / "Other.app", "ui-element")))
             self.assertEqual(0, absent.returncode, absent.stderr)
 
-            # Xcode registers the app recursively. A nested Sparkle helper may
-            # remain as its own LaunchServices record after the root input
-            # method is unregistered; its descendant path is not the target
-            # bundle and must not be mistaken for exact-path format drift.
+            # Xcode registers application descendants recursively. A nested
+            # helper may remain as its own LaunchServices record after the root
+            # input method is unregistered; its path is not the target bundle.
             nested_helper = (
                 app
                 / "Contents"
-                / "Frameworks"
-                / "Sparkle.framework"
-                / "Updater.app"
+                / "Library"
+                / "LoginItems"
+                / "Helper.app"
             )
             descendant = run_dump(records((nested_helper, "ui-element")))
             self.assertEqual(0, descendant.returncode, descendant.stderr)
@@ -1160,14 +1173,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="yunpin-signing-test-") as temporary:
             root = Path(temporary)
             app = root / "YunPin.app"
-            sparkle = app / "Contents" / "Frameworks" / "Sparkle.framework"
-            version = sparkle / "Versions" / "B"
-            xpc_root = version / "XPCServices"
             targets = [
-                xpc_root / "Downloader.xpc" / "Contents" / "MacOS" / "Downloader",
-                xpc_root / "Installer.xpc" / "Contents" / "MacOS" / "Installer",
-                version / "Updater.app" / "Contents" / "MacOS" / "Updater",
-                version / "Autoupdate",
                 app / "Contents" / "Frameworks" / "librime.1.dylib",
                 app / "Contents" / "Frameworks" / "rime-plugins" / "librime-lua.dylib",
                 app / "Contents" / "MacOS" / "rime_deployer",
@@ -1177,7 +1183,6 @@ class MacOSIntegrationTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("fixture\n", encoding="utf-8")
                 target.chmod(0o755)
-            (sparkle / "Versions" / "Current").symlink_to("B")
 
             fake_bin = root / "bin"
             fake_bin.mkdir()
@@ -1204,27 +1209,18 @@ class MacOSIntegrationTests(unittest.TestCase):
             script = str(MACOS_DIR / "scripts" / "sign-app-adhoc.sh")
             run(script, str(app), env=env)
 
-            resolved_version = version.resolve()
-            resolved_xpc_root = resolved_version / "XPCServices"
             expected = [
-                str(resolved_xpc_root / "Downloader.xpc" / "Contents" / "MacOS" / "Downloader"),
-                str(resolved_xpc_root / "Installer.xpc" / "Contents" / "MacOS" / "Installer"),
-                str(resolved_xpc_root / "Downloader.xpc"),
-                str(resolved_xpc_root / "Installer.xpc"),
-                str(resolved_version / "Updater.app"),
-                str(resolved_version / "Autoupdate"),
-                str(sparkle),
-                str(targets[4]),
-                str(targets[5]),
-                str(targets[6]),
-                str(targets[7]),
+                str(targets[0]),
+                str(targets[1]),
+                str(targets[2]),
+                str(targets[3]),
                 str(app),
                 f"VERIFY:{app}",
             ]
             self.assertEqual(expected, log.read_text(encoding="utf-8").splitlines())
 
             log.write_text("", encoding="utf-8")
-            env["YUNPIN_TEST_FAIL_TARGET"] = "Updater.app"
+            env["YUNPIN_TEST_FAIL_TARGET"] = "librime-lua.dylib"
             failed = subprocess.run(
                 [script, str(app)],
                 cwd=ROOT,

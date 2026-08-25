@@ -357,38 +357,16 @@ def _load_macos_packages(lock: dict[str, Any]) -> list[dict[str, Any]]:
         version = _string(component.get("version"), f"macOS {name}.version")
         repository = _https_url(component.get("repository"), f"macOS {name}.repository")
         declared = _license(component.get("license"), f"macOS {name}.license")
-        download = repository
-        checksum: str | None = None
-        archive_name: str | None = None
-        if name == "Sparkle":
-            matching = [
-                item
-                for item in archives
-                if _string(item.get("name"), "macOS archive name").startswith("Sparkle-")
-            ]
-            if len(matching) != 1:
-                raise SBOMError("macOS lock must contain exactly one Sparkle archive")
-            archive = matching[0]
-            if _string(archive.get("version"), "Sparkle archive version") != version:
-                raise SBOMError("Sparkle component and archive versions disagree")
-            if _license(archive.get("license"), "Sparkle archive license") != declared:
-                raise SBOMError("Sparkle component and archive licenses disagree")
-            download = _https_url(archive.get("url"), "Sparkle archive URL")
-            checksum = _sha256(archive.get("sha256"), "Sparkle archive SHA-256")
-            archive_name = _string(archive.get("name"), "Sparkle archive name")
         packages.append(
             make_package(
                 identity=f"macos:{name}:{version}:{commit}",
                 name=name,
                 version=version,
-                download_location=download,
+                download_location=repository,
                 declared_license=declared,
                 source_info="platform/macos/dependencies.lock.json",
-                purpose="APPLICATION" if name == "Sparkle" else "LIBRARY",
                 repository=repository,
                 commit=commit,
-                sha256=checksum,
-                archive_name=archive_name,
             )
         )
     if component_names != set(nested_map):

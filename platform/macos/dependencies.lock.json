@@ -4,8 +4,7 @@
   "boost_version": "1.89.0",
   "nested_submodules": {
     "librime": "a251145d3aafa33871824a40bbec04c966bd8b56",
-    "plum": "4c28f11f451facef809b380502874a48ba964ddb",
-    "Sparkle": "41847a58cdef7506b257591fcca6f9495df591d4"
+    "plum": "4c28f11f451facef809b380502874a48ba964ddb"
   },
   "nested_components": [
     {
@@ -23,14 +22,6 @@
       "commit": "4c28f11f451facef809b380502874a48ba964ddb",
       "license": "LGPL-3.0",
       "role": "macOS Rime data package installer submodule"
-    },
-    {
-      "name": "Sparkle",
-      "version": "2.6.2",
-      "repository": "https://github.com/sparkle-project/Sparkle",
-      "commit": "41847a58cdef7506b257591fcca6f9495df591d4",
-      "license": "MIT",
-      "role": "macOS update framework with update checks disabled"
     }
   ],
   "librime_patches": [
@@ -95,6 +86,10 @@
     {
       "path": "platform/patches/squirrel/0013-yunpin-enable-learning-in-ordinary-sessions.patch",
       "sha256": "45bd2fea65ef9a74bd30404f2b3313dd948d91fb64065d139edb26ac9212bcfe"
+    },
+    {
+      "path": "platform/patches/squirrel/0014-yunpin-remove-sparkle-runtime.patch",
+      "sha256": "fb0c43e5d4d11bfe2c3a9cddc99f9b88713eda5da1cb961d02313cf914121857"
     }
   ],
   "archives": [
@@ -115,13 +110,6 @@
       "sha256": "9de758db755e8330a01d995b0a24d09798048400ac25c03fc5ea9be364b13c93",
       "license": "BSL-1.0",
       "boost_source": true
-    },
-    {
-      "name": "Sparkle-2.6.2.tar.xz",
-      "version": "2.6.2",
-      "url": "https://github.com/sparkle-project/Sparkle/releases/download/2.6.2/Sparkle-2.6.2.tar.xz",
-      "sha256": "2300a7dc2545a4968e54621b7f351d388ddf1a5cb49e79f6c99e9a09d826f5e8",
-      "license": "MIT"
     },
     {
       "name": "librime-lua-68f9c36.tar.gz",
