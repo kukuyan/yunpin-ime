@@ -90,6 +90,10 @@
     {
       "path": "platform/patches/squirrel/0014-yunpin-remove-sparkle-runtime.patch",
       "sha256": "fb0c43e5d4d11bfe2c3a9cddc99f9b88713eda5da1cb961d02313cf914121857"
+    },
+    {
+      "path": "platform/patches/squirrel/0015-yunpin-open-local-settings.patch",
+      "sha256": "7f57c15806a0829f56057804f2c1c3a79e8531d085ea7efd1668d5b1e56aff3e"
     }
   ],
   "archives": [

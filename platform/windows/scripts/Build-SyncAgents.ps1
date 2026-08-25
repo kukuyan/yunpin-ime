@@ -184,8 +184,11 @@ $publicBinary = Join-Path $publicRoot "yunpin-sync-agent.exe"
 # The windowless background process the scheduled task runs. Separate from the
 # interactive binary only because of the subsystem it is linked for.
 $residentBinary = Join-Path $publicRoot "yunpin-sync-resident.exe"
+# The tray launches the same public command package through a GUI-subsystem
+# image, so opening Settings never allocates a PowerShell/console window.
+$settingsBinary = Join-Path $publicRoot "yunpin-settings.exe"
 $privateBinary = Join-Path $privateRoot "yunpin-sync-agent.exe"
-Remove-Item -LiteralPath $publicBinary, $residentBinary -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $publicBinary, $residentBinary, $settingsBinary -Force -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath $publicOverlayPath -PathType Leaf)) {
     throw "Same-run public Windows overlay is missing"
 }
@@ -208,6 +211,7 @@ try {
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
     Invoke-GoBuild -AgentRoot $agentRoot -Output $publicBinary
+    Invoke-GoBuild -AgentRoot $agentRoot -Output $settingsBinary -WindowsGui
     Invoke-GoBuild -AgentRoot $agentRoot -Output $residentBinary `
         -Package "./cmd/yunpin-sync-resident" -WindowsGui
     if ($hasPrivateE2ESupport) {
@@ -315,12 +319,15 @@ $subsystemChecker = Join-Path $repoRoot "scripts\check_pe_subsystem.py"
 if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
     & python $subsystemChecker gui $residentBinary
     if ($LASTEXITCODE -ne 0) { throw "Resident sync agent is not linked for the Windows GUI subsystem" }
+    & python $subsystemChecker gui $settingsBinary
+    if ($LASTEXITCODE -ne 0) { throw "YunPin settings launcher is not linked for the Windows GUI subsystem" }
     & python $subsystemChecker console $publicBinary
     if ($LASTEXITCODE -ne 0) { throw "Interactive sync agent must stay console-subsystem for its JSON output" }
 }
 
 Write-Host "Built public Windows sync agent: $publicBinary"
 Write-Host "Built windowless Windows sync resident: $residentBinary"
+Write-Host "Built windowless Windows settings launcher: $settingsBinary"
 if ($hasPrivateE2ESupport) {
     Write-Host "Built private E2E-only Windows sync agent: $privateBinary"
 } else {

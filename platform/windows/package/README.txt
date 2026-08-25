@@ -39,6 +39,10 @@ Security gates:
   command`. Installation copies it into the current user's protected sync
   state and registers `YunPinSyncAgent` as a disabled, stopped scheduled task.
   It does not read credentials, databases, dictionaries, or the network.
+* The tray's Settings item uses the separate GUI-subsystem
+  `support\sync-agent\yunpin-settings.exe`, so it opens the temporary local-only
+  guard/sync/vocabulary page without leaving a console or PowerShell window.
+  The page has no endpoint, account/device, recovery, reset or re-pair control.
 * Private-tag pairing binaries are separate short-lived CI E2E artifacts. They
   are not copied into this archive or any GitHub Release asset.
 

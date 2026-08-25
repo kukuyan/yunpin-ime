@@ -30,6 +30,9 @@ learned phrase, or replay data.
   `yunpin-sync-resident.exe` is what the scheduled task runs: it implements only the
   background loop and is linked for the Windows GUI subsystem, so logging in does not
   leave a console window on screen for the life of the session.
+  The verified preview support directory also carries `yunpin-settings.exe`, a
+  GUI-subsystem image of the public command package used only by the tray's
+  Settings action; it is never registered as an autostart process.
 
 Installation is deliberately two-phase. The commands above copy the binary and
 register an autostart job in a **disabled and stopped** state. They never start
@@ -77,10 +80,10 @@ The package integration is intentionally staged, not enabled:
    Weasel provide a trustworthy per-field `yunpin_learning_allowed` signal, the
    filter rejects private injection as well as native event publication. Never
    set that option globally merely to make an E2E test pass. A one-off
-   `sync-once` acceptance run
-   requires temporarily stopping the resident job because `run` deliberately
-   holds the single-process lock for its lifetime; always restore and verify
-   resident registration afterward.
+   `sync-once` acceptance run no longer requires stopping the resident: one
+   instance lock keeps the background loop unique, while the operation lock is
+   held only during an actual round. If a round is already active, the one-off
+   request returns the bounded busy result and can be retried.
 5. On any failure, run the matching uninstaller. It retires only the resident
    executable and registration while retaining the private recovery state.
 

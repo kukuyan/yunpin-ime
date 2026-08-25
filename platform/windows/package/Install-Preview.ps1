@@ -338,13 +338,19 @@ try {
     $syncVerifier = Join-Path $syncSupportRoot "Verify-SyncAgent.ps1"
     $syncAgent = Join-Path $syncSupportRoot "yunpin-sync-agent.exe"
     $syncResident = Join-Path $syncSupportRoot "yunpin-sync-resident.exe"
+    $settingsLauncher = Join-Path $syncSupportRoot "yunpin-settings.exe"
     $syncManifestPath = "sync-agent/yunpin-sync-agent.exe"
     $syncResidentManifestPath = "sync-agent/yunpin-sync-resident.exe"
+    $settingsManifestPath = "sync-agent/yunpin-settings.exe"
     if (-not $bundleManifest.ContainsKey($syncManifestPath)) {
         throw "Public sync agent is absent from the verified bundle manifest."
     }
     if (-not $bundleManifest.ContainsKey($syncResidentManifestPath)) {
         throw "Windowless sync resident is absent from the verified bundle manifest."
+    }
+    if (-not $bundleManifest.ContainsKey($settingsManifestPath) -or
+        -not (Test-Path -LiteralPath $settingsLauncher -PathType Leaf)) {
+        throw "Windowless settings launcher is absent from the verified bundle."
     }
     & $syncInstaller -AgentPath $syncAgent -ExpectedSha256 $bundleManifest[$syncManifestPath] `
         -ResidentPath $syncResident -ResidentExpectedSha256 $bundleManifest[$syncResidentManifestPath]

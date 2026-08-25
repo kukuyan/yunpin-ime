@@ -32,6 +32,10 @@
       {
         "path": "platform/patches/weasel/0007-yunpin-enable-learning-in-ordinary-sessions.patch",
         "sha256": "ca90510b9da30e13f0e015f26471c3a2e751ceacf1289b75b86cd625b41ec761"
+      },
+      {
+        "path": "platform/patches/weasel/0008-yunpin-open-local-settings.patch",
+        "sha256": "1229da54a4279ea990541aaf59b01ee13f54c85c75c4846c5fc74eb8bba3bc82"
       }
     ]
   },

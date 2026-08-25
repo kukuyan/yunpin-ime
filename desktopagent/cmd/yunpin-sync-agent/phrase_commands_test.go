@@ -47,3 +47,14 @@ func TestPhraseSubcommandsAreDispatched(t *testing.T) {
 		t.Fatal("the usage string does not mention the phrase subcommands")
 	}
 }
+
+func TestPhraseMutationsUseTheSharedOperationLock(t *testing.T) {
+	source, err := os.ReadFile("phrase_commands.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if count := strings.Count(text, "desktopagent.WithProcessLock(common.lock"); count != 3 {
+		t.Fatalf("phrase mutation lock count=%d, want 3", count)
+	}
+}

@@ -166,6 +166,12 @@ class WindowsClientTests(unittest.TestCase):
             self.assertNotIn("win_sparkle_init", server)
             self.assertNotIn("winsparkle.h", server_main.lower())
             self.assertIn("YunPinDeployer.exe", server)
+            self.assertIn('L"yunpin-settings.exe"', server)
+            self.assertIn('std::wstring(L"settings")', server)
+            self.assertNotIn(
+                'ID_WEASELTRAY_SETTINGS,\n      std::bind(execute, dir / L"YunPinDeployer.exe"',
+                server,
+            )
             self.assertIn("typed, explicitly armed action", composition)
             self.assertIn(
                 "YunPinStartDefaultNativeSelectionSpoolerV1()",
@@ -442,10 +448,15 @@ class WindowsClientTests(unittest.TestCase):
 
         self.assertIn('"Build-SyncAgents.ps1"', build)
         self.assertIn('"desktopagent\\public"', agent_build)
+        self.assertIn('"yunpin-settings.exe"', agent_build)
+        self.assertIn('gui $settingsBinary', agent_build)
         self.assertIn('"e2e-private\\windows"', agent_build)
         self.assertIn('BuildTag "yunpin_pairing_private"', agent_build)
         self.assertIn("go mod verify", agent_build)
         self.assertIn("package_go_licenses.py", agent_build)
+        self.assertIn('"yunpin-settings.exe"', package)
+        self.assertIn('sync-agent/yunpin-settings.exe', installer)
+        self.assertIn('gui $settingsLauncher', package_test)
         self.assertIn('$publicBaseline = Invoke-AgentCapture -Executable $publicBinary -Arguments @("e2e-init-empty-baseline")', agent_build)
         self.assertIn('$publicBaseline.Output -cne "yunpin-sync-agent: unknown command"', agent_build)
         self.assertIn('$privateBaseline = Invoke-AgentCapture -Executable $privateBinary -Arguments @("e2e-init-empty-baseline")', agent_build)
@@ -830,11 +841,14 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('-Package "./cmd/yunpin-sync-resident" -WindowsGui', build)
         self.assertIn("check_pe_subsystem.py", build)
         self.assertIn("gui $residentBinary", build)
+        self.assertIn("gui $settingsBinary", build)
         self.assertIn("console $publicBinary", build)
 
         # Staged into the bundle and installed next to the interactive agent.
         self.assertIn("yunpin-sync-resident.exe", package)
+        self.assertIn("yunpin-settings.exe", package)
         self.assertIn("sync-agent/yunpin-sync-resident.exe", installer)
+        self.assertIn("sync-agent/yunpin-settings.exe", installer)
         self.assertIn("-ResidentExpectedSha256", installer)
         self.assertIn("$ResidentPath", install_agent)
         self.assertIn("$ResidentExpectedSha256", install_agent)

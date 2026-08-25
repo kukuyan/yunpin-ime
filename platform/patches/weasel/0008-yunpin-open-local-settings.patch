@@ -1,0 +1,41 @@
+From 3333333333333333333333333333333333333333 Mon Sep 17 00:00:00 2001
+From: YunPin contributors <noreply@yunpin.invalid>
+Date: Tue, 25 Aug 2026 12:00:00 -0700
+Subject: [PATCH] yunpin: open the packaged local settings page
+
+SPDX-License-Identifier: GPL-3.0-only
+
+Upstream-Base: rime/weasel@9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+
+Use the windowless Go settings image shipped in the verified support bundle
+instead of the upstream deployer's generic settings dialog. The command opens
+only a temporary 127.0.0.1 page and contains YunPin's sync and vocabulary tools.
+---
+ WeaselServer/WeaselServerApp.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/WeaselServer/WeaselServerApp.cpp b/WeaselServer/WeaselServerApp.cpp
+--- a/WeaselServer/WeaselServerApp.cpp
++++ b/WeaselServer/WeaselServerApp.cpp
+@@ -34,14 +34,17 @@ int WeaselServerApp::Run() {
+ }
+ 
+ void WeaselServerApp::SetupMenuHandlers() {
+   std::filesystem::path dir = install_dir();
++  std::filesystem::path yunpin_settings =
++      dir.parent_path() / L"support" / L"sync-agent" /
++      L"yunpin-settings.exe";
+   m_server.AddMenuHandler(ID_WEASELTRAY_QUIT,
+                           [this] { return m_server.Stop() == 0; });
+   m_server.AddMenuHandler(ID_WEASELTRAY_DEPLOY,
+                           std::bind(execute, dir / L"YunPinDeployer.exe",
+                                     std::wstring(L"/deploy")));
+   m_server.AddMenuHandler(
+       ID_WEASELTRAY_SETTINGS,
+-      std::bind(execute, dir / L"YunPinDeployer.exe", std::wstring()));
++      std::bind(execute, yunpin_settings, std::wstring(L"settings")));
+   m_server.AddMenuHandler(
+       ID_WEASELTRAY_DICT_MANAGEMENT,
+       std::bind(execute, dir / L"YunPinDeployer.exe", std::wstring(L"/dict")));
+-- 
+2.50.1

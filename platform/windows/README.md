@@ -168,6 +168,12 @@ TSF architecture can restart the x64 service. Uninstall retires the runtime to
 a recoverable directory, removes the matching 64-bit runtime record, and retains
 user dictionaries:
 
+The YunPin tray's **Settings** item launches the verified
+`support\sync-agent\yunpin-settings.exe` GUI-subsystem image. It opens a
+temporary local-only page for the three guard switches, redacted sync health,
+immediate synchronization, and personal vocabulary management; no PowerShell
+or console window remains in the foreground.
+
 ```powershell
 PowerShell -ExecutionPolicy Bypass -File .\Uninstall-Preview.ps1 `
   -ConfirmUninstall

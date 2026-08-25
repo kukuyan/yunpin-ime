@@ -1,0 +1,68 @@
+SPDX-License-Identifier: GPL-3.0-only
+Upstream: https://github.com/rime/squirrel
+Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+Subject: Open the bounded YunPin local settings page
+
+Replace the upstream data-folder shortcut behind Settings with the packaged
+YunPin settings command. The child inherits no terminal streams and the
+executable must remain a regular, non-symlink member of the application bundle.
+
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+index 6ea7c82..8e3b5a5 100644
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -195,6 +195,30 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+     NSWorkspace.shared.open(SquirrelApp.userDir)
+   }
+ 
++  func openYunPinSettings() {
++    guard let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent() else {
++      print("YunPin settings executable directory is unavailable.")
++      return
++    }
++    let settingsAgent = executableDirectory.appendingPathComponent("yunpin-sync-agent", isDirectory: false)
++    guard let values = try? settingsAgent.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
++          values.isRegularFile == true, values.isSymbolicLink != true else {
++      print("YunPin settings agent is unavailable.")
++      return
++    }
++    let process = Process()
++    process.executableURL = settingsAgent
++    process.arguments = ["settings"]
++    process.standardInput = FileHandle.nullDevice
++    process.standardOutput = FileHandle.nullDevice
++    process.standardError = FileHandle.nullDevice
++    do {
++      try process.run()
++    } catch {
++      print("YunPin settings could not be opened.")
++    }
++  }
++
+   func openWiki() {
+     NSWorkspace.shared.open(Self.rimeWikiURL)
+   }
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index 53b6c98..6435f01 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -390,7 +390,7 @@ final class SquirrelInputController: IMKInputController {
+     deploy.keyEquivalentModifierMask = [.control, .option]
+     let logDir = NSMenuItem(title: NSLocalizedString("Logs...", comment: "Menu item"), action: #selector(openLogFolder), keyEquivalent: "")
+     logDir.target = self
+-    let setting = NSMenuItem(title: NSLocalizedString("Settings...", comment: "Menu item"), action: #selector(openRimeFolder), keyEquivalent: "")
++    let setting = NSMenuItem(title: NSLocalizedString("Settings...", comment: "Menu item"), action: #selector(openYunPinSettings), keyEquivalent: "")
+     setting.target = self
+     let wiki = NSMenuItem(title: NSLocalizedString("Rime Wiki...", comment: "Menu item"), action: #selector(openWiki), keyEquivalent: "")
+     wiki.target = self
+@@ -416,6 +416,10 @@ final class SquirrelInputController: IMKInputController {
+     NSApp.squirrelAppDelegate.openRimeFolder()
+   }
+ 
++  @objc func openYunPinSettings() {
++    NSApp.squirrelAppDelegate.openYunPinSettings()
++  }
++
+   @objc func openWiki() {
+     NSApp.squirrelAppDelegate.openWiki()
+   }

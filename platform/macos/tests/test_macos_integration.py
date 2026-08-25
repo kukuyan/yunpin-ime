@@ -76,7 +76,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(14, len(patches))
+        self.assertEqual(15, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -439,6 +439,29 @@ class MacOSIntegrationTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                     self.assertNotIn(forbidden, controller)
+
+    def test_settings_menu_opens_packaged_local_settings_agent(self) -> None:
+        controller = (
+            self.prepared / "sources" / "SquirrelInputController.swift"
+        ).read_text(encoding="utf-8")
+        delegate = (
+            self.prepared / "sources" / "SquirrelApplicationDelegate.swift"
+        ).read_text(encoding="utf-8")
+        self.assertIn('action: #selector(openYunPinSettings)', controller)
+        self.assertNotIn(
+            'title: NSLocalizedString("Settings...", comment: "Menu item"), action: #selector(openRimeFolder)',
+            controller,
+        )
+        for required in (
+            'appendingPathComponent("yunpin-sync-agent"',
+            'process.arguments = ["settings"]',
+            "values.isRegularFile == true",
+            "values.isSymbolicLink != true",
+            "process.standardInput = FileHandle.nullDevice",
+            "process.standardOutput = FileHandle.nullDevice",
+            "process.standardError = FileHandle.nullDevice",
+        ):
+            self.assertIn(required, delegate)
 
     def test_ordinary_squirrel_sessions_enable_synced_learning_before_app_overrides(self) -> None:
         controller = (

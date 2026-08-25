@@ -60,7 +60,12 @@ func commandPhraseAdd(ctx context.Context, defaults desktopagent.Paths, argument
 	if err != nil {
 		return err
 	}
-	change, err := agent.AddPhrase(ctx, *text, *pinyin, *pin)
+	var change desktopagent.VocabularyChange
+	err = desktopagent.WithProcessLock(common.lock, func() error {
+		var changeErr error
+		change, changeErr = agent.AddPhrase(ctx, *text, *pinyin, *pin)
+		return changeErr
+	})
 	if err != nil {
 		return err
 	}
@@ -82,7 +87,12 @@ func commandPhrasePin(ctx context.Context, defaults desktopagent.Paths, argument
 	if err != nil {
 		return err
 	}
-	change, err := agent.SetPhrasePinned(ctx, *text, *pinyin, pinned)
+	var change desktopagent.VocabularyChange
+	err = desktopagent.WithProcessLock(common.lock, func() error {
+		var changeErr error
+		change, changeErr = agent.SetPhrasePinned(ctx, *text, *pinyin, pinned)
+		return changeErr
+	})
 	if err != nil {
 		return err
 	}
@@ -100,7 +110,12 @@ func commandPhraseRemove(ctx context.Context, defaults desktopagent.Paths, argum
 	if err != nil {
 		return err
 	}
-	change, err := agent.RemovePhrase(ctx, *text, *pinyin)
+	var change desktopagent.VocabularyChange
+	err = desktopagent.WithProcessLock(common.lock, func() error {
+		var changeErr error
+		change, changeErr = agent.RemovePhrase(ctx, *text, *pinyin)
+		return changeErr
+	})
 	if err != nil {
 		return err
 	}
