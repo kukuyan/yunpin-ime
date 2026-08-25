@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	privateSnapshotHeader  = "phrase\tpinyin\tsource\tuse_count\tpinned\n"
-	maxPrivateSnapshotRows = 100000
-	maxBaselineBytes       = 64 << 20
+	privateSnapshotHeader   = "phrase\tpinyin\tsource\tuse_count\tpinned\n"
+	generatedSnapshotHeader = "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\tcorrection_score\n"
+	maxPrivateSnapshotRows  = 100000
+	maxBaselineBytes        = 64 << 20
 )
 
 type SnapshotSummary struct {
@@ -37,12 +38,13 @@ type SnapshotSummary struct {
 }
 
 type snapshotRow struct {
-	Phrase      string
-	Pinyin      string
-	Source      string
-	UseCount    uint64
-	Pinned      bool
-	LastUsedDay int64
+	Phrase          string
+	Pinyin          string
+	Source          string
+	UseCount        uint64
+	Pinned          bool
+	LastUsedDay     int64
+	CorrectionScore int32
 }
 
 func validBaselinePinyin(value string) bool {
@@ -124,7 +126,14 @@ func readBoundedRegular(path string, maximum int64) ([]byte, error) {
 func parseBaselineBytes(contents []byte) ([]snapshotRow, error) {
 	reader := bufio.NewReader(bytes.NewReader(contents))
 	header, err := reader.ReadString('\n')
-	if err != nil || strings.TrimSuffix(strings.TrimSuffix(header, "\n"), "\r") != strings.TrimSuffix(privateSnapshotHeader, "\n") {
+	if err != nil {
+		return nil, errors.New("baseline snapshot header is invalid")
+	}
+	normalizedHeader := strings.TrimSuffix(strings.TrimSuffix(header, "\n"), "\r")
+	baselineFields := 5
+	if normalizedHeader == strings.TrimSuffix(generatedSnapshotHeader, "\n") {
+		baselineFields = 7
+	} else if normalizedHeader != strings.TrimSuffix(privateSnapshotHeader, "\n") {
 		return nil, errors.New("baseline snapshot header is invalid")
 	}
 	rows := make([]snapshotRow, 0, maxPrivateSnapshotRows)
@@ -137,7 +146,7 @@ func parseBaselineBytes(contents []byte) ([]snapshotRow, error) {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 5 || !validNativePhrase(fields[0]) || !validBaselinePinyin(fields[1]) || !validSnapshotSource(fields[2]) {
+		if len(fields) != baselineFields || !validNativePhrase(fields[0]) || !validBaselinePinyin(fields[1]) || !validSnapshotSource(fields[2]) {
 			return nil, errors.New("baseline snapshot contains an invalid row")
 		}
 		count, countErr := strconv.ParseUint(fields[3], 10, 64)
@@ -146,6 +155,15 @@ func parseBaselineBytes(contents []byte) ([]snapshotRow, error) {
 			return nil, errors.New("baseline snapshot contains invalid metadata")
 		}
 		row := snapshotRow{Phrase: fields[0], Pinyin: fields[1], Source: fields[2], UseCount: count, Pinned: pinned}
+		if baselineFields == 7 {
+			lastUsedDay, dayErr := strconv.ParseInt(fields[5], 10, 64)
+			correctionScore, scoreErr := strconv.ParseInt(fields[6], 10, 32)
+			if dayErr != nil || lastUsedDay < 0 || scoreErr != nil {
+				return nil, errors.New("baseline snapshot contains invalid learning metadata")
+			}
+			row.LastUsedDay = lastUsedDay
+			row.CorrectionScore = int32(correctionScore)
+		}
 		if _, exists := seen[snapshotKey(row)]; exists {
 			return nil, errors.New("baseline snapshot contains a duplicate phrase identity")
 		}
@@ -262,7 +280,7 @@ func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]s
 
 func encodeSnapshot(rows []snapshotRow) ([]byte, error) {
 	var output bytes.Buffer
-	output.WriteString(privateSnapshotHeader)
+	output.WriteString(generatedSnapshotHeader)
 	for _, row := range rows {
 		if !validNativePhrase(row.Phrase) || !validBaselinePinyin(row.Pinyin) ||
 			!validSnapshotSource(row.Source) || row.UseCount == 0 || row.LastUsedDay < 0 {
@@ -270,14 +288,22 @@ func encodeSnapshot(rows []snapshotRow) ([]byte, error) {
 		}
 		source := row.Source
 		if row.LastUsedDay > 0 {
-			if source != "synced_learning" {
+			expectedSource := fmt.Sprintf("synced_learning@%d", row.LastUsedDay)
+			if source == "synced_learning" {
+				source = expectedSource
+			} else if source != expectedSource {
 				return nil, errors.New("only synchronized learning rows may encode recency")
 			}
-			source = fmt.Sprintf("synced_learning@%d", row.LastUsedDay)
 		}
-		fmt.Fprintf(&output, "%s\t%s\t%s\t%d\t%t\n", row.Phrase, row.Pinyin, source, row.UseCount, row.Pinned)
+		fmt.Fprintf(&output, "%s\t%s\t%s\t%d\t%t\t%d\t%d\n", row.Phrase, row.Pinyin, source, row.UseCount, row.Pinned, row.LastUsedDay, row.CorrectionScore)
 	}
 	return output.Bytes(), nil
+}
+
+func applyCorrectionScores(rows []snapshotRow, scores map[string]int32) {
+	for index := range rows {
+		rows[index].CorrectionScore = scores[snapshotKey(rows[index])]
+	}
 }
 
 func writeAtomicPrivateFile(path string, contents []byte) (bool, error) {
@@ -345,6 +371,11 @@ func rebuildPrivateSnapshot(ctx context.Context, store *localstore.Store, baseli
 		return SnapshotSummary{}, err
 	}
 	rows, learnedRows := mergeSnapshotRows(baseline, snapshot.Phrases)
+	habits, err := store.QueryHabits(ctx, localstore.HabitQuery{Limit: localstore.MaxHabitReportEntries})
+	if err != nil {
+		return SnapshotSummary{}, err
+	}
+	applyCorrectionScores(rows, localstore.CorrectionScores(habits))
 	contents, err := encodeSnapshot(rows)
 	if err != nil {
 		return SnapshotSummary{}, err

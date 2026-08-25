@@ -93,6 +93,24 @@ void TestRecencyColumnIsParsedAndRanksAFirstUseImmediately() {
   assert(candidates.front().text == "刚选一次");
 }
 
+void TestCorrectionScoreColumnPersistsExplicitFeedback() {
+  std::istringstream input(
+      "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\tcorrection_score\n"
+      "办公是\tban gong shi\tsynced_learning@21000\t5\tfalse\t21000\t-1\n"
+      "办公室\tban gong shi\tsogou_import\t165\tfalse\t0\t1\n");
+  auto parsed = yunpin::ParsePrivateSnapshot(input);
+  assert(parsed.header_valid);
+  assert(parsed.accepted_rows == 2);
+  assert(parsed.entries[0].correction_score == -1);
+  assert(parsed.entries[1].correction_score == 1);
+
+  yunpin::SnapshotStore store;
+  store.Replace(std::move(parsed.entries));
+  const auto candidates = store.Query("bangongshi", 2);
+  assert(candidates.size() == 2);
+  assert(candidates.front().text == "办公室");
+}
+
 void TestLegacyPersonalSpellingsStaySnapshotLocal() {
   std::ostringstream snapshot;
   snapshot << "phrase\tpinyin\tsource\tuse_count\n"
@@ -269,6 +287,7 @@ int main() {
   TestHeaderAndLimitsAreClosedByDefault();
   TestDuplicateSnapshotRowsAreRejectedBeforeIndexBuild();
   TestRecencyColumnIsParsedAndRanksAFirstUseImmediately();
+  TestCorrectionScoreColumnPersistsExplicitFeedback();
   TestLegacyPersonalSpellingsStaySnapshotLocal();
   TestRowsBeyondLegacyFiftyThousandLimitAreRetained();
   TestAtomicReplacementDuringQueries();

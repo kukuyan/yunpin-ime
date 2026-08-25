@@ -176,12 +176,17 @@ void SessionLearning::ApplyFeedbackLocked(const LearningUpdate& update) {
 }
 
 bool SessionLearning::ObserveCommit(SessionCommit commit) {
+  return ObserveCommitDetailed(std::move(commit)).recorded;
+}
+
+SessionLearningUpdate SessionLearning::ObserveCommitDetailed(
+    SessionCommit commit) {
   std::lock_guard<std::mutex> lock(mutex_);
   const std::string normalized = NormalizePinyin(commit.pinyin);
   if (commit.context != LearningContext::kNormal || normalized.empty() ||
       commit.phrase.empty()) {
     BreakAdjacencyLocked();
-    return false;
+    return {};
   }
   commit.pinyin = normalized;
 
@@ -189,6 +194,8 @@ bool SessionLearning::ObserveCommit(SessionCommit commit) {
       phase_ == Phase::kAwaitingReplacement && pending_.has_value() &&
       !ExpiredLocked() && pending_->pinyin == normalized &&
       pending_->phrase != commit.phrase;
+  const std::optional<PendingCommit> corrected_from =
+      valid_replacement ? pending_ : std::nullopt;
   if (!valid_replacement && phase_ != Phase::kIdle) {
     BreakAdjacencyLocked();
   }
@@ -200,7 +207,7 @@ bool SessionLearning::ObserveCommit(SessionCommit commit) {
                           tracked_stat_keys_.end();
   if (!known_stat && tracked_stat_keys_.size() >= kMaxTrackedEntries) {
     BreakAdjacencyLocked();
-    return false;
+    return {};
   }
   SelectionEvent event{date_bucket, entry_id, commit.phrase, normalized};
   const LearningUpdate update = learning_.RecordSelection(std::move(event));
@@ -217,8 +224,14 @@ bool SessionLearning::ObserveCommit(SessionCommit commit) {
       update.requires_requery) {
     ApplyFeedbackLocked(update);
   }
+  SessionLearningUpdate result{update.recorded, date_bucket, std::nullopt};
+  if (update.recorded && valid_replacement && corrected_from.has_value() &&
+      update.correction_completed && update.requires_requery) {
+    result.correction = SessionCorrection{
+        date_bucket, corrected_from->phrase, commit.phrase, normalized};
+  }
   ArmLocked(commit, update);
-  return update.recorded;
+  return result;
 }
 
 void SessionLearning::ObserveUnhandledKey(bool is_unmodified_backspace,

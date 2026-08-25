@@ -338,6 +338,7 @@ type SyncSummary struct {
 	NativeEvents        int
 	NativeDuplicates    int
 	NativeLocalOnly     int
+	NativeCorrections   int
 	RimeUserDBRows      int
 	RimeUserDBAdvanced  int
 	RimeUserDBResets    int
@@ -496,7 +497,8 @@ func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr
 	summary = SyncSummary{
 		Rounds: len(results), NativeEvents: nativeSummary.Consumed,
 		NativeDuplicates: nativeSummary.Duplicate, NativeLocalOnly: nativeSummary.LocalOnly,
-		RimeUserDBRows: rimeSummary.Rows, RimeUserDBAdvanced: rimeSummary.Advanced,
+		NativeCorrections: nativeSummary.Corrections,
+		RimeUserDBRows:    rimeSummary.Rows, RimeUserDBAdvanced: rimeSummary.Advanced,
 		RimeUserDBResets: rimeSummary.Resets, RimeUserDBLocalOnly: rimeSummary.LocalOnly,
 		RimeUserDBIgnored: rimeSummary.Ignored,
 	}

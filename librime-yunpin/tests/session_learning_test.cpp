@@ -55,8 +55,15 @@ void TestGoldenCorrectionAndHabitStats() {
   for (const std::string input : {"r", "ri", "ric", "richang"}) {
     harness.learning.ObserveComposition(input, LearningContext::kNormal);
   }
-  harness.learning.ObserveCommit(
+  const auto replacement = harness.learning.ObserveCommitDetailed(
       SessionCommit{"日常", "ri chang", LearningContext::kNormal});
+
+  Check(replacement.recorded && replacement.correction.has_value() &&
+            replacement.correction->date_bucket == "2026-08-09" &&
+            replacement.correction->corrected_from_phrase == "日长" &&
+            replacement.correction->replacement_phrase == "日常" &&
+            replacement.correction->pinyin == "richang",
+        "completed correction must expose only bounded word-level evidence");
 
   Check(harness.learning.CorrectionScore("richang", "日长") == -1 &&
             harness.learning.CorrectionScore("ri chang", "日常") == 1,

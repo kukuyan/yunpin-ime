@@ -33,6 +33,7 @@ namespace {
 
 using yunpin::NativeSelectionEvent;
 using yunpin::NativeSelectionEventQueue;
+using yunpin::NativeLearningEventKind;
 namespace fs = std::filesystem;
 
 void Drain() {
@@ -267,6 +268,23 @@ void TestRoundTripAndUniqueIds() {
   }
 }
 
+void TestCorrectionEventCarriesOnlyBoundedWordEvidence() {
+  Drain();
+  auto& queue = NativeSelectionEventQueue::Instance();
+  assert(queue.TryPublishCorrection("办公是", "办公室", "ban gong shi",
+                                    "2026-08-25"));
+  NativeSelectionEvent event;
+  assert(queue.TryPop(&event));
+  assert(event.version == NativeSelectionEvent::kVersion);
+  assert(event.kind == NativeLearningEventKind::kCorrection);
+  assert(event.date_bucket == "2026-08-25");
+  assert(event.corrected_from_phrase == "办公是");
+  assert(event.phrase == "办公室");
+  assert(event.corrected_from_pinyin == "ban gong shi");
+  assert(event.pinyin == "ban gong shi");
+  assert(!queue.TryPop(&event));
+}
+
 void TestInvalidAndOversizedValuesFailClosed() {
   Drain();
   auto& queue = NativeSelectionEventQueue::Instance();
@@ -383,7 +401,7 @@ void TestAtomicPrivateSpoolAndLifecycle() {
 
   assert(YunPinStartNativeSelectionSpoolerV1(incoming_utf8.c_str()));
   assert(NativeSelectionEventQueue::Instance().TryPublish(
-      "引号\"和反斜线\\", "yin hao he fan xie xian"));
+      "引号\"和反斜线\\", "yin hao he fan xie xian", "2026-08-25"));
 
   fs::path event_path;
   const auto deadline = std::chrono::steady_clock::now() +
@@ -411,7 +429,7 @@ void TestAtomicPrivateSpoolAndLifecycle() {
   contents << input.rdbuf();
   const std::string json = contents.str();
   assert(json.size() <= 4096);
-  const std::string prefix = "{\"version\":1,\"event_id\":\"";
+  const std::string prefix = "{\"version\":2,\"event_id\":\"";
   assert(json.rfind(prefix, 0) == 0);
   const std::size_t identifier_end = json.find('"', prefix.size());
   assert(identifier_end != std::string::npos);
@@ -419,7 +437,9 @@ void TestAtomicPrivateSpoolAndLifecycle() {
       json.substr(prefix.size(), identifier_end - prefix.size());
   const std::string expected =
       prefix + identifier +
-      "\",\"phrase\":\"引号\\\"和反斜线\\\\\",\"pinyin\":\"yin hao he fan xie xian\"}\n";
+      "\",\"kind\":\"selection\",\"date\":\"2026-08-25\","
+      "\"phrase\":\"引号\\\"和反斜线\\\\\","
+      "\"pinyin\":\"yin hao he fan xie xian\"}\n";
   assert(json == expected);
   input.close();
 #if defined(_WIN32)
@@ -759,6 +779,7 @@ int main(int argc, char** argv) {
     return RunCrossProcessSpoolChild(argv[2], argv[3], argv[4]);
   }
   TestRoundTripAndUniqueIds();
+  TestCorrectionEventCarriesOnlyBoundedWordEvidence();
   TestInvalidAndOversizedValuesFailClosed();
   TestBoundedQueueDropsWithoutOverwriting();
   TestStableCBoundary();

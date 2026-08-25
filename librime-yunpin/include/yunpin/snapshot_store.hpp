@@ -28,8 +28,10 @@ struct SnapshotLoadResult {
 // columns are phrase, pinyin, source and use_count. An optional fifth `pinned`
 // column accepts 1/true/yes/pinned. Generated `synced_learning@<UTC-day>`
 // sources carry deterministic recency without breaking older five-column
-// desktop readers; an optional sixth `last_used_day` is also accepted for
-// future native mobile stores. Standard Pinyin validation is supplemented
+// desktop readers; an optional sixth `last_used_day` is also accepted. A
+// seventh signed `correction_score` carries bounded feedback reconstructed from
+// the encrypted local learning store so explicit corrections survive restart.
+// Standard Pinyin validation is supplemented
 // only here by a finite legacy-personal compatibility set: explicitly split
 // single ASCII letters and three reviewed historical spellings. Any row using
 // that set is placed in a literal whole-code-only index: it cannot match a

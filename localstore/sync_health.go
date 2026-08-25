@@ -177,7 +177,7 @@ func (store *Store) migrateSyncHealth(ctx context.Context) error {
 	if err != nil || found {
 		return err
 	}
-	transaction, err := store.db.BeginTx(ctx, nil)
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
 	if err != nil {
 		return err
 	}

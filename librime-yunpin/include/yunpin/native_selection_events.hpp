@@ -9,16 +9,28 @@
 
 namespace yunpin {
 
-// The native input hot path publishes only the selected phrase and its
-// normalized spelling.  There is deliberately no application, window,
-// surrounding-text, or protected-context field: private/password/one-shot
-// commits are rejected before an event reaches this queue.
-struct NativeSelectionEvent {
-  static constexpr std::uint32_t kVersion = 1;
+enum class NativeLearningEventKind : std::uint8_t {
+  kSelection,
+  kCorrection,
+};
 
+// The native input hot path publishes only a selected phrase or a proven
+// wrong/replacement pair with their normalized spelling and local date. There
+// is deliberately no application, window, surrounding-text, or
+// protected-context field: private/password/one-shot commits are rejected
+// before an event reaches this queue.
+struct NativeSelectionEvent {
+  static constexpr std::uint32_t kLegacyVersion = 1;
+  static constexpr std::uint32_t kVersion = 2;
+
+  std::uint32_t version{kVersion};
   std::string event_id;
+  NativeLearningEventKind kind{NativeLearningEventKind::kSelection};
+  std::string date_bucket;
   std::string phrase;
   std::string pinyin;
+  std::string corrected_from_phrase;
+  std::string corrected_from_pinyin;
 };
 
 // Process-local, fixed-capacity hand-off for a frontend-owned asynchronous
@@ -36,7 +48,13 @@ class NativeSelectionEventQueue {
   ~NativeSelectionEventQueue();
 
   [[nodiscard]] bool TryPublish(std::string_view phrase,
-                                std::string_view normalized_pinyin) noexcept;
+                                std::string_view normalized_pinyin,
+                                std::string_view date_bucket = {}) noexcept;
+  [[nodiscard]] bool TryPublishCorrection(
+      std::string_view corrected_from_phrase,
+      std::string_view replacement_phrase,
+      std::string_view normalized_pinyin,
+      std::string_view date_bucket = {}) noexcept;
   [[nodiscard]] bool TryPop(NativeSelectionEvent* event) noexcept;
   [[nodiscard]] std::size_t DiscardAll() noexcept;
   void PausePublishingForSpoolerStop() noexcept;
