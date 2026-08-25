@@ -30,7 +30,12 @@ class YunPinFilter : public Filter {
 
  private:
   bool LoadSnapshot(const std::string& relative_path);
-  bool PrivateModeEnabled() const;
+  // True when this context may *read* the user's personal data: the private
+  // snapshot and the session-learning ranking signal. Strictly narrower than
+  // Active(). The public-data-only ordering guards are deliberately not gated
+  // on it; see the tier comment above PersonalDataAllowed() in the
+  // implementation.
+  bool PersonalDataAllowed() const;
   void DisconnectLearningNotifiers() noexcept;
   // True while either the private overlay or the conservative short-input
   // guard has work to do. Expression actions remain disconnected.
@@ -42,6 +47,9 @@ class YunPinFilter : public Filter {
   std::string active_input_;
   std::size_t active_start_{0};
   std::size_t active_end_{0};
+  // Captured per segment next to active_input_ so Apply() decides against the
+  // same context AppliesToSegment() observed.
+  bool active_personal_data_allowed_{false};
   std::size_t max_candidates_{2};
   std::size_t long_correction_min_chars_{12};
   // `enabled` gates private snapshot loading/injection. The short-input guard

@@ -726,12 +726,67 @@ void TestBothFeatureSwitchesOffStayInactive() {
          {kInactive});
 }
 
-void TestPasswordModeDisablesEverything() {
-  Harness harness;
-  harness.config.bools_["yunpin/expression_search"] = true;
-  harness.context.options_["password_mode"] = true;
-  YunPinFilter filter(harness.ticket());
-  Expect("password mode", Run(filter, harness, "nihaoshijie", 9), {kInactive});
+// A protected context must expose no personal data. It must NOT also disable
+// the public-data-only ordering guards: those never read the snapshot or the
+// learning state, so a password field has no reason to receive worse candidate
+// ordering than an ordinary one. Asserting that property, rather than the older
+// "the filter is entirely inactive" mechanism, keeps the privacy contract exact
+// while letting the guards through.
+void TestProtectedContextsExposeNoPersonalDataButKeepPublicGuards() {
+  struct ProtectedContext {
+    const char* description;
+    const char* option;  // nullptr means "host capability absent"
+  };
+  const ProtectedContext contexts[] = {
+      {"password mode", "password_mode"},
+      {"private mode", "yunpin_private_mode"},
+      {"incognito mode", "incognito_mode"},
+      {"one shot", "yunpin_one_shot"},
+      {"missing host capability", nullptr},
+  };
+
+  for (const ProtectedContext& protected_context : contexts) {
+    DrainNativeSelectionEvents();
+    Harness harness;
+    harness.config.bools_["yunpin/expression_search"] = true;
+    if (protected_context.option == nullptr) {
+      harness.context.options_.erase("yunpin_learning_allowed");
+    } else {
+      harness.context.options_[protected_context.option] = true;
+    }
+    YunPinFilter filter(harness.ticket());
+
+    // No private snapshot phrase and no expression action may become visible.
+    for (const std::string& text : Run(filter, harness, "nihaoshijie", 9)) {
+      const bool personal =
+          text == kPhrase || text == kLongPrivatePhrase ||
+          text == kPrivateFirst || text == kPrivateSecond ||
+          text == kSearchLikeText || text == kFavoriteLikeText;
+      if (personal) {
+        std::cout << "FAILED: " << protected_context.description
+                  << " exposed " << text << "\n";
+        assert(false && "protected context exposed personal data");
+      }
+    }
+
+    // The public-data-only short-input guard still applies.
+    Expect(protected_context.description,
+           RunWithUpstream(filter, harness, "he", {"合并为", "和", "tail"}, 4),
+           {"和", "tail"});
+
+    // Nothing is learned, and no native selection event is published.
+    EmitCommit(harness, "richang", "日长");
+    EmitKey(harness, XK_BackSpace);
+    EmitKey(harness, XK_BackSpace);
+    EmitCommit(harness, "richang", "日常");
+    Expect(protected_context.description,
+           RunWithUpstream(filter, harness, "richang", {"日长", "日常"}, 4),
+           {"日长", "日常"});
+    yunpin::NativeSelectionEvent event;
+    assert(!yunpin::NativeSelectionEventQueue::Instance().TryPop(&event) &&
+           "protected context published a native selection event");
+  }
+  DrainNativeSelectionEvents();
 }
 
 void TestPrivateCandidatesStayBounded() {
@@ -771,7 +826,7 @@ int main() {
   TestMissingSnapshotKeepsActionsOffAndShortGuardAvailable();
   TestPrivateSwitchDoesNotDisableShortGuard();
   TestBothFeatureSwitchesOffStayInactive();
-  TestPasswordModeDisablesEverything();
+  TestProtectedContextsExposeNoPersonalDataButKeepPublicGuards();
   TestPrivateCandidatesStayBounded();
 
   std::filesystem::remove_all(user_data_dir);

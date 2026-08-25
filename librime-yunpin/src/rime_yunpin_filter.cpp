@@ -629,9 +629,29 @@ bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
   return store_.size() > 0;
 }
 
-bool YunPinFilter::PrivateModeEnabled() const {
+// This filter does three things with three different data sensitivities, and
+// they need three different gates:
+//
+//   A. write personal data -- session learning and native event publication.
+//      Gated on LearningContextFor() == kNormal, which requires the positive
+//      yunpin_learning_allowed host capability. Unchanged.
+//   B. read personal data  -- private snapshot injection and the
+//      session-learning ranking signal. Same gate as A: putting a personal
+//      phrase in the candidate window of a context the host cannot vouch for
+//      is itself a disclosure, so reading stays as strict as writing.
+//   C. public data only    -- the short-input and long-correction ordering
+//      guards. These never touch the snapshot or the learning state. They only
+//      reorder and bound candidates the upstream translator already produced,
+//      all of which are public dictionary data the user can already see.
+//
+// All three used to share this one gate. A password/private/one-shot context --
+// or any host that did not supply the capability -- therefore also disabled C,
+// conflating "may not see the user's words" with "may not order public
+// candidates sensibly". Those are unrelated, so C is now unconditional and only
+// A and B consult this predicate.
+bool YunPinFilter::PersonalDataAllowed() const {
   const Context* context = engine_ ? engine_->context() : nullptr;
-  return LearningContextFor(context) != yunpin::LearningContext::kNormal;
+  return LearningContextFor(context) == yunpin::LearningContext::kNormal;
 }
 
 std::vector<yunpin::HabitStat> YunPinFilter::QueryHabits(
@@ -642,8 +662,11 @@ std::vector<yunpin::HabitStat> YunPinFilter::QueryHabits(
 
 bool YunPinFilter::AppliesToSegment(Segment* segment) {
   active_input_.clear();
-  if (!Active() || segment == nullptr || !segment->HasTag(tag_) ||
-      PrivateModeEnabled() || !engine_ || !engine_->context()) {
+  active_personal_data_allowed_ = false;
+  // The privacy context no longer decides whether the filter runs at all; it
+  // decides only what the filter may read. Tier C still applies here.
+  if (!Active() || segment == nullptr || !segment->HasTag(tag_) || !engine_ ||
+      !engine_->context()) {
     return false;
   }
   const std::string& input = engine_->context()->input();
@@ -653,6 +676,7 @@ bool YunPinFilter::AppliesToSegment(Segment* segment) {
   active_start_ = segment->start;
   active_end_ = segment->end;
   active_input_ = input.substr(active_start_, active_end_ - active_start_);
+  active_personal_data_allowed_ = PersonalDataAllowed();
   return !active_input_.empty();
 }
 
@@ -670,7 +694,8 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
       long_correction_guard_ &&
       normalized.size() >= long_correction_min_chars_;
   std::vector<of<Candidate>> front;
-  if (enabled_ && private_ready_) {
+  // Tier B: reading the private snapshot needs the same permission as writing.
+  if (enabled_ && private_ready_ && active_personal_data_allowed_) {
     const auto matches = store_.Query(active_input_, max_candidates_);
     front.reserve(matches.size());
     std::set<std::string> seen;
@@ -683,16 +708,19 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
     }
   }
 
+  // Tier B: the session ranking signal is derived from what the user selected,
+  // so it is only consulted where reading personal data is permitted.
+  const bool rank_by_session =
+      active_personal_data_allowed_ && session_learning_ && !normalized.empty();
   if (front.empty() && !suppress_long_cjk_upstream &&
-      !protect_long_corrections) {
-    // A learned correction can still reorder the bounded upstream window.
-    if (!session_learning_ || normalized.empty()) {
-      return translation;
-    }
+      !protect_long_corrections && !rank_by_session) {
+    return translation;
   }
   const auto ranking_key =
-      [weak_learning =
-           std::weak_ptr<YunPinSessionLearningBridge>(session_learning_),
+      [weak_learning = rank_by_session
+                           ? std::weak_ptr<YunPinSessionLearningBridge>(
+                                 session_learning_)
+                           : std::weak_ptr<YunPinSessionLearningBridge>(),
        normalized](std::string_view text) {
         const auto learning = weak_learning.lock();
         return learning && !normalized.empty()
