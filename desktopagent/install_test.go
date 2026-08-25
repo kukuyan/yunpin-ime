@@ -143,6 +143,59 @@ func TestResidentInstallersUseOnlyLocalRedactedReadinessChecks(t *testing.T) {
 	}
 }
 
+// Moving the background loop to its own windowless binary changed the scheduled
+// task's Execute path. The installer only replaces a task it recognises, so
+// without the previous shape in that list an upgrade over an existing install
+// would refuse to proceed and demand a manual uninstall first. The uninstaller
+// has the mirror-image problem: it must accept both shapes and stop whichever
+// generation is still running.
+func TestWindowsInstallScriptsAcceptBothTaskGenerations(t *testing.T) {
+	install, err := os.ReadFile("install/windows/Install-SyncAgent.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowerInstall := strings.ToLower(string(install))
+	for _, required := range []string{
+		// The current registration and the one earlier versions produced.
+		"execute = $residentdestination; arguments = \"--interval 1m\"",
+		"execute = $destination; arguments = \"run --interval 1m\"",
+		"refusing to replace a different yunpinsyncagent scheduled task",
+	} {
+		if !strings.Contains(lowerInstall, required) {
+			t.Fatalf("Windows installer upgrade path lacks %q", required)
+		}
+	}
+
+	uninstall, err := os.ReadFile("install/windows/Uninstall-SyncAgent.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowerUninstall := strings.ToLower(string(uninstall))
+	for _, required := range []string{
+		"$task.actions[0].execute -cne $residentdestination -and",
+		"$task.actions[0].execute -cne $destination",
+		"foreach ($installed in @($residentdestination, $destination))",
+	} {
+		if !strings.Contains(lowerUninstall, required) {
+			t.Fatalf("Windows uninstaller lacks %q", required)
+		}
+	}
+
+	// Enable and Verify run against a freshly installed layout, so they may
+	// stay strict -- but both must confirm the binary the task actually starts
+	// exists, not only the interactive one.
+	for _, name := range []string{"Enable-SyncAgent.ps1", "Verify-SyncAgent.ps1"} {
+		contents, err := os.ReadFile("install/windows/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(contents))
+		if !strings.Contains(lower, "test-path -literalpath $residentdestination -pathtype leaf") {
+			t.Fatalf("%s does not verify the resident binary the task starts", name)
+		}
+	}
+}
+
 func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *testing.T) {
 	contents, err := os.ReadFile("install/windows/Install-SyncAgent.ps1")
 	if err != nil {
@@ -179,9 +232,11 @@ func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *tes
 	if strings.Contains(lower, "[io.file]::replace($temporary, $destination, $null") {
 		t.Fatal("Windows installer still uses the unsupported null File.Replace backup path")
 	}
-	// A "run" subcommand in the task arguments would mean the task is back on
-	// the console-subsystem binary.
-	if strings.Contains(lower, "\"run --interval") {
+	// Registering the action on the interactive binary would put the console
+	// window back. The legacy argument string may still appear elsewhere in the
+	// script: the installer has to recognise the previous generation's task in
+	// order to replace it during an upgrade.
+	if strings.Contains(lower, "new-scheduledtaskaction -execute $destination") {
 		t.Fatal("Windows scheduled task still runs the console-subsystem agent")
 	}
 }

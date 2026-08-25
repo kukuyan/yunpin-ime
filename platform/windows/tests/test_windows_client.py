@@ -789,8 +789,15 @@ class WindowsClientTests(unittest.TestCase):
             'New-ScheduledTaskAction -Execute $residentDestination -Argument "--interval 1m"',
             install_agent,
         )
-        for script in (install_agent, enable_agent):
-            self.assertNotIn('"run --interval 1m"', script)
+        # The legacy argument string still appears in the installer: it has to
+        # recognise the previous generation's task in order to replace it during
+        # an upgrade. What must not appear is a registration on the interactive
+        # binary, which is what would put the console window back.
+        self.assertNotIn(
+            "New-ScheduledTaskAction -Execute $destination", install_agent
+        )
+        self.assertNotIn('"run --interval 1m"', enable_agent)
+        self.assertIn('Execute = $destination; Arguments = "run --interval 1m"', install_agent)
         self.assertIn("$residentDestination", enable_agent)
         self.assertIn("yunpin-sync-resident.exe", enable_agent)
 

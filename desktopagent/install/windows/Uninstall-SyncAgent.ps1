@@ -27,12 +27,21 @@ if ($null -ne $registered -and -not $registered.StartsWith(('"' + $destination +
     throw "Refusing to remove a different YunPinSyncAgent registration."
 }
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($null -ne $task -and ($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -cne $destination)) {
+# Accept either registration this installer has produced: the current one
+# running the windowless resident, and the one earlier versions registered on
+# the interactive agent. Anything else belongs to someone else and is left
+# alone.
+if ($null -ne $task -and ($task.Actions.Count -ne 1 -or
+    ($task.Actions[0].Execute -cne $residentDestination -and
+     $task.Actions[0].Execute -cne $destination))) {
     throw "Refusing to remove a different YunPinSyncAgent scheduled task."
 }
-Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-resident.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ExecutablePath -eq $residentDestination } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# An upgrade may have left the previous generation running, so stop both.
+foreach ($installed in @($residentDestination, $destination)) {
+    Get-CimInstance Win32_Process -Filter ("Name = '" + [IO.Path]::GetFileName($installed) + "'") -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -eq $installed } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
 if ($null -ne $task) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
