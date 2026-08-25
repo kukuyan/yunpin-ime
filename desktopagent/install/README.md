@@ -24,7 +24,12 @@ installer embeds an endpoint, bearer token, recovery root, personal dictionary,
 learned phrase, or replay data.
 
 - macOS: `Install-LaunchAgent.sh /absolute/path/to/yunpin-sync-agent`
-- Windows: `Install-SyncAgent.ps1 -AgentPath C:\absolute\path\yunpin-sync-agent.exe -ExpectedSha256 <manifest SHA-256>`
+- Windows: `Install-SyncAgent.ps1 -AgentPath C:\absolute\path\yunpin-sync-agent.exe -ExpectedSha256 <manifest SHA-256> -ResidentPath C:\absolute\path\yunpin-sync-resident.exe -ResidentExpectedSha256 <manifest SHA-256>`
+  Two binaries are installed. `yunpin-sync-agent.exe` is the interactive one used for
+  `status`, configuration and pairing; it writes JSON to stdout and is console-subsystem.
+  `yunpin-sync-resident.exe` is what the scheduled task runs: it implements only the
+  background loop and is linked for the Windows GUI subsystem, so logging in does not
+  leave a console window on screen for the life of the session.
 
 Installation is deliberately two-phase. The commands above copy the binary and
 register an autostart job in a **disabled and stopped** state. They never start

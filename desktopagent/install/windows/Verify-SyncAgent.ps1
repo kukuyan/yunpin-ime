@@ -12,20 +12,23 @@ $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalA
 if ([string]::IsNullOrWhiteSpace($localAppData)) { throw "Known Folder LOCALAPPDATA is unavailable." }
 $state = Join-Path $localAppData "YunPinIME\sync"
 $destination = Join-Path $state "bin\yunpin-sync-agent.exe"
+# The scheduled task runs the windowless resident; the interactive agent
+# stays installed for status, configuration and pairing.
+$residentDestination = Join-Path $state "bin\yunpin-sync-resident.exe"
 $taskName = "YunPinSyncAgent"
 
 if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw "Resident agent is absent." }
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 if ($registered.State.ToString() -cne "Disabled" -or
-    $registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $destination -or
-    $registered.Actions[0].Arguments -cne "run --interval 1m" -or
+    $registered.Actions.Count -ne 1 -or $registered.Actions[0].Execute -cne $residentDestination -or
+    $registered.Actions[0].Arguments -cne "--interval 1m" -or
     [string]$registered.Settings.ExecutionTimeLimit -cne "PT0S" -or
     $registered.Settings.DisallowStartIfOnBatteries -or
     $registered.Settings.StopIfGoingOnBatteries) {
     throw "Disabled scheduled-task registration differs."
 }
-$process = Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-agent.exe'" -ErrorAction Stop |
-    Where-Object { $_.ExecutablePath -eq $destination } |
+$process = Get-CimInstance Win32_Process -Filter "Name = 'yunpin-sync-resident.exe'" -ErrorAction Stop |
+    Where-Object { $_.ExecutablePath -eq $residentDestination } |
     Select-Object -First 1
 if ($null -ne $process) { throw "Disabled YunPin sync process is unexpectedly running." }
 & $destination install-probe | Out-Null

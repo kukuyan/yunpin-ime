@@ -337,11 +337,17 @@ try {
     $syncInstaller = Join-Path $syncSupportRoot "Install-SyncAgent.ps1"
     $syncVerifier = Join-Path $syncSupportRoot "Verify-SyncAgent.ps1"
     $syncAgent = Join-Path $syncSupportRoot "yunpin-sync-agent.exe"
+    $syncResident = Join-Path $syncSupportRoot "yunpin-sync-resident.exe"
     $syncManifestPath = "sync-agent/yunpin-sync-agent.exe"
+    $syncResidentManifestPath = "sync-agent/yunpin-sync-resident.exe"
     if (-not $bundleManifest.ContainsKey($syncManifestPath)) {
         throw "Public sync agent is absent from the verified bundle manifest."
     }
-    & $syncInstaller -AgentPath $syncAgent -ExpectedSha256 $bundleManifest[$syncManifestPath]
+    if (-not $bundleManifest.ContainsKey($syncResidentManifestPath)) {
+        throw "Windowless sync resident is absent from the verified bundle manifest."
+    }
+    & $syncInstaller -AgentPath $syncAgent -ExpectedSha256 $bundleManifest[$syncManifestPath] `
+        -ResidentPath $syncResident -ResidentExpectedSha256 $bundleManifest[$syncResidentManifestPath]
     & $syncVerifier
 
     $state = [ordered]@{

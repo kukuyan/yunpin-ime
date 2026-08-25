@@ -155,10 +155,15 @@ foreach ($mapping in $lock.package.runtimeFiles.PSObject.Properties) {
 }
 
 $publicSyncAgent = Join-Path $OutputRoot "desktopagent\public\yunpin-sync-agent.exe"
+$publicSyncResident = Join-Path $OutputRoot "desktopagent\public\yunpin-sync-resident.exe"
 if (-not (Test-Path $publicSyncAgent -PathType Leaf)) {
     throw "Public default-tag sync agent is missing: $publicSyncAgent"
 }
 Copy-Item -LiteralPath $publicSyncAgent -Destination (Join-Path $syncAgentRoot "yunpin-sync-agent.exe") -Force
+if (-not (Test-Path -LiteralPath $publicSyncResident -PathType Leaf)) {
+    throw "Windowless sync resident is missing; run Build-SyncAgents.ps1 first"
+}
+Copy-Item -LiteralPath $publicSyncResident -Destination (Join-Path $syncAgentRoot "yunpin-sync-resident.exe") -Force
 $syncAgentLicenses = Join-Path $OutputRoot "desktopagent\licenses"
 if (-not (Test-Path (Join-Path $syncAgentLicenses "LICENSES.json") -PathType Leaf)) {
     throw "Public sync-agent license-text bundle is missing"

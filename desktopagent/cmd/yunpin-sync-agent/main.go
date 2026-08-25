@@ -659,24 +659,24 @@ func commandRun(ctx context.Context, defaults desktopagent.Paths, arguments []st
 	if filepath.Clean(common.lock) != filepath.Clean(defaults.LockPath) {
 		return errors.New("run requires the fixed platform process lock")
 	}
-	_, agent, err := common.components()
+	// The remaining common flags are already required to equal the platform
+	// defaults, so the resident wiring is shared with yunpin-sync-resident
+	// rather than rebuilt here; the two cannot drift apart.
+	if _, _, err := common.components(); err != nil {
+		return err
+	}
+	log, err := desktopagent.OpenEventLog(defaults)
 	if err != nil {
 		return err
 	}
-	bridgePaths, err := desktopagent.DefaultRimeBridgePaths(defaults)
-	if err != nil {
-		return err
-	}
-	refresh, err := desktopagent.NewDefaultRimeUserDBRefresh(bridgePaths)
-	if err != nil {
-		return err
-	}
-	agent.RimeUserDBExportPath = bridgePaths.StagingPath
-	agent.RimeUserDBRefresh = refresh
-	return agent.Run(ctx, desktopagent.RunOptions{
-		LockPath: common.lock, Interval: *interval,
-		OnEvent: func(event desktopagent.RunEvent) {
-			// Events deliberately contain only a stable code and numeric summary.
+	defer log.Close()
+	return desktopagent.RunResident(ctx, defaults, desktopagent.ResidentOptions{
+		Interval: *interval,
+		Events: func(event desktopagent.RunEvent) {
+			// Events carry only a stable code and a numeric summary. They go to
+			// the bounded log so a background run stays diagnosable, and to
+			// stderr so an operator running this in a terminal still sees them.
+			log.Write(event)
 			encoded, _ := json.Marshal(event)
 			_, _ = fmt.Fprintln(os.Stderr, string(encoded))
 		},
