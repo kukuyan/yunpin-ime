@@ -27,6 +27,62 @@ func TestProcessLockRejectsConcurrentAgent(t *testing.T) {
 	}
 }
 
+func TestRunLoopReleasesOperationLockBetweenRounds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	operationLock := privateTestPath(t, "agent.lock")
+	firstRound := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runLoop(ctx, func(context.Context) (SyncSummary, error) {
+			return SyncSummary{Rounds: 1}, nil
+		}, RunOptions{
+			LockPath: operationLock, Interval: time.Minute,
+			MinBackoff: time.Second, MaxBackoff: time.Second,
+			OnEvent: func(RunEvent) { firstRound <- struct{}{} },
+		})
+	}()
+	select {
+	case <-firstRound:
+	case <-time.After(3 * time.Second):
+		t.Fatal("resident did not complete its first round")
+	}
+	if err := WithProcessLock(operationLock, func() error { return nil }); err != nil {
+		t.Fatalf("one-shot operation could not run while resident was waiting: %v", err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("resident did not stop after cancellation")
+	}
+}
+
+func TestRunLoopKeepsDistinctSingleResidentLock(t *testing.T) {
+	operationLock := privateTestPath(t, "agent.lock")
+	residentLock := operationLock + ".resident"
+	first, err := acquireProcessLock(residentLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+	err = runLoop(context.Background(), func(context.Context) (SyncSummary, error) {
+		return SyncSummary{}, nil
+	}, RunOptions{
+		LockPath: operationLock, ResidentLockPath: residentLock,
+		Interval: time.Minute, MinBackoff: time.Second, MaxBackoff: time.Second,
+	})
+	if !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("second resident error=%v", err)
+	}
+	if err := WithProcessLock(operationLock, func() error { return nil }); err != nil {
+		t.Fatalf("resident instance lock incorrectly blocked a one-shot operation: %v", err)
+	}
+}
+
 func TestRunLoopRetriesWithRedactedEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -98,6 +154,13 @@ func TestRimeMaintenanceBusyIsDeferredWithoutGrowingFailureBackoff(t *testing.T)
 		fmt.Errorf("wrapped host response: %w", ErrRimeMaintenanceBusy), options, 8*time.Second)
 	if event.Code != "sync_deferred_busy" || event.Successful || delay != options.MinBackoff || nextBackoff != options.MinBackoff {
 		t.Fatalf("busy host response polluted failure backoff: event=%#v delay=%v next=%v", event, delay, nextBackoff)
+	}
+	locked, lockedDelay, lockedBackoff := classifyRunResult(SyncSummary{},
+		fmt.Errorf("wrapped operation lock: %w", ErrAlreadyRunning), options, 8*time.Second)
+	if locked.Code != "sync_deferred_busy" || locked.Successful ||
+		lockedDelay != options.MinBackoff || lockedBackoff != options.MinBackoff {
+		t.Fatalf("concurrent one-shot polluted failure backoff: event=%#v delay=%v next=%v",
+			locked, lockedDelay, lockedBackoff)
 	}
 	failure, failureDelay, failureBackoff := classifyRunResult(SyncSummary{}, errors.New("synthetic failure"), options, 8*time.Second)
 	if failure.Code != "sync_failed" || failure.FailureClass != localstore.SyncFailureLocalStore ||
