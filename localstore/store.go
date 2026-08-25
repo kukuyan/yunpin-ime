@@ -19,7 +19,7 @@ import (
 	"github.com/kukuyan/yunpin-ime/protocol"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
 
 const (
@@ -63,8 +63,9 @@ type LearnResult struct {
 // the background agent. EventID is opaque and only makes a crash between the
 // SQLite commit and removal of the spool file idempotent.
 type NativeSelection struct {
-	EventID string
-	Phrase  Phrase
+	EventID    string
+	DateBucket string
+	Phrase     Phrase
 }
 
 type NativeSelectionResult struct {
@@ -138,6 +139,31 @@ func openStore(ctx context.Context, path string, dataKey, idKey []byte, deviceID
 	return store, nil
 }
 
+func sqliteBusy(err error) bool {
+	var sqliteError *sqlite.Error
+	return errors.As(err, &sqliteError) && sqliteError.Code()&0xff == 5
+}
+
+func beginImmediateWithRetry(ctx context.Context, database *sql.DB) (*sql.Tx, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		transaction, err := database.BeginTx(ctx, nil)
+		if err == nil {
+			return transaction, nil
+		}
+		if !sqliteBusy(err) || !time.Now().Before(deadline) {
+			return nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (store *Store) initialize(ctx context.Context) error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS encrypted_phrases (
@@ -161,6 +187,12 @@ CREATE TABLE IF NOT EXISTS metadata (
 CREATE TABLE IF NOT EXISTS consumed_native_events (
   event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 128),
   consumed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS encrypted_learning_events (
+  event_id TEXT PRIMARY KEY CHECK(length(event_id) BETWEEN 1 AND 128),
+  nonce BLOB NOT NULL CHECK(length(nonce) = 24),
+  ciphertext BLOB NOT NULL,
+  created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rime_userdb_high_water (
   device_id TEXT NOT NULL CHECK(length(device_id) = 32),
@@ -195,8 +227,19 @@ CREATE TABLE IF NOT EXISTS sync_state (
 	// sync_health is separate from the transactional sync checkpoint. P1-04
 	// adds one observational column through an explicit migration below so an
 	// existing database keeps its prior success timestamp and event history.
-	if _, err := store.db.ExecContext(ctx, schema+clockMetadata+syncSchema+syncHealthSchema); err != nil {
+	// A first run can be opened concurrently by the resident and a one-shot
+	// command. Reserve SQLite's writer before creating any schema object so the
+	// second opener waits instead of racing one CREATE against another.
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
+	if err != nil {
+		return fmt.Errorf("begin local store initialization: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, schema+clockMetadata+syncSchema+syncHealthSchema); err != nil {
+		_ = transaction.Rollback()
 		return fmt.Errorf("initialize local store: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit local store initialization: %w", err)
 	}
 	if err := store.migrateSyncHealth(ctx); err != nil {
 		return fmt.Errorf("migrate sync health: %w", err)
@@ -297,10 +340,10 @@ WHERE event_id IN (
 }
 
 func (store *Store) upsert(ctx context.Context, phrase Phrase, enqueue bool) error {
-	return store.upsertWithNativeReceipt(ctx, phrase, enqueue, "")
+	return store.upsertWithNativeEvent(ctx, phrase, enqueue, nil)
 }
 
-func (store *Store) upsertWithNativeReceipt(ctx context.Context, phrase Phrase, enqueue bool, eventID string) error {
+func (store *Store) upsertWithNativeEvent(ctx context.Context, phrase Phrase, enqueue bool, nativeEvent *NativeLearningEvent) error {
 	objectID, err := store.objectID(phrase)
 	if err != nil {
 		return err
@@ -335,11 +378,12 @@ ON CONFLICT(object_id) DO UPDATE SET nonce=excluded.nonce, ciphertext=excluded.c
   version=encrypted_outbox.version + 1, created_at=excluded.created_at`,
 			objectID[:], eventNonce, eventCiphertext, time.Now().UnixMilli())
 	}
-	if err == nil && eventID != "" {
-		_, err = transaction.ExecContext(ctx, `INSERT INTO consumed_native_events(event_id, consumed_at) VALUES(?, ?)`,
-			eventID, store.now().UnixMilli())
-		if err == nil {
-			err = pruneConsumedNativeReceipts(ctx, transaction)
+	if err == nil && nativeEvent != nil {
+		normalized, normalizeErr := store.normalizeLearningEvent(*nativeEvent)
+		if normalizeErr != nil {
+			err = normalizeErr
+		} else {
+			err = store.insertLearningEventTx(ctx, transaction, normalized)
 		}
 	}
 	if err != nil {
@@ -434,7 +478,7 @@ func (store *Store) RecordSelection(ctx context.Context, phrase Phrase, learning
 	}
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
-	return store.recordSelectionLocked(ctx, phrase, "")
+	return store.recordSelectionLocked(ctx, phrase, nil)
 }
 
 // RecordNativeSelection records a background native event and its receipt in
@@ -448,15 +492,21 @@ func (store *Store) RecordNativeSelection(ctx context.Context, selection NativeS
 	}
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
-	var consumed int
-	err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM consumed_native_events WHERE event_id = ?", selection.EventID).Scan(&consumed)
+	nativeEvent, err := store.normalizeLearningEvent(NativeLearningEvent{
+		EventID: selection.EventID, DateBucket: selection.DateBucket,
+		Kind: NativeLearningSelection, Phrase: selection.Phrase,
+	})
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
-	if consumed != 0 {
+	consumed, err := nativeLearningEventExists(ctx, store.db, selection.EventID)
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	if consumed {
 		return NativeSelectionResult{Duplicate: true}, nil
 	}
-	result, err := store.recordSelectionLocked(ctx, selection.Phrase, selection.EventID)
+	result, err := store.recordSelectionLocked(ctx, selection.Phrase, &nativeEvent)
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
@@ -510,7 +560,7 @@ func validNativeEventID(eventID string) bool {
 	return true
 }
 
-func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, eventID string) (LearnResult, error) {
+func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, nativeEvent *NativeLearningEvent) (LearnResult, error) {
 	objectID, err := store.objectID(phrase)
 	if err != nil {
 		return LearnResult{}, err
@@ -532,17 +582,13 @@ func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, ev
 		return LearnResult{}, err
 	}
 	if !phrase.CRDT.Presence.Present {
-		if eventID != "" {
+		if nativeEvent != nil {
 			transaction, err := store.db.BeginTx(ctx, nil)
 			if err != nil {
 				return LearnResult{}, err
 			}
 			defer transaction.Rollback()
-			if _, err := transaction.ExecContext(ctx, `INSERT INTO consumed_native_events(event_id, consumed_at) VALUES(?, ?)`,
-				eventID, store.now().UnixMilli()); err != nil {
-				return LearnResult{}, err
-			}
-			if err := pruneConsumedNativeReceipts(ctx, transaction); err != nil {
+			if err := store.insertLearningEventTx(ctx, transaction, *nativeEvent); err != nil {
 				return LearnResult{}, err
 			}
 			if err := transaction.Commit(); err != nil {
@@ -557,7 +603,7 @@ func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, ev
 	phrase.CRDT.Counts[store.deviceID]++
 	phrase.LastUsedDay = store.now().UTC().Unix() / 86400
 	materializePhrase(&phrase)
-	if err := store.upsertWithNativeReceipt(ctx, phrase, phrase.UseCount >= learningThreshold, eventID); err != nil {
+	if err := store.upsertWithNativeEvent(ctx, phrase, phrase.UseCount >= learningThreshold, nativeEvent); err != nil {
 		return LearnResult{}, err
 	}
 	return LearnResult{Recorded: true, UseCount: phrase.UseCount, SyncEligible: phrase.UseCount >= learningThreshold}, nil

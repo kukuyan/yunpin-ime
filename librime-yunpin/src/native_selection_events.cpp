@@ -6,6 +6,7 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -110,6 +111,55 @@ bool IsSafeUtf8(std::string_view value) noexcept {
   return true;
 }
 
+bool IsDateBucket(std::string_view value) noexcept {
+  if (value.size() != 10 || value[4] != '-' || value[7] != '-') {
+    return false;
+  }
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    if (index == 4 || index == 7) {
+      continue;
+    }
+    if (value[index] < '0' || value[index] > '9') {
+      return false;
+    }
+  }
+  const int year = (value[0] - '0') * 1000 + (value[1] - '0') * 100 +
+                   (value[2] - '0') * 10 + value[3] - '0';
+  const int month = (value[5] - '0') * 10 + value[6] - '0';
+  const int day = (value[8] - '0') * 10 + value[9] - '0';
+  static constexpr int days_per_month[] = {31, 28, 31, 30, 31, 30,
+                                            31, 31, 30, 31, 30, 31};
+  if (year < 1970 || month < 1 || month > 12) {
+    return false;
+  }
+  const bool leap = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0);
+  const int maximum = month == 2 && leap ? 29 : days_per_month[month - 1];
+  return day >= 1 && day <= maximum;
+}
+
+std::string LocalDateBucket() noexcept {
+  try {
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    if (localtime_s(&local, &now) != 0) {
+      return {};
+    }
+#else
+    if (localtime_r(&now, &local) == nullptr) {
+      return {};
+    }
+#endif
+    std::array<char, 11> date{};
+    if (std::strftime(date.data(), date.size(), "%Y-%m-%d", &local) != 10) {
+      return {};
+    }
+    return date.data();
+  } catch (...) {
+    return {};
+  }
+}
+
 std::string RandomProcessPrefix() {
   std::array<std::uint32_t, 4> words{};
   try {
@@ -171,16 +221,59 @@ std::optional<std::string> SerializeEvent(
       !IsAsciiPinyin(event.pinyin)) {
     return std::nullopt;
   }
+  const bool legacy = event.version == NativeSelectionEvent::kLegacyVersion;
+  if (legacy &&
+      (event.kind != NativeLearningEventKind::kSelection ||
+       !event.date_bucket.empty() || !event.corrected_from_phrase.empty() ||
+       !event.corrected_from_pinyin.empty())) {
+    return std::nullopt;
+  }
+  if (!legacy &&
+      (event.version != NativeSelectionEvent::kVersion ||
+       !IsDateBucket(event.date_bucket) ||
+       (event.kind != NativeLearningEventKind::kSelection &&
+        event.kind != NativeLearningEventKind::kCorrection))) {
+    return std::nullopt;
+  }
+  if (!legacy && event.kind == NativeLearningEventKind::kSelection &&
+      (!event.corrected_from_phrase.empty() ||
+       !event.corrected_from_pinyin.empty())) {
+    return std::nullopt;
+  }
+  if (!legacy && event.kind == NativeLearningEventKind::kCorrection &&
+      (!IsSafeUtf8(event.corrected_from_phrase) ||
+       !IsAsciiPinyin(event.corrected_from_pinyin) ||
+       event.corrected_from_phrase == event.phrase ||
+       event.corrected_from_pinyin != event.pinyin)) {
+    return std::nullopt;
+  }
   try {
     std::string output;
     output.reserve(event.event_id.size() + event.phrase.size() +
-                   event.pinyin.size() + 64);
-    output.append("{\"version\":1,\"event_id\":");
+                   event.pinyin.size() + event.corrected_from_phrase.size() +
+                   event.corrected_from_pinyin.size() + 160);
+    output.append(legacy ? "{\"version\":1,\"event_id\":"
+                         : "{\"version\":2,\"event_id\":");
     AppendJsonString(event.event_id, &output);
+    if (!legacy) {
+      output.append(",\"kind\":");
+      AppendJsonString(event.kind == NativeLearningEventKind::kCorrection
+                           ? "correction"
+                           : "selection",
+                       &output);
+      output.append(",\"date\":");
+      AppendJsonString(event.date_bucket, &output);
+    }
     output.append(",\"phrase\":");
     AppendJsonString(event.phrase, &output);
     output.append(",\"pinyin\":");
     AppendJsonString(event.pinyin, &output);
+    if (!legacy && event.kind == NativeLearningEventKind::kCorrection) {
+      output.append(",\"corrected_from_phrase\":");
+      AppendJsonString(event.corrected_from_phrase, &output);
+      output.append(",\"corrected_from_pinyin\":");
+      AppendJsonString(event.corrected_from_pinyin, &output);
+    }
     output.append("}\n");
     if (output.size() > kMaxSerializedEventBytes) {
       return std::nullopt;
@@ -240,14 +333,56 @@ std::optional<NativeSelectionEvent> ParseSerializedEvent(
   try {
     std::size_t cursor = 0;
     NativeSelectionEvent event;
-    if (!ConsumeLiteral(input, &cursor,
-                        "{\"version\":1,\"event_id\":") ||
-        !ConsumeCanonicalJsonString(input, &cursor, &event.event_id) ||
-        !ConsumeLiteral(input, &cursor, ",\"phrase\":") ||
-        !ConsumeCanonicalJsonString(input, &cursor, &event.phrase) ||
-        !ConsumeLiteral(input, &cursor, ",\"pinyin\":") ||
-        !ConsumeCanonicalJsonString(input, &cursor, &event.pinyin) ||
-        !ConsumeLiteral(input, &cursor, "}\n") || cursor != input.size()) {
+    if (ConsumeLiteral(input, &cursor,
+                       "{\"version\":1,\"event_id\":")) {
+      event.version = NativeSelectionEvent::kLegacyVersion;
+      if (!ConsumeCanonicalJsonString(input, &cursor, &event.event_id) ||
+          !ConsumeLiteral(input, &cursor, ",\"phrase\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &event.phrase) ||
+          !ConsumeLiteral(input, &cursor, ",\"pinyin\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &event.pinyin) ||
+          !ConsumeLiteral(input, &cursor, "}\n") || cursor != input.size()) {
+        return std::nullopt;
+      }
+    } else {
+      cursor = 0;
+      std::string kind;
+      if (!ConsumeLiteral(input, &cursor,
+                          "{\"version\":2,\"event_id\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &event.event_id) ||
+          !ConsumeLiteral(input, &cursor, ",\"kind\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &kind) ||
+          !ConsumeLiteral(input, &cursor, ",\"date\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &event.date_bucket) ||
+          !ConsumeLiteral(input, &cursor, ",\"phrase\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &event.phrase) ||
+          !ConsumeLiteral(input, &cursor, ",\"pinyin\":") ||
+          !ConsumeCanonicalJsonString(input, &cursor, &event.pinyin)) {
+        return std::nullopt;
+      }
+      event.version = NativeSelectionEvent::kVersion;
+      if (kind == "selection") {
+        event.kind = NativeLearningEventKind::kSelection;
+      } else if (kind == "correction") {
+        event.kind = NativeLearningEventKind::kCorrection;
+        if (!ConsumeLiteral(input, &cursor,
+                            ",\"corrected_from_phrase\":") ||
+            !ConsumeCanonicalJsonString(input, &cursor,
+                                        &event.corrected_from_phrase) ||
+            !ConsumeLiteral(input, &cursor,
+                            ",\"corrected_from_pinyin\":") ||
+            !ConsumeCanonicalJsonString(input, &cursor,
+                                        &event.corrected_from_pinyin)) {
+          return std::nullopt;
+        }
+      } else {
+        return std::nullopt;
+      }
+      if (!ConsumeLiteral(input, &cursor, "}\n") || cursor != input.size()) {
+        return std::nullopt;
+      }
+    }
+    if (cursor != input.size()) {
       return std::nullopt;
     }
     const auto canonical = SerializeEvent(event);
@@ -1652,8 +1787,33 @@ class NativeSelectionEventQueue::Impl {
   Impl() : process_prefix_(RandomProcessPrefix()) {}
 
   bool TryPublish(std::string_view phrase,
-                  std::string_view normalized_pinyin) noexcept {
-    if (!IsSafeUtf8(phrase) || !IsAsciiPinyin(normalized_pinyin)) {
+                  std::string_view normalized_pinyin,
+                  std::string_view date_bucket) noexcept {
+    return TryPublishEvent(NativeLearningEventKind::kSelection, {}, phrase,
+                           normalized_pinyin, date_bucket);
+  }
+
+  bool TryPublishCorrection(std::string_view corrected_from_phrase,
+                            std::string_view replacement_phrase,
+                            std::string_view normalized_pinyin,
+                            std::string_view date_bucket) noexcept {
+    return TryPublishEvent(NativeLearningEventKind::kCorrection,
+                           corrected_from_phrase, replacement_phrase,
+                           normalized_pinyin, date_bucket);
+  }
+
+  bool TryPublishEvent(NativeLearningEventKind kind,
+                       std::string_view corrected_from_phrase,
+                       std::string_view phrase,
+                       std::string_view normalized_pinyin,
+                       std::string_view date_bucket) noexcept {
+    if (!IsSafeUtf8(phrase) || !IsAsciiPinyin(normalized_pinyin) ||
+        !IsDateBucket(date_bucket) ||
+        (kind == NativeLearningEventKind::kSelection &&
+         !corrected_from_phrase.empty()) ||
+        (kind == NativeLearningEventKind::kCorrection &&
+         (!IsSafeUtf8(corrected_from_phrase) ||
+          corrected_from_phrase == phrase))) {
       dropped_.fetch_add(1, std::memory_order_relaxed);
       return false;
     }
@@ -1671,8 +1831,16 @@ class NativeSelectionEventQueue::Impl {
       std::string identifier = process_prefix_;
       identifier.push_back('-');
       identifier.append(sequence_text.data(), converted.ptr);
-      NativeSelectionEvent event{std::move(identifier), std::string(phrase),
-                                 std::string(normalized_pinyin)};
+      NativeSelectionEvent event;
+      event.event_id = std::move(identifier);
+      event.kind = kind;
+      event.date_bucket = std::string(date_bucket);
+      event.phrase = std::string(phrase);
+      event.pinyin = std::string(normalized_pinyin);
+      if (kind == NativeLearningEventKind::kCorrection) {
+        event.corrected_from_phrase = std::string(corrected_from_phrase);
+        event.corrected_from_pinyin = event.pinyin;
+      }
       if (event.event_id.size() > kMaxEventIdBytes) {
         dropped_.fetch_add(1, std::memory_order_relaxed);
         return false;
@@ -1785,8 +1953,27 @@ NativeSelectionEventQueue& NativeSelectionEventQueue::Instance() {
 }
 
 bool NativeSelectionEventQueue::TryPublish(
-    std::string_view phrase, std::string_view normalized_pinyin) noexcept {
-  return impl_->TryPublish(phrase, normalized_pinyin);
+    std::string_view phrase, std::string_view normalized_pinyin,
+    std::string_view date_bucket) noexcept {
+  const std::string fallback =
+      date_bucket.empty() ? LocalDateBucket() : std::string();
+  const std::string_view effective =
+      date_bucket.empty() ? std::string_view(fallback) : date_bucket;
+  return impl_->TryPublish(phrase, normalized_pinyin, effective);
+}
+
+bool NativeSelectionEventQueue::TryPublishCorrection(
+    std::string_view corrected_from_phrase,
+    std::string_view replacement_phrase,
+    std::string_view normalized_pinyin,
+    std::string_view date_bucket) noexcept {
+  const std::string fallback =
+      date_bucket.empty() ? LocalDateBucket() : std::string();
+  const std::string_view effective =
+      date_bucket.empty() ? std::string_view(fallback) : date_bucket;
+  return impl_->TryPublishCorrection(corrected_from_phrase,
+                                     replacement_phrase,
+                                     normalized_pinyin, effective);
 }
 
 bool NativeSelectionEventQueue::TryPop(NativeSelectionEvent* event) noexcept {
@@ -2019,15 +2206,18 @@ extern "C" bool YunPinTryPopNativeSelectionEventV1(
   }
   try {
     yunpin::NativeSelectionEvent value;
-    if (!yunpin::NativeSelectionEventQueue::Instance().TryPop(&value)) {
-      return false;
+    while (yunpin::NativeSelectionEventQueue::Instance().TryPop(&value)) {
+      if (value.kind == yunpin::NativeLearningEventKind::kSelection) {
+        *event = {};
+        event->version = yunpin::NativeSelectionEvent::kLegacyVersion;
+        std::memcpy(event->event_id, value.event_id.data(),
+                    value.event_id.size());
+        std::memcpy(event->phrase, value.phrase.data(), value.phrase.size());
+        std::memcpy(event->pinyin, value.pinyin.data(), value.pinyin.size());
+        return true;
+      }
     }
-    *event = {};
-    event->version = yunpin::NativeSelectionEvent::kVersion;
-    std::memcpy(event->event_id, value.event_id.data(), value.event_id.size());
-    std::memcpy(event->phrase, value.phrase.data(), value.phrase.size());
-    std::memcpy(event->pinyin, value.pinyin.data(), value.pinyin.size());
-    return true;
+    return false;
   } catch (...) {
     return false;
   }

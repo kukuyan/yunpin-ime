@@ -132,12 +132,17 @@ class YunPinCandidate : public SimpleCandidate {
                   const yunpin::Candidate& candidate)
       : SimpleCandidate("yunpin", start, end, candidate.text,
                         candidate.pinned ? "\xE2\x98\x85" : ""),
-        id_(std::move(id)) {}
+        id_(std::move(id)),
+        correction_score_(candidate.correction_score) {}
 
   const std::string& id() const noexcept { return id_; }
+  std::int32_t correction_score() const noexcept {
+    return correction_score_;
+  }
 
  private:
   std::string id_;
+  std::int32_t correction_score_{0};
 };
 
 bool IsLearnableCandidate(const an<Candidate>& candidate) {
@@ -376,6 +381,15 @@ class YunPinMergedTranslation : public Translation {
     std::stable_sort(
         front_.begin(), front_.end(),
         [&](const of<Candidate>& left, const of<Candidate>& right) {
+          const auto left_yunpin = As<YunPinCandidate>(left);
+          const auto right_yunpin = As<YunPinCandidate>(right);
+          const std::int32_t left_score =
+              left_yunpin ? left_yunpin->correction_score() : 0;
+          const std::int32_t right_score =
+              right_yunpin ? right_yunpin->correction_score() : 0;
+          if (left_score != right_score) {
+            return left_score > right_score;
+          }
           const auto left_order =
               std::find(upstream_injected_order_.begin(),
                         upstream_injected_order_.end(), left->text());
@@ -550,14 +564,25 @@ class YunPinSessionLearningBridge {
       learning_.BreakAdjacency();
       return;
     }
-    if (learning_.ObserveCommit(yunpin::SessionCommit{
+    const yunpin::SessionLearningUpdate learning_update =
+        learning_.ObserveCommitDetailed(yunpin::SessionCommit{
             candidate->text(), normalized,
-            yunpin::LearningContext::kNormal})) {
+            yunpin::LearningContext::kNormal});
+    if (learning_update.recorded) {
       // Best effort only.  A full/busy queue never delays or rolls back local
       // in-process learning.
       try {
         (void)yunpin::NativeSelectionEventQueue::Instance().TryPublish(
-            candidate->text(), normalized);
+            candidate->text(), normalized, learning_update.date_bucket);
+        if (learning_update.correction.has_value()) {
+          const yunpin::SessionCorrection& correction =
+              *learning_update.correction;
+          (void)yunpin::NativeSelectionEventQueue::Instance()
+              .TryPublishCorrection(correction.corrected_from_phrase,
+                                    correction.replacement_phrase,
+                                    correction.pinyin,
+                                    correction.date_bucket);
+        }
       } catch (...) {
         // Constructing the process-local queue may allocate on its first use.
         // A resource failure must drop the sync event, never terminate the IME.

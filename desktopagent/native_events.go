@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/kukuyan/yunpin-ime/localstore"
@@ -19,11 +20,12 @@ import (
 )
 
 const (
-	NativeEventVersion  = 1
-	maxNativeEventBytes = 4096
-	maxNativeBatch      = 256
-	maxNativeSpoolFiles = 2048
-	maxNativeSpoolBytes = 8 << 20
+	legacyNativeEventVersion = 1
+	NativeEventVersion       = 2
+	maxNativeEventBytes      = 4096
+	maxNativeBatch           = 256
+	maxNativeSpoolFiles      = 2048
+	maxNativeSpoolBytes      = 8 << 20
 )
 
 type NativeSelectionEventV1 struct {
@@ -33,10 +35,38 @@ type NativeSelectionEventV1 struct {
 	Pinyin  string `json:"pinyin"`
 }
 
+const (
+	nativeEventSelection  = "selection"
+	nativeEventCorrection = "correction"
+)
+
+type NativeLearningEventV2 struct {
+	Version             int    `json:"version"`
+	EventID             string `json:"event_id"`
+	Kind                string `json:"kind"`
+	DateBucket          string `json:"date"`
+	Phrase              string `json:"phrase"`
+	Pinyin              string `json:"pinyin"`
+	CorrectedFromPhrase string `json:"corrected_from_phrase,omitempty"`
+	CorrectedFromPinyin string `json:"corrected_from_pinyin,omitempty"`
+}
+
+type nativeEventWire struct {
+	Version             int    `json:"version"`
+	EventID             string `json:"event_id"`
+	Kind                string `json:"kind,omitempty"`
+	DateBucket          string `json:"date,omitempty"`
+	Phrase              string `json:"phrase"`
+	Pinyin              string `json:"pinyin"`
+	CorrectedFromPhrase string `json:"corrected_from_phrase,omitempty"`
+	CorrectedFromPinyin string `json:"corrected_from_pinyin,omitempty"`
+}
+
 type NativeEventSummary struct {
-	Consumed  int
-	Duplicate int
-	LocalOnly int
+	Consumed    int
+	Duplicate   int
+	LocalOnly   int
+	Corrections int
 }
 
 func validNativePhrase(value string) bool {
@@ -66,23 +96,59 @@ func validNativePinyin(value string) bool {
 	return true
 }
 
-func decodeNativeEvent(file *os.File) (NativeSelectionEventV1, error) {
+func validNativeDate(value string) bool {
+	parsed, err := time.Parse("2006-01-02", value)
+	return err == nil && parsed.Format("2006-01-02") == value
+}
+
+func decodeNativeEvent(file io.Reader) (NativeLearningEventV2, error) {
 	decoder := json.NewDecoder(io.LimitReader(file, maxNativeEventBytes+1))
 	decoder.DisallowUnknownFields()
-	var event NativeSelectionEventV1
-	if err := decoder.Decode(&event); err != nil {
-		return NativeSelectionEventV1{}, errors.New("invalid native selection event")
+	var wire nativeEventWire
+	if err := decoder.Decode(&wire); err != nil {
+		return NativeLearningEventV2{}, errors.New("invalid native learning event")
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return NativeSelectionEventV1{}, errors.New("native selection event contains trailing data")
+		return NativeLearningEventV2{}, errors.New("native learning event contains trailing data")
 	}
-	if event.Version != NativeEventVersion || !validNativeEventID(event.EventID) ||
-		!validNativePhrase(event.Phrase) || !validNativePinyin(event.Pinyin) {
-		return NativeSelectionEventV1{}, errors.New("native selection event fields are invalid")
+	if !validNativeEventID(wire.EventID) || !validNativePhrase(wire.Phrase) || !validNativePinyin(wire.Pinyin) {
+		return NativeLearningEventV2{}, errors.New("native learning event fields are invalid")
 	}
-	event.Pinyin = protocol.CanonicalPinyin(event.Pinyin)
+	event := NativeLearningEventV2{
+		Version: wire.Version, EventID: wire.EventID, Kind: wire.Kind, DateBucket: wire.DateBucket,
+		Phrase: wire.Phrase, Pinyin: protocol.CanonicalPinyin(wire.Pinyin),
+		CorrectedFromPhrase: wire.CorrectedFromPhrase,
+		CorrectedFromPinyin: protocol.CanonicalPinyin(wire.CorrectedFromPinyin),
+	}
 	if !validNativePinyin(event.Pinyin) {
-		return NativeSelectionEventV1{}, errors.New("native selection event Pinyin cannot be canonicalized")
+		return NativeLearningEventV2{}, errors.New("native learning event Pinyin cannot be canonicalized")
+	}
+	switch event.Version {
+	case legacyNativeEventVersion:
+		if event.Kind != "" || event.DateBucket != "" || event.CorrectedFromPhrase != "" || wire.CorrectedFromPinyin != "" {
+			return NativeLearningEventV2{}, errors.New("legacy native selection event contains unsupported fields")
+		}
+		event.Kind = nativeEventSelection
+	case NativeEventVersion:
+		if !validNativeDate(event.DateBucket) {
+			return NativeLearningEventV2{}, errors.New("native learning event date is invalid")
+		}
+		switch event.Kind {
+		case nativeEventSelection:
+			if event.CorrectedFromPhrase != "" || wire.CorrectedFromPinyin != "" {
+				return NativeLearningEventV2{}, errors.New("native selection event contains correction fields")
+			}
+		case nativeEventCorrection:
+			if !validNativePhrase(event.CorrectedFromPhrase) || !validNativePinyin(wire.CorrectedFromPinyin) ||
+				!validNativePinyin(event.CorrectedFromPinyin) || event.CorrectedFromPhrase == event.Phrase ||
+				event.CorrectedFromPinyin != event.Pinyin {
+				return NativeLearningEventV2{}, errors.New("native correction event fields are invalid")
+			}
+		default:
+			return NativeLearningEventV2{}, errors.New("native learning event kind is invalid")
+		}
+	default:
+		return NativeLearningEventV2{}, errors.New("native learning event version is invalid")
 	}
 	return event, nil
 }
@@ -208,13 +274,25 @@ func consumeNativeEvents(ctx context.Context, directory string, store *localstor
 		}
 		_, isLocalOnly := localOnly[protocol.CanonicalPhrase(event.Phrase)]
 		var result localstore.NativeSelectionResult
-		if isLocalOnly {
-			result, err = store.RecordNativeSelectionReceipt(ctx, event.EventID)
-		} else {
-			result, err = store.RecordNativeSelection(ctx, localstore.NativeSelection{
-				EventID: event.EventID,
-				Phrase:  localstore.Phrase{Text: event.Phrase, Pinyin: event.Pinyin, Source: "native_selection"},
+		switch event.Kind {
+		case nativeEventCorrection:
+			result, err = store.RecordNativeCorrection(ctx, localstore.NativeCorrection{
+				EventID: event.EventID, DateBucket: event.DateBucket,
+				CorrectedFrom: localstore.Phrase{Text: event.CorrectedFromPhrase, Pinyin: event.CorrectedFromPinyin, Source: "native_correction"},
+				Replacement:   localstore.Phrase{Text: event.Phrase, Pinyin: event.Pinyin, Source: "native_correction"},
 			})
+		case nativeEventSelection:
+			selection := localstore.NativeSelection{
+				EventID: event.EventID, DateBucket: event.DateBucket,
+				Phrase: localstore.Phrase{Text: event.Phrase, Pinyin: event.Pinyin, Source: "native_selection"},
+			}
+			if isLocalOnly {
+				result, err = store.RecordNativeLocalSelection(ctx, selection)
+			} else {
+				result, err = store.RecordNativeSelection(ctx, selection)
+			}
+		default:
+			err = errors.New("native learning event kind is invalid")
 		}
 		if err != nil {
 			return summary, err
@@ -226,7 +304,9 @@ func consumeNativeEvents(ctx context.Context, directory string, store *localstor
 			summary.Duplicate++
 		} else {
 			summary.Consumed++
-			if isLocalOnly {
+			if event.Kind == nativeEventCorrection {
+				summary.Corrections++
+			} else if isLocalOnly {
 				summary.LocalOnly++
 			}
 		}
@@ -245,7 +325,7 @@ func consumeNativeEvents(ctx context.Context, directory string, store *localstor
 // must stage it mode 0600, fsync and atomically rename within the incoming
 // directory before returning the queue slot to their host loop.
 func EncodeNativeSelectionEventV1(event NativeSelectionEventV1) ([]byte, error) {
-	if event.Version != NativeEventVersion || !validNativeEventID(event.EventID) ||
+	if event.Version != legacyNativeEventVersion || !validNativeEventID(event.EventID) ||
 		!validNativePhrase(event.Phrase) || !validNativePinyin(event.Pinyin) {
 		return nil, errors.New("native selection event fields are invalid")
 	}
@@ -261,6 +341,35 @@ func EncodeNativeSelectionEventV1(event NativeSelectionEventV1) ([]byte, error) 
 	}
 	if encoded.Len() > maxNativeEventBytes {
 		return nil, errors.New("native selection event exceeds size limit")
+	}
+	return encoded.Bytes(), nil
+}
+
+func EncodeNativeLearningEventV2(event NativeLearningEventV2) ([]byte, error) {
+	if event.Version != NativeEventVersion {
+		return nil, errors.New("native learning event version is invalid")
+	}
+	wire := nativeEventWire{
+		Version: event.Version, EventID: event.EventID, Kind: event.Kind, DateBucket: event.DateBucket,
+		Phrase: event.Phrase, Pinyin: event.Pinyin,
+		CorrectedFromPhrase: event.CorrectedFromPhrase, CorrectedFromPinyin: event.CorrectedFromPinyin,
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(wire); err != nil {
+		return nil, err
+	}
+	decoded, err := decodeNativeEvent(bytes.NewReader(encoded.Bytes()))
+	if err != nil || decoded.Version != event.Version || decoded.EventID != event.EventID ||
+		decoded.Kind != event.Kind || decoded.DateBucket != event.DateBucket || decoded.Phrase != event.Phrase ||
+		decoded.Pinyin != protocol.CanonicalPinyin(event.Pinyin) ||
+		decoded.CorrectedFromPhrase != event.CorrectedFromPhrase ||
+		decoded.CorrectedFromPinyin != protocol.CanonicalPinyin(event.CorrectedFromPinyin) {
+		return nil, errors.New("native learning event fields are invalid")
+	}
+	if encoded.Len() > maxNativeEventBytes {
+		return nil, errors.New("native learning event exceeds size limit")
 	}
 	return encoded.Bytes(), nil
 }

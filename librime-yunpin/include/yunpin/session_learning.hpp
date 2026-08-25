@@ -22,6 +22,19 @@ struct SessionCommit {
   LearningContext context{LearningContext::kNormal};
 };
 
+struct SessionCorrection {
+  std::string date_bucket;
+  std::string corrected_from_phrase;
+  std::string replacement_phrase;
+  std::string pinyin;
+};
+
+struct SessionLearningUpdate {
+  bool recorded{false};
+  std::string date_bucket;
+  std::optional<SessionCorrection> correction;
+};
+
 // Fail-closed session state for a correction that can be proven from the
 // librime event stream: one entry commit, exactly one unmodified Backspace per
 // Unicode scalar, then a different entry committed from the same normalized
@@ -43,6 +56,8 @@ class SessionLearning {
   // accepted.  Callers may use the result to publish a best-effort async
   // native event without duplicating the privacy validation.
   bool ObserveCommit(SessionCommit commit);
+  [[nodiscard]] SessionLearningUpdate ObserveCommitDetailed(
+      SessionCommit commit);
   void ObserveUnhandledKey(bool is_unmodified_backspace,
                            LearningContext context);
   void ObserveComposition(std::string_view input, LearningContext context);

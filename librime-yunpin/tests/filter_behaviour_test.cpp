@@ -24,6 +24,7 @@
 #include <rime/translation.h>
 
 #include <cassert>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -130,21 +131,26 @@ struct Harness {
   }
 };
 
-void WriteSnapshot(const std::filesystem::path& user_data_dir) {
+void WriteSnapshot(const std::filesystem::path& user_data_dir,
+                   std::int32_t office_wrong_score = 0,
+                   std::int32_t office_score = 0) {
   std::filesystem::create_directories(user_data_dir / "yunpin");
   std::ofstream out(user_data_dir / "yunpin" / "private.tsv");
-  out << "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\n";
-  out << kPhrase << "\tni hao shi jie\tcodex_history\t9\ttrue\t0\n";
+  out << "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day"
+         "\tcorrection_score\n";
+  out << kPhrase << "\tni hao shi jie\tcodex_history\t9\ttrue\t0\t0\n";
   out << kLongPrivatePhrase
-      << "\tchang qi ge ren hou xuan\tcodex_history\t8\ttrue\t0\n";
+      << "\tchang qi ge ren hou xuan\tcodex_history\t8\ttrue\t0\t0\n";
   out << kPrivateFirst
-      << "\tshuang ge ren hou xuan\tcodex_history\t10\ttrue\t0\n";
+      << "\tshuang ge ren hou xuan\tcodex_history\t10\ttrue\t0\t0\n";
   out << kPrivateSecond
-      << "\tshuang ge ren hou xuan\tcodex_history\t9\ttrue\t0\n";
+      << "\tshuang ge ren hou xuan\tcodex_history\t9\ttrue\t0\t0\n";
   out << kOfficeWrong
-      << "\tban gong shi\tsynced_learning@20679\t5\tfalse\t20679\n";
+      << "\tban gong shi\tsynced_learning@20679\t5\tfalse\t20679\t"
+      << office_wrong_score << "\n";
   out << kOffice
-      << "\tban gong shi\tsogou_sgpybin\t165\tfalse\t0\n";
+      << "\tban gong shi\tsogou_sgpybin\t165\tfalse\t0\t"
+      << office_score << "\n";
 }
 
 void EmitCommit(Harness& harness,
@@ -538,6 +544,19 @@ void TestPersistentRimeHomophoneOrderOverridesStaleSnapshotOrder() {
          {kOffice, kOfficeWrong, "tail"});
 }
 
+void TestPersistedCorrectionOverridesStaleUpstreamOrderAfterRestart() {
+  const auto user_data_dir = Service::instance().deployer().user_data_dir;
+  WriteSnapshot(user_data_dir, -1, 1);
+  Harness harness;
+  harness.config.bools_["yunpin/session_learning"] = false;
+  YunPinFilter filter(harness.ticket());
+  Expect("persisted correction score survives upstream alignment",
+         RunWithUpstream(filter, harness, "bangongshi",
+                         {kOfficeWrong, kOffice, "tail"}, 4),
+         {kOffice, kOfficeWrong, "tail"});
+  WriteSnapshot(user_data_dir);
+}
+
 void TestSessionBridgeFailsClosedOnUnprovenDeletion() {
   {
     Harness harness;
@@ -923,6 +942,7 @@ int main() {
   TestLongCorrectionGuardIsConservativeAndPageBounded();
   TestSessionCorrectionReranksBoundedUpstreamWindow();
   TestPersistentRimeHomophoneOrderOverridesStaleSnapshotOrder();
+  TestPersistedCorrectionOverridesStaleUpstreamOrderAfterRestart();
   TestShippedOverlayLearnsSelectedYunPinHomophoneImmediately();
   TestSessionBridgeFailsClosedOnUnprovenDeletion();
   TestLearningCallbacksDoNotOutliveFilter();

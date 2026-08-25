@@ -2,6 +2,7 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -10,6 +11,52 @@ import (
 
 	"github.com/kukuyan/yunpin-ime/localstore"
 )
+
+func TestCorrectionScoreRebuildSurvivesEncryptedStoreRestart(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "private")
+	makePrivateTestDirectory(t, root)
+	database := filepath.Join(root, "private.db")
+	dataKey := bytes.Repeat([]byte{0x71}, 32)
+	idKey := bytes.Repeat([]byte{0x72}, 32)
+	const deviceID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	store, err := localstore.OpenForDevice(context.Background(), database, dataKey, idKey, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordNativeCorrection(context.Background(), localstore.NativeCorrection{
+		EventID: "restart-correction", DateBucket: "2026-08-25",
+		CorrectedFrom: localstore.Phrase{Text: "办公是", Pinyin: "ban gong shi"},
+		Replacement:   localstore.Phrase{Text: "办公室", Pinyin: "ban gong shi"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = localstore.OpenForDevice(context.Background(), database, dataKey, idKey, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	baseline := filepath.Join(root, "baseline.tsv")
+	snapshotPath := filepath.Join(root, "private.tsv")
+	writePrivateTestFile(t, baseline, []byte(privateSnapshotHeader+
+		"办公是\tban gong shi\tsogou_import\t5\tfalse\n"+
+		"办公室\tban gong shi\tsogou_import\t165\tfalse\n"))
+	if _, err := rebuildPrivateSnapshot(context.Background(), store, baseline, snapshotPath); err != nil {
+		t.Fatal(err)
+	}
+	generated, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(generated)
+	if !strings.Contains(text, "办公是\tban gong shi\tsogou_import\t5\tfalse\t0\t-1\n") ||
+		!strings.Contains(text, "办公室\tban gong shi\tsogou_import\t165\tfalse\t0\t1\n") {
+		t.Fatalf("restart rebuild lost correction scores: %q", text)
+	}
+}
 
 func TestRebuildMigratesStaticBaselineAndAppendsOnlyLearnedOverlay(t *testing.T) {
 	store := openBridgeStore(t)
@@ -126,9 +173,27 @@ func TestEncodeSnapshotCarriesBackwardCompatibleRecencyMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := privateSnapshotHeader +
-		"刚选一次\tgang xuan yi ci\tsynced_learning@21000\t1\tfalse\n"
+	expected := generatedSnapshotHeader +
+		"刚选一次\tgang xuan yi ci\tsynced_learning@21000\t1\tfalse\t21000\t0\n"
 	if string(encoded) != expected {
 		t.Fatalf("generated snapshot lost recency: %q", encoded)
+	}
+}
+
+func TestGeneratedSevenColumnSnapshotCanBeReusedAsMigrationBaseline(t *testing.T) {
+	first, err := encodeSnapshot([]snapshotRow{{
+		Phrase: "跨版学习", Pinyin: "kua ban xue xi", Source: "synced_learning",
+		UseCount: 2, LastUsedDay: 21000, CorrectionScore: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := parseBaselineBytes(first)
+	if err != nil || len(rows) != 1 || rows[0].LastUsedDay != 21000 || rows[0].CorrectionScore != 1 {
+		t.Fatalf("generated snapshot could not become baseline: rows=%#v err=%v", rows, err)
+	}
+	second, err := encodeSnapshot(rows)
+	if err != nil || !bytes.Equal(first, second) {
+		t.Fatalf("generated baseline did not round trip: err=%v\nfirst=%q\nsecond=%q", err, first, second)
 	}
 }

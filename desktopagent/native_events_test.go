@@ -53,6 +53,55 @@ func TestConsumeNativeEventsRecordsAndRemovesSpoolFile(t *testing.T) {
 	}
 }
 
+func TestConsumeV2CorrectionPersistsEncryptedHabitEvidence(t *testing.T) {
+	store := openBridgeStore(t)
+	directory := filepath.Join(t.TempDir(), "incoming")
+	makePrivateTestDirectory(t, directory)
+	event := NativeLearningEventV2{
+		Version: NativeEventVersion, EventID: "correction-1", Kind: nativeEventCorrection,
+		DateBucket: "2026-08-25", Phrase: "办公室", Pinyin: "ban gong shi",
+		CorrectedFromPhrase: "办公是", CorrectedFromPinyin: "ban gong shi",
+	}
+	encoded, err := EncodeNativeLearningEventV2(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePrivateTestFile(t, filepath.Join(directory, event.EventID+".json"), encoded)
+	summary, err := consumeNativeEvents(context.Background(), directory, store, nil, maxNativeBatch)
+	if err != nil || summary.Consumed != 1 || summary.Corrections != 1 {
+		t.Fatalf("v2 correction consume mismatch: summary=%#v err=%v", summary, err)
+	}
+	stats, err := store.QueryHabits(context.Background(), localstore.HabitQuery{CorrectionsOnly: true, Limit: 10})
+	if err != nil || len(stats) != 2 {
+		t.Fatalf("persisted correction stats mismatch: stats=%#v err=%v", stats, err)
+	}
+	scores := localstore.CorrectionScores(stats)
+	if scores[protocol.CanonicalPhrase("办公是")+"\x00ban gong shi"] != -1 ||
+		scores[protocol.CanonicalPhrase("办公室")+"\x00ban gong shi"] != 1 {
+		t.Fatalf("persisted correction scores mismatch: %#v", scores)
+	}
+}
+
+func TestNativeV2SelectionRoundTripsAndRejectsCorrectionMetadata(t *testing.T) {
+	event := NativeLearningEventV2{
+		Version: NativeEventVersion, EventID: "selection-v2", Kind: nativeEventSelection,
+		DateBucket: "2026-08-25", Phrase: "云拼", Pinyin: "yun pin",
+	}
+	encoded, err := EncodeNativeLearningEventV2(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeNativeEvent(bytes.NewReader(encoded))
+	if err != nil || decoded != event {
+		t.Fatalf("v2 selection round trip mismatch: decoded=%#v err=%v", decoded, err)
+	}
+	event.CorrectedFromPhrase = "错误"
+	event.CorrectedFromPinyin = "yun pin"
+	if _, err := EncodeNativeLearningEventV2(event); err == nil {
+		t.Fatal("v2 selection accepted correction metadata")
+	}
+}
+
 func TestConsumeNativeEventsRemovesCrashRetryWithoutDoubleCount(t *testing.T) {
 	store := openBridgeStore(t)
 	directory := filepath.Join(t.TempDir(), "incoming")
@@ -194,7 +243,7 @@ func TestConsumeDrainsOneLegacyOverflowEvent(t *testing.T) {
 	for index := 0; index <= maxNativeSpoolFiles; index++ {
 		eventID := fmt.Sprintf("legacy-%04d", index)
 		encoded, err := EncodeNativeSelectionEventV1(NativeSelectionEventV1{
-			Version: NativeEventVersion, EventID: eventID, Phrase: "测试", Pinyin: "ce shi",
+			Version: legacyNativeEventVersion, EventID: eventID, Phrase: "测试", Pinyin: "ce shi",
 		})
 		if err != nil {
 			t.Fatal(err)

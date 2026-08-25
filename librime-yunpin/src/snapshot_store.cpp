@@ -130,6 +130,21 @@ bool ParseLastUsedDay(std::string_view text, std::int64_t* day) {
   return true;
 }
 
+bool ParseCorrectionScore(std::string_view text, std::int32_t* score) {
+  if (text.empty() || score == nullptr) {
+    return false;
+  }
+  std::int32_t parsed = 0;
+  const char* begin = text.data();
+  const char* end = text.data() + text.size();
+  const auto result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc() || result.ptr != end) {
+    return false;
+  }
+  *score = parsed;
+  return true;
+}
+
 bool ParseLearningSourceDay(std::string_view source, std::int64_t* day,
                             bool* present) {
   if (day == nullptr || present == nullptr) {
@@ -193,7 +208,10 @@ bool IsExpectedHeader(const std::vector<std::string>& fields) {
          (fields.size() == 4 ||
           (fields.size() == 5 && fields[4] == "pinned") ||
           (fields.size() == 6 && fields[4] == "pinned" &&
-           fields[5] == "last_used_day"));
+           fields[5] == "last_used_day") ||
+          (fields.size() == 7 && fields[4] == "pinned" &&
+           fields[5] == "last_used_day" &&
+           fields[6] == "correction_score"));
 }
 
 bool IsLegacyPrivateSnapshotToken(std::string_view syllable) {
@@ -232,7 +250,8 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     return result;
   }
   const bool has_pinned = header.size() >= 5;
-  const bool has_last_used_day = header.size() == 6;
+  const bool has_last_used_day = header.size() >= 6;
+  const bool has_correction_score = header.size() == 7;
   const PinyinSegmenter segmenter;
   std::unordered_set<std::string> ids;
   ids.reserve(kMaxPrivateSnapshotEntries);
@@ -261,6 +280,7 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
 
     std::uint64_t use_count = 0;
     std::int64_t last_used_day = 0;
+    std::int32_t correction_score = 0;
     std::int64_t source_last_used_day = 0;
     bool source_has_last_used_day = false;
     const std::vector<std::string> syllables = SplitPinyin(fields[1]);
@@ -288,6 +308,8 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
                                 &source_has_last_used_day) ||
         (has_last_used_day &&
          !ParseLastUsedDay(fields[5], &last_used_day)) ||
+        (has_correction_score &&
+         !ParseCorrectionScore(fields[6], &correction_score)) ||
         (has_last_used_day && source_has_last_used_day &&
          last_used_day != source_last_used_day)) {
       ++result.rejected_rows;
@@ -314,6 +336,7 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     entry.learned = use_count >= kAutomaticLearningThreshold;
     entry.private_exact_code_only = private_exact_code_only;
     entry.last_used_day = last_used_day;
+    entry.correction_score = correction_score;
     result.entries.push_back(std::move(entry));
     ++result.accepted_rows;
   }
