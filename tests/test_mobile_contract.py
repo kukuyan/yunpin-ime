@@ -385,9 +385,9 @@ class MobileContractTests(unittest.TestCase):
 
         self.assertRegex(boxes, r"\bSealedBoxWireVersion\s*=\s*1\b")
         self.assertIn("{'Y', 'P', 'B', 'X'}", boxes)
-        self.assertIn(
-            'privateSnapshotHeader  = "phrase\\tpinyin\\tsource\\tuse_count\\tpinned\\n"',
+        self.assertRegex(
             snapshot,
+            r'(?m)^\s*privateSnapshotHeader\s*=\s*"phrase\\tpinyin\\tsource\\tuse_count\\tpinned\\n"$',
         )
 
     def test_mobile_tree_contains_no_private_or_recorded_data_files(self) -> None:
