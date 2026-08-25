@@ -14,9 +14,11 @@ app="${1:-${REPO_ROOT}/build/macos/DerivedData/Build/Products/Release/YunPin.app
 plist="$app/Contents/Info.plist"
 executable="$app/Contents/MacOS/YunPin"
 sync_agent="$app/Contents/MacOS/yunpin-sync-agent"
+replay_lab="$app/Contents/MacOS/yunpin-replay-lab"
 
 [[ -x "$executable" ]] || die "missing YunPin executable: $executable"
 [[ -x "$sync_agent" ]] || die "missing public sync agent: $sync_agent"
+[[ -x "$replay_lab" ]] || die "missing Replay Lab CLI: $replay_lab"
 plutil -lint "$plist" >/dev/null
 [[ "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected bundle identifier"
 [[ "$(plutil -extract TISInputSourceID raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected input-source identifier"
@@ -38,6 +40,8 @@ if [[ "$require_universal" -eq 1 ]]; then
   [[ " $architectures " == *" arm64 "* && " $architectures " == *" x86_64 "* ]] || die "YunPin executable is not universal: $architectures"
   sync_architectures="$(lipo -archs "$sync_agent")"
   [[ " $sync_architectures " == *" arm64 "* && " $sync_architectures " == *" x86_64 "* ]] || die "public sync agent is not universal: $sync_architectures"
+  replay_architectures="$(lipo -archs "$replay_lab")"
+  [[ " $replay_architectures " == *" arm64 "* && " $replay_architectures " == *" x86_64 "* ]] || die "Replay Lab CLI is not universal: $replay_architectures"
 fi
 
 shared_support="$app/Contents/SharedSupport"
@@ -63,11 +67,18 @@ for required in \
 done
 [[ -f "$shared_support/licenses/YunPin-Sync-Agent-Go/LICENSES.json" ]] ||
   die "public sync agent license-text bundle is missing"
+[[ -f "$shared_support/licenses/YunPin-Replay-Lab-Go/LICENSES.json" ]] ||
+  die "Replay Lab license-text bundle is missing"
+grep -Fq '"artifact": "yunpin-replay-lab"' \
+  "$shared_support/licenses/YunPin-Replay-Lab-Go/LICENSES.json" ||
+  die "Replay Lab license manifest names the wrong artifact"
 [[ ! -e "$sync_support/BUILD-METADATA.json" && ! -e "$sync_support/SHA256SUMS" ]] ||
   die "private E2E artifact metadata entered the public app bundle"
 
 codesign --verify --strict "$sync_agent" >/dev/null 2>&1 ||
   die "public sync agent does not have a valid signature"
+codesign --verify --strict "$replay_lab" >/dev/null 2>&1 ||
+  die "Replay Lab CLI does not have a valid signature"
 "$sync_agent" install-probe >/dev/null || die "public sync agent install-probe failed"
 set +e
 private_command_output="$("$sync_agent" pairing-invite 2>&1)"
@@ -75,6 +86,12 @@ private_command_status=$?
 set -e
 [[ "$private_command_status" -ne 0 && "$private_command_output" == "yunpin-sync-agent: unknown command" ]] ||
   die "public app bundle exposes a private pairing command"
+set +e
+replay_usage_output="$("$replay_lab" 2>&1)"
+replay_usage_status=$?
+set -e
+[[ "$replay_usage_status" -ne 0 && "$replay_usage_output" == "error: usage: yunpin-replay-lab"* ]] ||
+  die "bundled Replay Lab CLI usage probe failed"
 
 [[ -d "$shared_support/cn_dicts" && -d "$shared_support/lua" && -d "$shared_support/opencc" ]] || die "Rime Ice runtime directories are incomplete"
 codesign --verify --deep --strict "$app" >/dev/null 2>&1 || \
@@ -85,6 +102,7 @@ bundled_librime="$app/Contents/Frameworks/librime.1.dylib"
 [[ -f "$bundled_librime" ]] || die "YunPin app does not bundle librime"
 nm -gU "$bundled_librime" | grep -F 'rime_require_module_yunpin' >/dev/null || die "bundled librime does not contain the YunPin module"
 nm -gU "$bundled_librime" | grep -F 'YunPinStartNativeSelectionSpoolerV1' >/dev/null || die "bundled librime does not contain the YunPin native spooler"
+nm -gU "$bundled_librime" | grep -F 'YunPinStartReplaySpoolerV1' >/dev/null || die "bundled librime does not contain the Replay Lab spooler"
 if [[ "$require_universal" -eq 1 ]]; then
   librime_architectures="$(lipo -archs "$bundled_librime")"
   [[ " $librime_architectures " == *" arm64 "* && " $librime_architectures " == *" x86_64 "* ]] || die "bundled librime is not universal: $librime_architectures"

@@ -177,6 +177,10 @@ class WindowsClientTests(unittest.TestCase):
                 "YunPinStartDefaultNativeSelectionSpoolerV1()",
                 rime_with_weasel,
             )
+            self.assertIn(
+                "YunPinStartDefaultReplaySpoolerV1()",
+                rime_with_weasel,
+            )
             capability = 'rime_api->set_option(session_id, "yunpin_learning_allowed", True);'
             self.assertEqual(1, rime_with_weasel.count(capability))
             client_info = rime_with_weasel[
@@ -194,7 +198,15 @@ class WindowsClientTests(unittest.TestCase):
                 rime_with_weasel.index("#if 0", rime_with_weasel.index("void RimeWithWeaselHandler::Initialize")),
             )
             self.assertLess(
+                rime_with_weasel.index("StartYunPinReplaySpooler();"),
+                rime_with_weasel.index("#if 0", rime_with_weasel.index("void RimeWithWeaselHandler::Initialize")),
+            )
+            self.assertLess(
                 rime_with_weasel.index("YunPinStopNativeSelectionSpoolerV1();"),
+                rime_with_weasel.index("rime_api->finalize();"),
+            )
+            self.assertLess(
+                rime_with_weasel.index("YunPinStopReplaySpoolerV1();"),
                 rime_with_weasel.index("rime_api->finalize();"),
             )
             self.assertIn("bool RimeWithWeaselHandler::_SessionsAreIdle()", rime_with_weasel)
@@ -450,13 +462,24 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"desktopagent\\public"', agent_build)
         self.assertIn('"yunpin-settings.exe"', agent_build)
         self.assertIn('gui $settingsBinary', agent_build)
+        self.assertIn('"yunpin-replay-lab.exe"', agent_build)
+        self.assertIn('console $replayBinary', agent_build)
+        self.assertIn('./cmd/yunpin-replay-lab', agent_build)
+        self.assertIn('replaylab\\licenses', agent_build)
+        self.assertIn('--go-package ./cmd/yunpin-replay-lab', agent_build)
+        self.assertIn('--artifact yunpin-replay-lab', agent_build)
         self.assertIn('"e2e-private\\windows"', agent_build)
         self.assertIn('BuildTag "yunpin_pairing_private"', agent_build)
         self.assertIn("go mod verify", agent_build)
         self.assertIn("package_go_licenses.py", agent_build)
         self.assertIn('"yunpin-settings.exe"', package)
         self.assertIn('sync-agent/yunpin-settings.exe', installer)
+        self.assertIn('"yunpin-replay-lab.exe"', package)
+        self.assertIn('sync-agent/yunpin-replay-lab.exe', installer)
         self.assertIn('gui $settingsLauncher', package_test)
+        self.assertIn('console $replayLab', package_test)
+        self.assertIn('replayLicenseManifest.artifact', package_test)
+        self.assertIn('"yunpin-replay-lab"', package_test)
         self.assertIn('$publicBaseline = Invoke-AgentCapture -Executable $publicBinary -Arguments @("e2e-init-empty-baseline")', agent_build)
         self.assertIn('$publicBaseline.Output -cne "yunpin-sync-agent: unknown command"', agent_build)
         self.assertIn('$privateBaseline = Invoke-AgentCapture -Executable $privateBinary -Arguments @("e2e-init-empty-baseline")', agent_build)
@@ -491,7 +514,7 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("Remove-Item -LiteralPath $privateE2ESource -Recurse -Force", package)
         self.assertIn("Private E2E activation script entered the public runtime", package_test)
         self.assertIn("Public runtime manifest references a private E2E activation script", package_test)
-        for tree in ("desktopagent", "localstore", "protocol", "syncclient"):
+        for tree in ("desktopagent", "localstore", "protocol", "replaylab", "syncclient"):
             self.assertIn(f'"{tree}"', package)
         self.assertIn("third_party\\go-modules.lock.json", package)
         for required in (
@@ -500,6 +523,7 @@ class WindowsClientTests(unittest.TestCase):
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")',
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("e2e-init-empty-baseline")',
             'yunpin-sync-agent: unknown command',
+            'Invoke-AgentCapture -Executable $replayLab -Arguments @("help")',
         ):
             self.assertIn(required, package_test)
         self.assertIn('"Install-SyncAgent.ps1"', installer)
@@ -843,12 +867,15 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("gui $residentBinary", build)
         self.assertIn("gui $settingsBinary", build)
         self.assertIn("console $publicBinary", build)
+        self.assertIn("console $replayBinary", build)
 
         # Staged into the bundle and installed next to the interactive agent.
         self.assertIn("yunpin-sync-resident.exe", package)
         self.assertIn("yunpin-settings.exe", package)
+        self.assertIn("yunpin-replay-lab.exe", package)
         self.assertIn("sync-agent/yunpin-sync-resident.exe", installer)
         self.assertIn("sync-agent/yunpin-settings.exe", installer)
+        self.assertIn("sync-agent/yunpin-replay-lab.exe", installer)
         self.assertIn("-ResidentExpectedSha256", installer)
         self.assertIn("$ResidentPath", install_agent)
         self.assertIn("$ResidentExpectedSha256", install_agent)

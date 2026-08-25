@@ -98,11 +98,18 @@
 - Test the default-disabled fixed 64-slot C++ SPSC ring, bounded native event
   validation/serialization, 8 KiB drain boundary, FIFO order, overflow
   `drop_count`, native-frame parsing and conversion to `EventV1`.
-- Until Squirrel/Weasel producers and a background sink are connected, assert
-  that `start` only creates a session/resume record and captures no input by
-  itself. Native acceptance requires continuous producer→ring→sink→store proof,
-  immediate pause/protected-context suppression, no disk/network wait on the
-  key path and explicit loss accounting.
+- Assert ordinary host startup and a disabled/paused lab capture no text. A
+  valid explicit `start`/`resume` must enable production without restarting the
+  IME; `pause`, invalid metadata, protected context and host finalization must
+  disable it and prevent queued text crossing the session boundary.
+- Run the synthetic host → fixed C++ ring → background native spool → Go report
+  test and require `exact_path_correction_first_count == 1` for a correction
+  candidate placed before a viable ordinary candidate. The callback path must
+  contain no file, network or model operation; queue overflow remains
+  nonblocking and observable through `drop_count`.
+- Keep installed Squirrel/Weasel real-text capture, pause latency and
+  cross-application behavior as an explicit manual gate. CI/source integration
+  alone does not prove an older installed build is capturing.
 
 ## Correction learning and expression safety
 

@@ -76,7 +76,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(15, len(patches))
+        self.assertEqual(16, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -257,12 +257,14 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("userInfo", sources)
         self.assertNotIn("NSApp.squirrelAppDelegate.syncUserData()", sources)
         self.assertIn('appendingPathComponent("YunPin", isDirectory: true)', sources)
-        for component in ("Sync", "native-events", "incoming"):
+        for component in ("Sync", "native-events", "incoming", "ReplayLab"):
             self.assertIn(
                 f'appendingPathComponent("{component}", isDirectory: true)', sources
             )
         self.assertIn("YunPinStartNativeSelectionSpoolerV1", sources)
         self.assertGreaterEqual(sources.count("YunPinStopNativeSelectionSpoolerV1"), 2)
+        self.assertIn("YunPinStartReplaySpoolerV1", sources)
+        self.assertGreaterEqual(sources.count("YunPinStopReplaySpoolerV1"), 2)
 
     def test_registration_refreshes_tis_without_changing_enabled_modes(self) -> None:
         source = (self.prepared / "sources" / "InputSource.swift").read_text(
@@ -344,6 +346,9 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('"${MACOS_DIR}/scripts/build-sync-agents.sh"', build)
         self.assertIn('sync-agent/public/yunpin-sync-agent', build)
         self.assertIn('Contents/MacOS/yunpin-sync-agent', build)
+        self.assertIn('sync-agent/public/yunpin-replay-lab', build)
+        self.assertIn('Contents/MacOS/yunpin-replay-lab', build)
+        self.assertIn('YunPin-Replay-Lab-Go', build)
         self.assertIn('sync_support="$shared_support/SyncAgent"', build)
         self.assertNotIn("e2e-private", build)
         self.assertIn("-tags=yunpin_pairing_private", agent_build)
@@ -369,6 +374,12 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('xcrun vtool -show-build "$output"', agent_build)
         self.assertIn("go mod verify", agent_build)
         self.assertIn("package_go_licenses.py", agent_build)
+        self.assertIn('cd "$REPO_ROOT/replaylab"', agent_build)
+        self.assertIn('./cmd/yunpin-replay-lab', agent_build)
+        self.assertIn('-ldflags=-linkmode=external', agent_build)
+        self.assertIn('replay-licenses', agent_build)
+        self.assertIn('--go-package ./cmd/yunpin-replay-lab', agent_build)
+        self.assertIn('--artifact yunpin-replay-lab', agent_build)
         self.assertIn('publicReleaseEligible', agent_build)
         self.assertNotIn('${tags[@]}', agent_build)
         self.assertIn(
@@ -404,12 +415,18 @@ class MacOSIntegrationTests(unittest.TestCase):
             agent_build,
         )
         self.assertIn('sign_adhoc "$sync_agent"', sign)
+        self.assertIn('sign_adhoc "$replay_lab"', sign)
         self.assertLess(sign.index('sign_adhoc "$sync_agent"'), sign.index('sign_adhoc "$app"'))
+        self.assertLess(sign.index('sign_adhoc "$replay_lab"'), sign.index('sign_adhoc "$app"'))
         for required in (
             '"$sync_agent" install-probe',
             '"$sync_agent" pairing-invite',
             'yunpin-sync-agent: unknown command',
             'lipo -archs "$sync_agent"',
+            'lipo -archs "$replay_lab"',
+            'codesign --verify --strict "$replay_lab"',
+            'YunPinStartReplaySpoolerV1',
+            '"artifact": "yunpin-replay-lab"',
         ):
             self.assertIn(required, verify)
         for forbidden in (
@@ -419,7 +436,7 @@ class MacOSIntegrationTests(unittest.TestCase):
             "Keychain",
         ):
             self.assertNotIn(forbidden, postinstall)
-        for tree in ("desktopagent", "localstore", "protocol", "syncclient"):
+        for tree in ("desktopagent", "localstore", "protocol", "replaylab", "syncclient"):
             self.assertIn(tree, source_archive)
         self.assertIn("third_party/go-modules.lock.json", source_archive)
         self.assertNotIn("rime_userdb_snapshot", source_archive)
@@ -484,7 +501,11 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertNotIn("yunpin-search:", filter_source)
         self.assertNotIn("yunpin-fav:", filter_source)
         self.assertIn(
-            "if ((enabled_ || session_learning_enabled_) && engine_ &&",
+            "if (engine_ && engine_->context())",
+            filter_source,
+        )
+        self.assertIn(
+            "enabled_ || session_learning_enabled_);",
             filter_source,
         )
         self.assertIn("IsLearnableCandidate(genuine)", filter_source)
@@ -980,11 +1001,12 @@ class MacOSIntegrationTests(unittest.TestCase):
         plugin = signing.index("-name '*.dylib'")
         helper = signing.index("-name 'rime*'")
         sync_agent = signing.index('sign_adhoc "$sync_agent"')
+        replay_lab = signing.index('sign_adhoc "$replay_lab"')
         root = signing.rindex('sign_adhoc "$app"')
         verify = signing.index('codesign --verify --deep --strict --verbose=2 "$app"')
         self.assertEqual(
-            sorted([librime, plugin, helper, sync_agent, root, verify]),
-            [librime, plugin, helper, sync_agent, root, verify],
+            sorted([librime, plugin, helper, sync_agent, replay_lab, root, verify]),
+            [librime, plugin, helper, sync_agent, replay_lab, root, verify],
         )
         self.assertNotIn("Sparkle", signing)
 
@@ -1201,6 +1223,7 @@ class MacOSIntegrationTests(unittest.TestCase):
                 app / "Contents" / "Frameworks" / "rime-plugins" / "librime-lua.dylib",
                 app / "Contents" / "MacOS" / "rime_deployer",
                 app / "Contents" / "MacOS" / "yunpin-sync-agent",
+                app / "Contents" / "MacOS" / "yunpin-replay-lab",
             ]
             for target in targets:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -1237,6 +1260,7 @@ class MacOSIntegrationTests(unittest.TestCase):
                 str(targets[1]),
                 str(targets[2]),
                 str(targets[3]),
+                str(targets[4]),
                 str(app),
                 f"VERIFY:{app}",
             ]

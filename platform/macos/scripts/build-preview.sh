@@ -56,8 +56,11 @@ shared_support="$app/Contents/SharedSupport"
 mkdir -p "$shared_support" "$shared_support/licenses"
 
 sync_agent="$build_root/sync-agent/public/yunpin-sync-agent"
+replay_lab="$build_root/sync-agent/public/yunpin-replay-lab"
 [[ -x "$sync_agent" ]] || die "public sync agent build output is missing: $sync_agent"
+[[ -x "$replay_lab" ]] || die "public Replay Lab build output is missing: $replay_lab"
 install -m 755 "$sync_agent" "$app/Contents/MacOS/yunpin-sync-agent"
+install -m 755 "$replay_lab" "$app/Contents/MacOS/yunpin-replay-lab"
 sync_support="$shared_support/SyncAgent"
 mkdir -p "$sync_support"
 for script in \
@@ -69,6 +72,7 @@ for script in \
 done
 install -m 644 "${REPO_ROOT}/desktopagent/install/README.md" "$sync_support/README.md"
 ditto "$build_root/sync-agent/licenses" "$shared_support/licenses/YunPin-Sync-Agent-Go"
+ditto "$build_root/sync-agent/replay-licenses" "$shared_support/licenses/YunPin-Replay-Lab-Go"
 
 find "${REPO_ROOT}/third_party/rime-ice" -maxdepth 1 -type f \
   \( -name '*.yaml' -o -name '*.txt' \) \

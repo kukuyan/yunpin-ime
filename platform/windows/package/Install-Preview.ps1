@@ -339,9 +339,11 @@ try {
     $syncAgent = Join-Path $syncSupportRoot "yunpin-sync-agent.exe"
     $syncResident = Join-Path $syncSupportRoot "yunpin-sync-resident.exe"
     $settingsLauncher = Join-Path $syncSupportRoot "yunpin-settings.exe"
+    $replayLab = Join-Path $syncSupportRoot "yunpin-replay-lab.exe"
     $syncManifestPath = "sync-agent/yunpin-sync-agent.exe"
     $syncResidentManifestPath = "sync-agent/yunpin-sync-resident.exe"
     $settingsManifestPath = "sync-agent/yunpin-settings.exe"
+    $replayManifestPath = "sync-agent/yunpin-replay-lab.exe"
     if (-not $bundleManifest.ContainsKey($syncManifestPath)) {
         throw "Public sync agent is absent from the verified bundle manifest."
     }
@@ -351,6 +353,10 @@ try {
     if (-not $bundleManifest.ContainsKey($settingsManifestPath) -or
         -not (Test-Path -LiteralPath $settingsLauncher -PathType Leaf)) {
         throw "Windowless settings launcher is absent from the verified bundle."
+    }
+    if (-not $bundleManifest.ContainsKey($replayManifestPath) -or
+        -not (Test-Path -LiteralPath $replayLab -PathType Leaf)) {
+        throw "Replay Lab CLI is absent from the verified bundle."
     }
     & $syncInstaller -AgentPath $syncAgent -ExpectedSha256 $bundleManifest[$syncManifestPath] `
         -ResidentPath $syncResident -ResidentExpectedSha256 $bundleManifest[$syncResidentManifestPath]

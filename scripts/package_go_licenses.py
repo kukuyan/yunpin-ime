@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Create a deterministic license-text bundle for the linked sync agent."""
+"""Create a deterministic license-text bundle for a linked Go command."""
 
 from __future__ import annotations
 
@@ -18,9 +18,11 @@ LOCK = ROOT / "third_party" / "go-modules.lock.json"
 LICENSE_NAMES = re.compile(r"^(license|copying|notice)(\..*)?$", re.IGNORECASE)
 
 
-def go_json_objects(module: Path) -> list[dict[str, object]]:
+def go_json_objects(
+    module: Path, go_package: str
+) -> list[dict[str, object]]:
     completed = subprocess.run(
-        ["go", "list", "-deps", "-json", "./cmd/yunpin-sync-agent"],
+        ["go", "list", "-deps", "-json", go_package],
         cwd=module,
         check=True,
         stdout=subprocess.PIPE,
@@ -51,6 +53,8 @@ def safe_name(value: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--go-module", type=Path, required=True)
+    parser.add_argument("--go-package", default="./cmd/yunpin-sync-agent")
+    parser.add_argument("--artifact", default="yunpin-sync-agent")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -60,7 +64,9 @@ def main() -> int:
         for row in lock["modules"]
     }
     modules: dict[tuple[str, str], Path] = {}
-    for package in go_json_objects(args.go_module.resolve()):
+    for package in go_json_objects(
+        args.go_module.resolve(), args.go_package
+    ):
         module = package.get("Module")
         if not isinstance(module, dict) or module.get("Main") is True:
             continue
@@ -130,7 +136,7 @@ def main() -> int:
 
     manifest = {
         "schemaVersion": 1,
-        "artifact": "yunpin-sync-agent",
+        "artifact": args.artifact,
         "modules": records,
     }
     (output / "LICENSES.json").write_text(

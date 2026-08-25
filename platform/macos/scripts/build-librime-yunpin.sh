@@ -56,6 +56,7 @@ architectures="$(lipo -archs "$library")"
 [[ " $architectures " == *" arm64 "* && " $architectures " == *" x86_64 "* ]] || die "merged librime is not universal: $architectures"
 nm -gU "$library" | grep -F 'rime_require_module_yunpin' >/dev/null || die "merged librime does not export the YunPin module"
 nm -gU "$library" | grep -F 'YunPinStartNativeSelectionSpoolerV1' >/dev/null || die "merged librime does not export the YunPin native spooler"
+nm -gU "$library" | grep -F 'YunPinStartReplaySpoolerV1' >/dev/null || die "merged librime does not export the Replay Lab spooler"
 
 # Build the release's three external C++ plugins again from their locked source
 # revisions.  They deliberately remain external because Squirrel's plugin

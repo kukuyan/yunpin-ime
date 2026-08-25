@@ -164,6 +164,7 @@ if ($null -eq (Get-Command go -ErrorAction SilentlyContinue)) {
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot "..\..\.."))
 $agentRoot = Join-Path $repoRoot "desktopagent"
+$replayRoot = Join-Path $repoRoot "replaylab"
 $e2eSourceRoot = Join-Path $repoRoot "platform\windows\e2e"
 $sourceMetadataPath = Join-Path $repoRoot "BUILD-SOURCE-METADATA.json"
 $isPublicSourceExport = -not (Test-Path (Join-Path $repoRoot ".git")) -and
@@ -187,8 +188,9 @@ $residentBinary = Join-Path $publicRoot "yunpin-sync-resident.exe"
 # The tray launches the same public command package through a GUI-subsystem
 # image, so opening Settings never allocates a PowerShell/console window.
 $settingsBinary = Join-Path $publicRoot "yunpin-settings.exe"
+$replayBinary = Join-Path $publicRoot "yunpin-replay-lab.exe"
 $privateBinary = Join-Path $privateRoot "yunpin-sync-agent.exe"
-Remove-Item -LiteralPath $publicBinary, $residentBinary, $settingsBinary -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $publicBinary, $residentBinary, $settingsBinary, $replayBinary -Force -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath $publicOverlayPath -PathType Leaf)) {
     throw "Same-run public Windows overlay is missing"
 }
@@ -197,6 +199,13 @@ Push-Location $agentRoot
 try {
     & go mod verify
     if ($LASTEXITCODE -ne 0) { throw "Go module verification failed" }
+} finally {
+    Pop-Location
+}
+Push-Location $replayRoot
+try {
+    & go mod verify
+    if ($LASTEXITCODE -ne 0) { throw "Replay Lab Go module verification failed" }
 } finally {
     Pop-Location
 }
@@ -214,6 +223,8 @@ try {
     Invoke-GoBuild -AgentRoot $agentRoot -Output $settingsBinary -WindowsGui
     Invoke-GoBuild -AgentRoot $agentRoot -Output $residentBinary `
         -Package "./cmd/yunpin-sync-resident" -WindowsGui
+    Invoke-GoBuild -AgentRoot $replayRoot -Output $replayBinary `
+        -Package "./cmd/yunpin-replay-lab"
     if ($hasPrivateE2ESupport) {
         Invoke-GoBuild -AgentRoot $agentRoot -Output $privateBinary -BuildTag "yunpin_pairing_private"
     }
@@ -240,11 +251,21 @@ if ($publicBaseline.ExitCode -eq 0 -or
     $publicBaseline.Output -cne "yunpin-sync-agent: unknown command") {
     throw "Public sync agent exposes the private empty-baseline E2E command"
 }
+$replayUsage = Invoke-AgentCapture -Executable $replayBinary -Arguments @("help")
+if ($replayUsage.ExitCode -eq 0 -or
+    -not $replayUsage.Output.StartsWith("error: usage: yunpin-replay-lab")) {
+    throw "Replay Lab CLI usage probe failed"
+}
 
 $licenseRoot = Join-Path $OutputRoot "desktopagent\licenses"
 & python (Join-Path $repoRoot "scripts\package_go_licenses.py") `
     --go-module $agentRoot --output $licenseRoot
 if ($LASTEXITCODE -ne 0) { throw "Sync-agent license bundle generation failed" }
+$replayLicenseRoot = Join-Path $OutputRoot "replaylab\licenses"
+& python (Join-Path $repoRoot "scripts\package_go_licenses.py") `
+    --go-module $replayRoot --go-package ./cmd/yunpin-replay-lab `
+    --artifact yunpin-replay-lab --output $replayLicenseRoot
+if ($LASTEXITCODE -ne 0) { throw "Replay Lab license bundle generation failed" }
 if ($hasPrivateE2ESupport) {
     $privateGate = Invoke-AgentCapture -Executable $privateBinary -Arguments @("pairing-invite")
     if ($privateGate.ExitCode -eq 0 -or
@@ -323,11 +344,14 @@ if (Test-Path -LiteralPath $subsystemChecker -PathType Leaf) {
     if ($LASTEXITCODE -ne 0) { throw "YunPin settings launcher is not linked for the Windows GUI subsystem" }
     & python $subsystemChecker console $publicBinary
     if ($LASTEXITCODE -ne 0) { throw "Interactive sync agent must stay console-subsystem for its JSON output" }
+    & python $subsystemChecker console $replayBinary
+    if ($LASTEXITCODE -ne 0) { throw "Replay Lab CLI must stay console-subsystem for its JSON output" }
 }
 
 Write-Host "Built public Windows sync agent: $publicBinary"
 Write-Host "Built windowless Windows sync resident: $residentBinary"
 Write-Host "Built windowless Windows settings launcher: $settingsBinary"
+Write-Host "Built Windows Replay Lab CLI: $replayBinary"
 if ($hasPrivateE2ESupport) {
     Write-Host "Built private E2E-only Windows sync agent: $privateBinary"
 } else {

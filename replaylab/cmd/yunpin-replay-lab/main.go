@@ -27,6 +27,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return usageError()
 	}
 	command := args[0]
+	switch command {
+	case "init", "start", "pause", "resume", "status", "ingest", "report", "export", "clear":
+	default:
+		// Reject an unknown command before resolving or opening the default
+		// store. A usage probe must not depend on whether this user has ever
+		// initialized Replay Lab.
+		return usageError()
+	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	defaultRoot, err := replaylab.DefaultRoot()

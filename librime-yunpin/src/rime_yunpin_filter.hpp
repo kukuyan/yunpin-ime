@@ -37,8 +37,9 @@ class YunPinFilter : public Filter {
   // implementation.
   bool PersonalDataAllowed() const;
   void DisconnectLearningNotifiers() noexcept;
-  // True while either the private overlay or the conservative short-input
-  // guard has work to do. Expression actions remain disconnected.
+  // True while the private overlay, an ordering guard, learning, or an
+  // explicitly running Replay Lab has work to do. Expression actions remain
+  // disconnected.
   bool Active() const;
 
   yunpin::SnapshotStore store_;

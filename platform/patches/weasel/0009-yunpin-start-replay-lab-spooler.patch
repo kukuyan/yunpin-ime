@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Tue, 25 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Start the opt-in Replay Lab watcher
+
+Start the merged plugin's dormant watcher for the fixed LocalAppData Replay
+Lab root. It only enables capture after an explicit yunpin-replay-lab start,
+and it is stopped before librime finalization.
+---
+ RimeWithWeasel/RimeWithWeasel.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -35,6 +35,8 @@ using namespace weasel;
+ static RimeApi* rime_api;
+ extern "C" bool YunPinStartDefaultNativeSelectionSpoolerV1() noexcept;
+ extern "C" void YunPinStopNativeSelectionSpoolerV1() noexcept;
++extern "C" bool YunPinStartDefaultReplaySpoolerV1() noexcept;
++extern "C" void YunPinStopReplaySpoolerV1() noexcept;
+ 
+ static void StartYunPinNativeSelectionSpooler() noexcept {
+   if (!YunPinStartDefaultNativeSelectionSpoolerV1()) {
+@@ -43,5 +45,12 @@ static void StartYunPinNativeSelectionSpooler() noexcept {
+   }
+ }
+ 
++static void StartYunPinReplaySpooler() noexcept {
++  if (!YunPinStartDefaultReplaySpoolerV1()) {
++    LOG(WARNING) << "YunPin Replay Lab watcher unavailable; capture remains "
++                    "disabled.";
++  }
++}
++
+ WeaselSessionId _GenerateNewWeaselSessionId(const SessionStatusMap& sm,
+                                             WeaselSessionId& next_id) {
+@@ -165,5 +174,6 @@ void RimeWithWeaselHandler::Initialize() {
+   LOG(INFO) << "Initializing la rime.";
+   rime_api->initialize(NULL);
+   StartYunPinNativeSelectionSpooler();
++  StartYunPinReplaySpooler();
+ 
+ #if 0
+@@ -204,5 +214,6 @@ void RimeWithWeaselHandler::Finalize() {
+   m_session_status_map.clear();
+   LOG(INFO) << "Finalizing la rime.";
++  YunPinStopReplaySpoolerV1();
+   YunPinStopNativeSelectionSpoolerV1();
+   rime_api->finalize();
+ }
+-- 
+2.50.1

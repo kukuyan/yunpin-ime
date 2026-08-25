@@ -21,6 +21,7 @@
 #include <rime/translation.h>
 
 #include "yunpin/native_selection_events.hpp"
+#include "yunpin/replay_native.hpp"
 
 namespace rime {
 namespace {
@@ -155,18 +156,25 @@ class YunPinMergedTranslation : public Translation {
                           std::vector<of<Candidate>> front,
                           bool suppress_long_cjk_upstream,
                           bool protect_long_corrections,
+                          std::string replay_raw_input,
+                          bool replay_allowed,
+                          std::function<void(
+                              const yunpin::ReplayComposition&)>
+                              replay_observer,
                           std::function<SessionRankingKey(std::string_view)>
                               ranking_key)
       : upstream_(std::move(upstream)),
         front_(std::move(front)),
         suppress_long_cjk_upstream_(suppress_long_cjk_upstream),
-        protect_long_corrections_(protect_long_corrections) {
+        protect_long_corrections_(protect_long_corrections),
+        replay_observer_(std::move(replay_observer)) {
     for (const auto& candidate : front_) {
       injected_text_.insert(candidate->text());
     }
     PrepareUpstreamWindow(ranking_key);
     AlignInjectedCandidatesWithUpstream();
     PromoteMostRecentSelection(ranking_key);
+    PublishReplayComposition(replay_raw_input, replay_allowed);
     RefreshExhausted();
   }
 
@@ -208,6 +216,51 @@ class YunPinMergedTranslation : public Translation {
 
  private:
   enum class Source { kFront, kWindow, kUpstream, kNone };
+
+  void PublishReplayComposition(std::string_view raw_input,
+                                bool replay_allowed) const noexcept {
+    auto& producer = yunpin::GlobalReplayNativeProducer();
+    if (!replay_allowed || !producer.enabled()) {
+      return;
+    }
+    yunpin::ReplayComposition composition;
+    yunpin::CopyReplayText(&composition.raw_input, raw_input);
+    const std::string normalized = yunpin::NormalizePinyin(raw_input);
+    yunpin::CopyReplayText(&composition.normalized_pinyin, normalized);
+    composition.caret_byte = composition.raw_input.size;
+    const auto append = [&](const an<Candidate>& candidate) {
+      if (!candidate ||
+          composition.candidate_count >= yunpin::kReplayCandidateLimit) {
+        return;
+      }
+      auto& destination =
+          composition.candidates[composition.candidate_count++];
+      yunpin::CopyReplayText(&destination.text, candidate->text());
+      destination.is_correction = candidate->is_correction();
+      destination.highlighted = composition.candidate_count == 1;
+      composition.exact_path_available =
+          composition.exact_path_available || !destination.is_correction;
+    };
+    for (const auto& candidate : front_) {
+      append(candidate);
+    }
+    for (const auto& candidate : upstream_window_) {
+      append(candidate);
+    }
+    if (composition.candidate_count == 0 ||
+        composition.candidates[0].text.size == 0) {
+      return;
+    }
+    if (replay_observer_) {
+      replay_observer_(composition);
+    }
+    yunpin::ReplayNativeEvent event;
+    event.type = yunpin::ReplayEventType::kComposition;
+    event.monotonic_us = yunpin::ReplayMonotonicMicros();
+    event.utc_unix_us = yunpin::ReplayUtcUnixMicros();
+    event.composition = composition;
+    (void)producer.TryPush(event);
+  }
 
   // Single decision point shared by Peek and Next so the two can never
   // disagree about which candidate is current.
@@ -285,6 +338,22 @@ class YunPinMergedTranslation : public Translation {
           return ranking_key(left->text()) > ranking_key(right->text());
         });
     ProtectLongCorrections();
+    // ProtectLongCorrections can remove correction entries from the bounded
+    // window. The translation would then stream later ordinary candidates
+    // into the rest of the visible page as Next() advances. Preload those
+    // exact replacements now so Replay Lab observes the same final first page
+    // the user sees; keep their upstream order and discard late corrections.
+    while (upstream_ && !upstream_->exhausted() &&
+           upstream_window_.size() < window_limit) {
+      const auto candidate = upstream_->Peek();
+      if (!candidate) {
+        break;
+      }
+      if (!Suppressed(candidate, true)) {
+        upstream_window_.push_back(candidate);
+      }
+      upstream_->Next();
+    }
     SkipSuppressedUpstream();
   }
 
@@ -398,6 +467,7 @@ class YunPinMergedTranslation : public Translation {
   std::size_t window_cursor_{0};
   bool suppress_long_cjk_upstream_{false};
   bool protect_long_corrections_{false};
+  std::function<void(const yunpin::ReplayComposition&)> replay_observer_;
 };
 
 bool IsSafeRelativePath(const std::string& path) {
@@ -430,19 +500,26 @@ bool IsSafeRelativePath(const std::string& path) {
 // callback and is released immediately afterwards.
 class YunPinSessionLearningBridge {
  public:
-  YunPinSessionLearningBridge() = default;
+  explicit YunPinSessionLearningBridge(bool learning_enabled)
+      : learning_enabled_(learning_enabled) {}
+
+  void RememberReplayComposition(
+      const yunpin::ReplayComposition& composition) noexcept {
+    replay_composition_ = composition;
+    replay_composition_available_ = true;
+  }
 
   void OnCommit(Context* context) {
     if (!context ||
         LearningContextFor(context) != yunpin::LearningContext::kNormal) {
-      learning_.BreakAdjacency();
+      BreakAdjacency();
       return;
     }
 
     const auto& composition = context->composition();
     const std::string& input = context->input();
     if (composition.empty() || composition.size() > 2) {
-      learning_.BreakAdjacency();
+      BreakAdjacency();
       return;
     }
     const Segment& segment = composition.front();
@@ -451,7 +528,7 @@ class YunPinSessionLearningBridge {
       if (placeholder.start != input.size() ||
           placeholder.end != input.size() ||
           placeholder.GetSelectedCandidate()) {
-        learning_.BreakAdjacency();
+        BreakAdjacency();
         return;
       }
     }
@@ -461,13 +538,18 @@ class YunPinSessionLearningBridge {
     if (!candidate || segment.status < Segment::kSelected ||
         segment.start != 0 || segment.end != input.size() ||
         candidate->start() != 0 || candidate->end() != input.size() ||
-        !genuine || !IsLearnableCandidate(genuine) ||
+        !genuine ||
         context->GetCommitText() != candidate->text()) {
-      learning_.BreakAdjacency();
+      BreakAdjacency();
       return;
     }
 
     const std::string normalized = yunpin::NormalizePinyin(input);
+    PublishReplayCommit(input, normalized, genuine);
+    if (!learning_enabled_ || !IsLearnableCandidate(genuine)) {
+      learning_.BreakAdjacency();
+      return;
+    }
     if (learning_.ObserveCommit(yunpin::SessionCommit{
             candidate->text(), normalized,
             yunpin::LearningContext::kNormal})) {
@@ -484,37 +566,146 @@ class YunPinSessionLearningBridge {
   }
 
   void OnContextUpdate(Context* context) {
-    learning_.ObserveComposition(
-        context ? std::string_view(context->input()) : std::string_view(),
-        LearningContextFor(context));
+    PublishReplayEdit(context);
+    if (learning_enabled_) {
+      learning_.ObserveComposition(
+          context ? std::string_view(context->input()) : std::string_view(),
+          LearningContextFor(context));
+    }
   }
 
   void OnUnhandledKey(Context* context, const KeyEvent& key_event) {
+    if (!learning_enabled_) {
+      return;
+    }
     const bool unmodified_backspace =
         key_event.modifier() == 0 && key_event.keycode() == XK_BackSpace;
     learning_.ObserveUnhandledKey(unmodified_backspace,
                                   LearningContextFor(context));
   }
 
-  void BreakAdjacency() { learning_.BreakAdjacency(); }
+  void BreakAdjacency() {
+    if (learning_enabled_) {
+      learning_.BreakAdjacency();
+    }
+    replay_previous_input_ = {};
+    replay_previous_allowed_ = false;
+    replay_composition_ = {};
+    replay_composition_available_ = false;
+  }
 
   [[nodiscard]] std::int32_t CorrectionScore(
       std::string_view pinyin, std::string_view phrase) const {
-    return learning_.CorrectionScore(pinyin, phrase);
+    return learning_enabled_ ? learning_.CorrectionScore(pinyin, phrase) : 0;
   }
 
   [[nodiscard]] std::uint64_t SelectionOrder(
       std::string_view pinyin, std::string_view phrase) const {
-    return learning_.SelectionOrder(pinyin, phrase);
+    return learning_enabled_ ? learning_.SelectionOrder(pinyin, phrase) : 0;
   }
 
   [[nodiscard]] std::vector<yunpin::HabitStat> QueryHabits(
       const yunpin::HabitQuery& query) const {
-    return learning_.QueryHabits(query);
+    return learning_enabled_ ? learning_.QueryHabits(query)
+                             : std::vector<yunpin::HabitStat>();
   }
 
  private:
+  void PublishReplayCommit(std::string_view input,
+                           std::string_view normalized,
+                           const an<Candidate>& candidate) noexcept {
+    auto& producer = yunpin::GlobalReplayNativeProducer();
+    if (!producer.enabled() || !candidate) {
+      replay_previous_input_ = {};
+      replay_previous_allowed_ = false;
+      return;
+    }
+    yunpin::ReplayComposition composition = replay_composition_;
+    if (!replay_composition_available_ ||
+        composition.raw_input.view() != input ||
+        composition.normalized_pinyin.view() != normalized) {
+      composition = {};
+      yunpin::CopyReplayText(&composition.raw_input, input);
+      yunpin::CopyReplayText(&composition.normalized_pinyin, normalized);
+      composition.caret_byte = composition.raw_input.size;
+      composition.candidate_count = 1;
+      yunpin::CopyReplayText(&composition.candidates[0].text,
+                             candidate->text());
+      composition.candidates[0].is_correction = candidate->is_correction();
+      composition.candidates[0].highlighted = true;
+      composition.exact_path_available = !candidate->is_correction();
+    }
+
+    std::uint8_t selection_rank = 0;
+    for (std::size_t index = 0; index < composition.candidate_count; ++index) {
+      const bool selected =
+          composition.candidates[index].text.view() == candidate->text();
+      composition.candidates[index].highlighted = selected;
+      if (selected) {
+        selection_rank = static_cast<std::uint8_t>(index + 1);
+      }
+    }
+    const auto now_monotonic = yunpin::ReplayMonotonicMicros();
+    const auto now_utc = yunpin::ReplayUtcUnixMicros();
+    if (selection_rank != 0) {
+      yunpin::ReplayNativeEvent selection;
+      selection.type = yunpin::ReplayEventType::kSelect;
+      selection.monotonic_us = now_monotonic;
+      selection.utc_unix_us = now_utc;
+      selection.composition = composition;
+      selection.selection_rank = selection_rank;
+      yunpin::CopyReplayText(&selection.selection_text, candidate->text());
+      (void)producer.TryPush(selection);
+    }
+    yunpin::ReplayNativeEvent commit;
+    commit.type = yunpin::ReplayEventType::kCommit;
+    commit.monotonic_us = now_monotonic + 1;
+    commit.utc_unix_us = now_utc;
+    commit.composition = composition;
+    yunpin::CopyReplayText(&commit.final_text, candidate->text());
+    (void)producer.TryPush(commit);
+    replay_previous_input_ = {};
+    replay_previous_allowed_ = false;
+    replay_composition_ = {};
+    replay_composition_available_ = false;
+  }
+
+  void PublishReplayEdit(Context* context) noexcept {
+    auto& producer = yunpin::GlobalReplayNativeProducer();
+    const bool allowed = context && producer.enabled() &&
+                         LearningContextFor(context) ==
+                             yunpin::LearningContext::kNormal;
+    const std::string_view current =
+        context ? std::string_view(context->input()) : std::string_view();
+    if (allowed && replay_previous_allowed_ &&
+        current.size() < replay_previous_input_.size) {
+      const std::size_t difference =
+          static_cast<std::size_t>(replay_previous_input_.size) -
+          current.size();
+      yunpin::ReplayNativeEvent edit;
+      edit.type = yunpin::ReplayEventType::kBackspace;
+      edit.monotonic_us = yunpin::ReplayMonotonicMicros();
+      edit.utc_unix_us = yunpin::ReplayUtcUnixMicros();
+      if (replay_composition_available_) {
+        edit.composition = replay_composition_;
+      }
+      edit.edit_count = static_cast<std::uint32_t>(
+          std::min<std::size_t>(difference, 1024));
+      (void)producer.TryPush(edit);
+    }
+    replay_previous_input_ = {};
+    replay_previous_allowed_ = allowed && !current.empty();
+    if (replay_previous_allowed_) {
+      yunpin::CopyReplayText(&replay_previous_input_, current);
+    }
+  }
+
   yunpin::SessionLearning learning_;
+  yunpin::ReplayInputText replay_previous_input_;
+  yunpin::ReplayComposition replay_composition_;
+  bool learning_enabled_{false};
+  bool replay_previous_allowed_{false};
+  bool replay_composition_available_{false};
 };
 
 YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
@@ -545,12 +736,15 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
     private_ready_ = LoadSnapshot(snapshot_path_);
   }
   // The schema is loaded before a Squirrel/Weasel host can set per-session
-  // options. Attach the bridge for an enabled YunPin overlay, then make every
-  // callback fail closed through LearningContextFor until the reviewed host
-  // supplies yunpin_learning_allowed.
-  if ((enabled_ || session_learning_enabled_) && engine_ &&
-      engine_->context()) {
-    session_learning_ = std::make_shared<YunPinSessionLearningBridge>();
+  // options and Replay Lab can be started after the IME session already
+  // exists. Attach an inert bridge to every host session. Learning keeps its
+  // schema gate, while replay callbacks stay dormant until the explicit lab
+  // watcher enables the producer. Every callback still fails closed through
+  // LearningContextFor until the reviewed host supplies
+  // yunpin_learning_allowed.
+  if (engine_ && engine_->context()) {
+    session_learning_ = std::make_shared<YunPinSessionLearningBridge>(
+        enabled_ || session_learning_enabled_);
     const std::weak_ptr<YunPinSessionLearningBridge> weak_learning =
         session_learning_;
     Context* context = engine_->context();
@@ -602,7 +796,8 @@ void YunPinFilter::DisconnectLearningNotifiers() noexcept {
 
 bool YunPinFilter::Active() const {
   return enabled_ || short_input_guard_ || long_correction_guard_ ||
-         session_learning_enabled_;
+         session_learning_enabled_ ||
+         yunpin::GlobalReplayNativeProducer().enabled();
 }
 
 bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
@@ -711,9 +906,14 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   // Tier B: the session ranking signal is derived from what the user selected,
   // so it is only consulted where reading personal data is permitted.
   const bool rank_by_session =
-      active_personal_data_allowed_ && session_learning_ && !normalized.empty();
+      active_personal_data_allowed_ &&
+      (enabled_ || session_learning_enabled_) && session_learning_ &&
+      !normalized.empty();
+  const bool replay_capture =
+      active_personal_data_allowed_ &&
+      yunpin::GlobalReplayNativeProducer().enabled();
   if (front.empty() && !suppress_long_cjk_upstream &&
-      !protect_long_corrections && !rank_by_session) {
+      !protect_long_corrections && !rank_by_session && !replay_capture) {
     return translation;
   }
   const auto ranking_key =
@@ -729,9 +929,19 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
                          learning->SelectionOrder(normalized, text)}
                    : SessionRankingKey{};
       };
+  const auto replay_observer =
+      [weak_learning = std::weak_ptr<YunPinSessionLearningBridge>(
+           session_learning_)](const yunpin::ReplayComposition& composition) {
+        if (const auto learning = weak_learning.lock()) {
+          learning->RememberReplayComposition(composition);
+        }
+      };
   return New<YunPinMergedTranslation>(std::move(translation), std::move(front),
                                       suppress_long_cjk_upstream,
                                       protect_long_corrections,
+                                      active_input_,
+                                      active_personal_data_allowed_,
+                                      replay_observer,
                                       ranking_key);
 }
 

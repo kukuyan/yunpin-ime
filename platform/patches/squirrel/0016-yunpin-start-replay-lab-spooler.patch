@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Tue, 25 Aug 2026 00:00:00 +0000
+Subject: [PATCH] Start the opt-in Replay Lab watcher
+
+Start a dormant background watcher for the fixed per-user Replay Lab root.
+The native producer remains disabled until the separately packaged
+yunpin-replay-lab CLI records an explicit running session. Stop the watcher
+before every librime finalization boundary so no background drain can outlive
+the merged plugin.
+---
+ sources/Main.swift                         | 1 +
+ sources/Squirrel-Bridging-Header.h        | 4 ++++
+ sources/SquirrelApplicationDelegate.swift | 10 ++++++++++
+ 3 files changed, 15 insertions(+)
+
+diff --git a/sources/Main.swift b/sources/Main.swift
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -148,5 +148,6 @@ struct SquirrelApp {
+       // finally run everything
+       app.run()
++      YunPinStopReplaySpoolerV1()
+       YunPinStopNativeSelectionSpoolerV1()
+       print("YunPin is quitting...")
+       rimeAPI.finalize()
+diff --git a/sources/Squirrel-Bridging-Header.h b/sources/Squirrel-Bridging-Header.h
+--- a/sources/Squirrel-Bridging-Header.h
++++ b/sources/Squirrel-Bridging-Header.h
+@@ -10,2 +10,6 @@ bool YunPinStartNativeSelectionSpoolerV1(
+     const char* absolute_utf8_directory);
+ void YunPinStopNativeSelectionSpoolerV1(void);
++
++bool YunPinStartReplaySpoolerV1(
++    const char* absolute_utf8_root);
++void YunPinStopReplaySpoolerV1(void);
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -286,6 +286,15 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+       if !started {
+         print("YunPin native selection spooler unavailable; events remain local-only.")
+       }
++      let replayRoot = applicationSupport
++        .appendingPathComponent("YunPin", isDirectory: true)
++        .appendingPathComponent("ReplayLab", isDirectory: true)
++      let replayStarted = replayRoot.path(percentEncoded: false).withCString {
++        YunPinStartReplaySpoolerV1($0)
++      }
++      if !replayStarted {
++        print("YunPin Replay Lab watcher unavailable; capture remains disabled.")
++      }
+     } else {
+       print("YunPin native selection spool directory unavailable; events remain local-only.")
+     }
+@@ -468,6 +476,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+       return false
+     }
+     config?.close()
++    YunPinStopReplaySpoolerV1()
+     YunPinStopNativeSelectionSpoolerV1()
+     rimeAPI.finalize()
+     return true
+-- 
+2.50.1

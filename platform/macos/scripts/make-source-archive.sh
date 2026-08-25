@@ -42,7 +42,7 @@ git -C "$REPO_ROOT" archive HEAD -- \
   platform/LICENSE-BOUNDARIES.md platform/upstream-lock.json \
   platform/macos platform/rime platform/patches/squirrel \
   platform/patches/librime-1.16 \
-  desktopagent localstore protocol syncclient \
+  desktopagent localstore protocol replaylab syncclient \
   engine librime-yunpin | \
   tar -C "$staging/YunPin-IME/YunPin" -xf -
 

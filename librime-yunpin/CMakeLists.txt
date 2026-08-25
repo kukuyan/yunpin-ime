@@ -26,6 +26,7 @@ set(yunpin_core_src
   "${YUNPIN_ENGINE_ROOT}/src/correction_learning.cpp"
   src/native_selection_events.cpp
   src/replay_native.cpp
+  src/replay_spooler.cpp
   src/snapshot_store.cpp
   src/session_learning.cpp
   src/typo_correction.cpp
@@ -132,6 +133,31 @@ else()
   )
   add_test(NAME yunpin_replay_native_tests
     COMMAND yunpin_replay_native_tests)
+
+  add_executable(yunpin_replay_spooler_tests
+    tests/replay_spooler_test.cpp
+  )
+  target_link_libraries(yunpin_replay_spooler_tests PRIVATE
+    yunpin_snapshot
+    Threads::Threads
+  )
+  add_test(NAME yunpin_replay_spooler_tests
+    COMMAND yunpin_replay_spooler_tests)
+
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  find_program(YUNPIN_GO_EXECUTABLE NAMES go)
+  if(Python3_Interpreter_FOUND AND YUNPIN_GO_EXECUTABLE)
+    add_test(NAME yunpin_replay_host_e2e
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/replay_host_e2e.py"
+        --fixture "$<TARGET_FILE:yunpin_replay_spooler_tests>"
+        --go "${YUNPIN_GO_EXECUTABLE}"
+        --module "${CMAKE_CURRENT_SOURCE_DIR}/../replaylab"
+    )
+  else()
+    message(WARNING
+      "Python 3 or Go is unavailable; synthetic Replay Lab host/report E2E is disabled")
+  endif()
 
   add_executable(yunpin_typo_correction_tests
     tests/typo_correction_test.cpp
