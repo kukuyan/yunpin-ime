@@ -11,12 +11,12 @@ YunPin records the following upstreams as commit-pinned Git submodules. A normal
 - [phrase-pinyin-data](https://github.com/mozillazg/phrase-pinyin-data), MIT.
 - [ImeWlConverter](https://github.com/studyzy/imewlconverter), GPL-3.0.
 
-The macOS development preview also embeds Squirrel's pinned universal librime
-1.16.0 runtime (BSD-3-Clause) and Sparkle 2.6.2 framework (MIT), and rebuilds
-librime with Boost 1.89.0 headers (BSL-1.0). Their source/release archive URLs
-and verified SHA-256 values are recorded in
-`platform/macos/dependencies.lock.json`; the matching Squirrel nested gitlinks
-are checked by the macOS tests. Sparkle's upstream update feed is disabled in
+The macOS development preview embeds Squirrel's pinned universal librime
+1.16.0 runtime (BSD-3-Clause) and rebuilds librime with Boost 1.89.0 headers
+(BSL-1.0). Their source/release archive URLs and verified SHA-256 values are
+recorded in `platform/macos/dependencies.lock.json`; the matching Squirrel
+nested gitlinks are checked by the macOS tests. The Squirrel patch series
+removes its upstream automatic-update framework and update entry points from
 YunPin builds.
 
 The same preview rebuilds the external librime-lua (BSD-3-Clause),

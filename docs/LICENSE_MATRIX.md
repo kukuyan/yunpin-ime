@@ -12,7 +12,6 @@
 | THUOCL | MIT | Preserve copyright and license notice. |
 | phrase-pinyin-data | MIT | Preserve copyright and license notice. |
 | ImeWlConverter | GPL-3.0 | Separate offline converter process; not linked into Apache components. |
-| Sparkle 2.6.2 in the macOS preview | MIT | Squirrel dependency; exact archive hash is locked, automatic checks and the upstream feed are disabled. |
 | Boost 1.84.0 in the Windows native build | BSL-1.0 | The Windows lock records its official source archive URL/SHA-256; its source and license are bundled. |
 | Boost 1.89.0 in the macOS native build | BSL-1.0 | The macOS source archive URL and SHA-256 are locked and its license is bundled. |
 | Squirrel preset Rime data packages | LGPL-3.0 | Exact Bopomofo, Cangjie, Essay, Luna Pinyin, Prelude, Stroke and Terra Pinyin sources are locked and included in the macOS corresponding-source archive. |

@@ -93,8 +93,8 @@ Every release candidate must also pass the offline supply-chain gates:
 
 The release SBOM is SPDX 2.3 JSON generated only from the committed dependency
 locks. It covers the YunPin repository, Windows and macOS frontends, locked
-Rime/data upstreams and macOS nested components, both platform Boost versions,
-Sparkle, and every distinct external or local `module@version` in
+Rime/data upstreams and macOS nested components, both platform Boost versions
+and every distinct external or local `module@version` in
 `third_party/go-modules.lock.json`. It never scans the worktree, build outputs,
 or personal dictionaries and never performs network access. Generate and
 verify it with:

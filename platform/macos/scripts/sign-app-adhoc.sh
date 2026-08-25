@@ -18,27 +18,6 @@ sign_adhoc() {
   codesign --force --sign - --timestamp=none "$target"
 }
 
-sparkle="$app/Contents/Frameworks/Sparkle.framework"
-if [[ -d "$sparkle" ]]; then
-  sparkle_version="$(cd "$sparkle/Versions/Current" && pwd -P)"
-  xpc_root="$sparkle_version/XPCServices"
-
-  # Sign from the innermost executable outwards. Signing a containing bundle
-  # first would invalidate its resource seal when a child is re-signed.
-  while IFS= read -r executable; do
-    sign_adhoc "$executable"
-  done < <(find "$xpc_root" -type f -perm -111 -path '*/Contents/MacOS/*' | sort)
-
-  while IFS= read -r bundle; do
-    sign_adhoc "$bundle"
-  done < <(find "$xpc_root" -type d -name '*.xpc' | sort)
-
-  updater="$sparkle_version/Updater.app"
-  [[ -d "$updater" ]] && sign_adhoc "$updater"
-  [[ -f "$sparkle_version/Autoupdate" ]] && sign_adhoc "$sparkle_version/Autoupdate"
-  sign_adhoc "$sparkle"
-fi
-
 frameworks="$app/Contents/Frameworks"
 while IFS= read -r dylib; do
   sign_adhoc "$dylib"
