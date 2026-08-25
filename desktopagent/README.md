@@ -101,9 +101,19 @@ to loopback or private IP literals; HTTPS remains preferred.
 ## Native learning bridge
 
 The host adapter drains a fixed in-process queue into private, atomically
-renamed v1 JSON files. The agent accepts at most 2,048 files and 8 MiB, consumes
-at most 256 per pass, and commits each event ID in the same SQLite transaction
-as its phrase update. The receipt table is pruned to a fixed bound.
+renamed v2 JSON files. V2 carries either one normal selection or one proven
+wrong/replacement pair, plus a local date bucket; legacy v1 selection files
+remain readable. The agent accepts at most 2,048 files and 8 MiB, consumes at
+most 256 per pass, and commits each event ID in the same SQLite transaction as
+its phrase update. The receipt table is pruned to a fixed bound.
+
+Word-level learning evidence is sealed with a key derived from the existing
+local data key before entering SQLite; no plaintext habit sidecar exists and no
+new secret is introduced. At most 50,000 encrypted events are retained. A
+snapshot rebuild aggregates them into a bounded signed correction score, so an
+explicit correction such as `办公是` to `办公室` remains effective after the IME
+or desktop agent restarts. These local correction events are not added to the
+sync outbox.
 
 Before consumption, the existing reviewed `private.tsv` is migrated exactly
 once to immutable `baseline.tsv`. If both are missing, ingestion fails closed.
@@ -177,7 +187,8 @@ maintenance/export boundary and its platform acknowledgement contract.
 
 ## Vocabulary management
 
-`phrase add|pin|unpin|remove|list` are the supported way to correct the personal
+`phrase add|pin|unpin|remove|list|report` are the supported way to inspect or
+correct the personal
 vocabulary. Before them the only reachable lever was hand-editing
 `yunpin/private.tsv`, which is a generated snapshot the next rebuild overwrites,
 so corrections did not survive.
@@ -192,9 +203,16 @@ An explicit add carries a use count of one. A count of zero is filtered out of
 the generated snapshot, so without it the phrase would never become a candidate.
 
 `phrase list` reports counts only. Phrases and readings require `--show-text`,
-which also prints a warning to stderr: that flag is the single place this tool
-puts personal vocabulary on a terminal. No vocabulary reaches the run-event log,
-the health record, or `status` through any of these commands.
+which also prints a warning to stderr. The explicit `--show-text` flags are the
+only paths that put personal vocabulary or habits on a terminal. No vocabulary
+reaches the run-event log, the health record, or `status` through any of these
+commands.
+
+`phrase report [--since YYYY-MM-DD] [--corrections-only]` reads the encrypted
+learning history and defaults to aggregate counts grouped by local date.
+Word-level entries require its own explicit `--show-text` opt-in and emit the
+same stderr disclosure warning; `--limit` bounds only that opt-in entry list,
+not the aggregate totals.
 
 ## Local settings page
 

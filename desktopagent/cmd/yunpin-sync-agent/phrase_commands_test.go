@@ -48,6 +48,23 @@ func TestPhraseSubcommandsAreDispatched(t *testing.T) {
 	}
 }
 
+func TestPhraseReportKeepsHabitsBehindAnExplicitFlag(t *testing.T) {
+	source, err := os.ReadFile("phrase_commands.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, expected := range []string{
+		`case "report":`, `set.String("since", "",`,
+		`set.Bool("corrections-only", false,`,
+		`IncludeText: *showText`, "prints personal learning habits",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("phrase report is missing privacy or query contract %q", expected)
+		}
+	}
+}
+
 func TestPhraseMutationsUseTheSharedOperationLock(t *testing.T) {
 	source, err := os.ReadFile("phrase_commands.go")
 	if err != nil {

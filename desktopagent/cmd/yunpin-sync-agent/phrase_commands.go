@@ -21,7 +21,7 @@ import (
 // a manual edit lands in the same mutation-plus-outbox transaction and converges
 // on the other devices by the ordinary merge rules.
 
-const phraseUsage = "usage: yunpin-sync-agent phrase <add|pin|unpin|remove|list> [options]"
+const phraseUsage = "usage: yunpin-sync-agent phrase <add|pin|unpin|remove|list|report> [options]"
 
 func phraseTarget(set *flag.FlagSet) (*string, *string) {
 	return set.String("text", "", "phrase text"),
@@ -43,9 +43,40 @@ func commandPhrase(ctx context.Context, defaults desktopagent.Paths, arguments [
 		return commandPhraseRemove(ctx, defaults, arguments[1:])
 	case "list":
 		return commandPhraseList(ctx, defaults, arguments[1:])
+	case "report":
+		return commandPhraseReport(ctx, defaults, arguments[1:])
 	default:
 		return errors.New(phraseUsage)
 	}
+}
+
+func commandPhraseReport(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("phrase report", flag.ContinueOnError)
+	common := addCommonFlags(set, defaults)
+	since := set.String("since", "", "include local learning on or after YYYY-MM-DD")
+	correctionsOnly := set.Bool("corrections-only", false, "show only corrected and replacement entries")
+	limit := set.Int("limit", 50, "maximum entries to show when text is included")
+	showText := set.Bool("show-text", false,
+		"include personal phrases and readings; without this the report is aggregate only")
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	_, agent, err := common.components()
+	if err != nil {
+		return err
+	}
+	if *showText {
+		_, _ = fmt.Fprintln(os.Stderr,
+			"yunpin-sync-agent: --show-text prints personal learning habits; do not paste this output into a report")
+	}
+	report, err := agent.HabitReport(ctx, desktopagent.HabitReportQuery{
+		SinceDate: *since, CorrectionsOnly: *correctionsOnly,
+		Limit: *limit, IncludeText: *showText,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(report)
 }
 
 func commandPhraseAdd(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
@@ -154,5 +185,5 @@ func commandPhraseList(ctx context.Context, defaults desktopagent.Paths, argumen
 
 // phraseCommandNames lists the subcommands for the top-level usage string.
 func phraseCommandNames() string {
-	return strings.Join([]string{"add", "pin", "unpin", "remove", "list"}, "|")
+	return strings.Join([]string{"add", "pin", "unpin", "remove", "list", "report"}, "|")
 }
