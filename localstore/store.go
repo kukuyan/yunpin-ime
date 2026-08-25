@@ -116,7 +116,13 @@ func openStore(ctx context.Context, path string, dataKey, idKey []byte, deviceID
 	if strings.Contains(dsn, "?") {
 		separator = "&"
 	}
-	dsn += separator + "_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)"
+	// Every database/sql transaction starts as BEGIN IMMEDIATE. The in-process
+	// mutation mutex cannot serialize the resident, sync-once and vocabulary CLI
+	// when they open the same database from different processes. Reserving the
+	// single WAL writer before a transaction takes its read snapshot lets the
+	// existing busy timeout wait for that writer instead of failing later with
+	// SQLITE_BUSY_SNAPSHOT while promoting a deferred transaction.
+	dsn += separator + "_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err

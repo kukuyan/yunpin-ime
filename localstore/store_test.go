@@ -311,6 +311,65 @@ func TestConcurrentSelectionsDoNotLoseCounts(t *testing.T) {
 	}
 }
 
+func TestIndependentStoresSerializeConcurrentImports(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "private.db")
+	dataKey := bytes.Repeat([]byte{0x21}, 32)
+	idKey := bytes.Repeat([]byte{0x43}, 32)
+	left, err := OpenForDevice(ctx, path, dataKey, idKey, deviceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = left.Close() })
+	right, err := OpenForDevice(ctx, path, dataKey, idKey, deviceA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = right.Close() })
+
+	// Store.mutation is intentionally per Store, just as it is per process in
+	// production. Releasing each pair together exercises two independent SQLite
+	// connections whose read-then-write import transactions contend for WAL's
+	// single writer. BEGIN IMMEDIATE must serialize them without a
+	// SQLITE_BUSY_SNAPSHOT promotion failure.
+	const rounds = 16
+	for round := 0; round < rounds; round++ {
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		for side, store := range []*Store{left, right} {
+			go func(side int, store *Store) {
+				<-start
+				_, err := store.ImportRimeUserDB(ctx, []RimeUserDBObservation{{
+					Phrase: Phrase{
+						Text:   fmt.Sprintf("合成跨连接并发-%02d-%d", round, side),
+						Pinyin: fmt.Sprintf("he cheng kua lian jie bing fa %02d %d", round, side),
+					},
+					Commits: 1,
+				}}, nil)
+				results <- err
+			}(side, store)
+		}
+		close(start)
+		var concurrentErrors []error
+		for side := 0; side < 2; side++ {
+			if err := <-results; err != nil {
+				concurrentErrors = append(concurrentErrors, err)
+			}
+		}
+		if len(concurrentErrors) != 0 {
+			t.Fatalf("round %d concurrent imports failed: %v", round, concurrentErrors)
+		}
+	}
+
+	snapshot, err := left.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Phrases) != rounds*2 {
+		t.Fatalf("concurrent imports stored %d phrases, want %d", len(snapshot.Phrases), rounds*2)
+	}
+}
+
 func TestCRDTOfflineMergeRemoveWinsAndExplicitReadd(t *testing.T) {
 	ctx := context.Background()
 	left, _ := openDeviceStore(t, deviceA)
