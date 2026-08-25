@@ -170,6 +170,29 @@ foreach ($patchEntry in @($lock.weasel.patches) + @($lock.librime.patches)) {
     }
 }
 
+# Hashing the locked entries proves every locked patch is intact, but says
+# nothing about a patch sitting in the directory that the lock does not mention.
+# macOS compares the directory listing against the lock for exactly that reason,
+# and it is what caught a directory full of file-sync conflict copies. Windows
+# enumerated the lock only, so an unlocked patch stayed invisible here.
+foreach ($patchSet in @(
+    @{ Directory = "platform\patches\weasel"; Entries = @($lock.weasel.patches) },
+    @{ Directory = "platform\patches\librime-1.17"; Entries = @($lock.librime.patches) }
+)) {
+    $patchDirectory = Join-Path $repoRoot $patchSet.Directory
+    if (-not (Test-Path -LiteralPath $patchDirectory -PathType Container)) {
+        throw "Locked patch directory is missing: $($patchSet.Directory)"
+    }
+    $onDisk = @(Get-ChildItem -LiteralPath $patchDirectory -File -Filter "*.patch" |
+        Sort-Object Name | ForEach-Object { $_.Name })
+    $locked = @($patchSet.Entries | ForEach-Object { [IO.Path]::GetFileName($_.path) } | Sort-Object)
+    if ($onDisk.Count -ne $locked.Count -or
+        @(Compare-Object -ReferenceObject $locked -DifferenceObject $onDisk -CaseSensitive).Count -ne 0) {
+        throw ("Patch directory $($patchSet.Directory) does not match the lock. " +
+            "On disk: $($onDisk -join ', '). Locked: $($locked -join ', ').")
+    }
+}
+
 Reset-GeneratedDirectory -Path $weaselSource -AllowedParent $OutputRoot
 Export-GitTree -Checkout $weaselCheckout -Destination $weaselSource -ScratchRoot $scratchRoot
 

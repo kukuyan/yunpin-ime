@@ -794,6 +794,35 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("$residentDestination", enable_agent)
         self.assertIn("yunpin-sync-resident.exe", enable_agent)
 
+    def test_source_archive_binds_every_subtree_to_the_recorded_commit(self) -> None:
+        """engine/ must come from the git tree like every other subtree.
+
+        BUILD-SOURCE-METADATA.json records $repoCommit. When engine/ was copied
+        from the working tree instead of exported from git, that recorded commit
+        and the shipped engine sources could disagree, and any untracked file
+        under engine/ would have been packaged with them.
+        """
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(encoding="utf-8")
+        self.assertIn('-Tree "engine"', package)
+        self.assertNotIn(
+            'Copy-TreeContent -Source (Join-Path (Join-Path $repoRoot "engine")',
+            package,
+        )
+        self.assertIn("repositoryCommit = $repoCommit", package)
+
+    def test_windows_patch_directories_must_match_the_lock(self) -> None:
+        """Hashing the locked entries does not notice an unlocked patch.
+
+        macOS compares the whole directory listing against its lock, which is
+        what made it refuse to build from a tree full of file-sync conflict
+        copies. Windows enumerated the lock only.
+        """
+        build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(encoding="utf-8")
+        self.assertIn("does not match the lock", build)
+        self.assertIn('Directory = "platform\\patches\\weasel"', build)
+        self.assertIn('Directory = "platform\\patches\\librime-1.17"', build)
+        self.assertIn("Compare-Object -ReferenceObject $locked", build)
+
     def test_pe_subsystem_checker_reads_the_optional_header(self) -> None:
         checker = (ROOT / "scripts" / "check_pe_subsystem.py").read_text(encoding="utf-8")
         self.assertIn("IMAGE_SUBSYSTEM_WINDOWS_GUI = 2", checker)
