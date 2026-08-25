@@ -27,6 +27,26 @@ def run(*args: str, cwd: Path = ROOT) -> str:
     return completed.stdout.decode("utf-8", errors="replace").strip()
 
 
+def require_initialized_submodule(relative: str, root: Path = ROOT) -> Path:
+    checkout = (root / relative).resolve()
+    completed = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    top_level = completed.stdout.decode("utf-8", errors="replace").strip()
+    if (
+        completed.returncode != 0
+        or not top_level
+        or Path(top_level).resolve() != checkout
+    ):
+        raise AssertionError(
+            f"submodule is not initialized: {relative}; "
+            "run git submodule update --init --recursive"
+        )
+    return checkout
+
+
 class WindowsClientTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -45,7 +65,11 @@ class WindowsClientTests(unittest.TestCase):
             ("librime", "third_party/librime"),
             ("rimeIce", "third_party/rime-ice"),
         ):
-            self.assertEqual(run("git", "-C", relative, "rev-parse", "HEAD"), self.lock[name]["commit"])
+            checkout = require_initialized_submodule(relative)
+            self.assertEqual(
+                run("git", "-C", str(checkout), "rev-parse", "HEAD"),
+                self.lock[name]["commit"],
+            )
         for relative, expected in self.lock["librime"]["dependencies"].items():
             checkout = ROOT / "third_party" / "librime" / relative
             tree_row = run(
@@ -70,8 +94,9 @@ class WindowsClientTests(unittest.TestCase):
             patch = ROOT / row["path"]
             self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(), row["sha256"])
 
+        weasel = require_initialized_submodule("third_party/weasel")
         archive = subprocess.run(
-            ["git", "-C", str(ROOT / "third_party" / "weasel"), "archive", "HEAD"],
+            ["git", "-C", str(weasel), "archive", "HEAD"],
             check=True,
             stdout=subprocess.PIPE,
         ).stdout
@@ -283,8 +308,9 @@ class WindowsClientTests(unittest.TestCase):
                 self.assertIn("commit_connection_.disconnect()", patch_text)
                 self.assertIn("filters_.clear()", patch_text)
 
+        librime = require_initialized_submodule("third_party/librime")
         librime_archive = subprocess.run(
-            ["git", "-C", str(ROOT / "third_party" / "librime"), "archive", "HEAD"],
+            ["git", "-C", str(librime), "archive", "HEAD"],
             check=True,
             stdout=subprocess.PIPE,
         ).stdout
@@ -307,6 +333,36 @@ class WindowsClientTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("corrector_component", translator)
+
+    def test_uninitialized_submodule_is_not_mistaken_for_superproject(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="yunpin-submodule-preflight-") as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "init", "-q", str(root)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            checkout = root / "third_party" / "weasel"
+            checkout.mkdir(parents=True)
+
+            with self.assertRaisesRegex(
+                AssertionError,
+                r"submodule is not initialized: third_party/weasel; "
+                r"run git submodule update --init --recursive",
+            ):
+                require_initialized_submodule("third_party/weasel", root)
+
+            subprocess.run(
+                ["git", "init", "-q", str(checkout)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(
+                checkout.resolve(),
+                require_initialized_submodule("third_party/weasel", root),
+            )
 
     def test_build_stages_real_merged_plugin_for_both_architectures(self) -> None:
         build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(encoding="utf-8")
