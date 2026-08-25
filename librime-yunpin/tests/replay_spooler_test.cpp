@@ -106,9 +106,14 @@ void TestExplicitStartControlsBackgroundSpool() {
         "paused producer accepted a later callback");
   YunPinStopReplaySpoolerV1();
 
-  std::ifstream input(output, std::ios::binary);
-  const std::string recorded((std::istreambuf_iterator<char>(input)),
-                             std::istreambuf_iterator<char>());
+  std::string recorded;
+  {
+    std::ifstream input(output, std::ios::binary);
+    Check(input.is_open(), "native replay trace could not be reopened");
+    recorded.assign(std::istreambuf_iterator<char>(input),
+                    std::istreambuf_iterator<char>());
+    Check(!input.bad(), "native replay trace could not be read completely");
+  }
   Check(recorded.find("\"type\":\"composition_snapshot\"") !=
             std::string::npos,
         "native spool omitted the composition frame");
