@@ -442,9 +442,9 @@ func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr
 // syncOnceWithBundle performs one round with credential material already held
 // by its caller. Explicit operations use SyncOnce and therefore retain their
 // load-per-command behavior. The resident loads once after login and keeps the
-// decoded bundle only in process memory until termination, so locking the login
-// Keychain cannot strand later background rounds. The resident owner zeros the
-// bundle when its process exits.
+// decoded bundle only in process memory until termination, so temporary
+// unavailability of the platform store cannot strand later background rounds.
+// The resident owner zeros the bundle when its process exits.
 func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBundleV1) (summary SyncSummary, returnErr error) {
 	if bundle == nil {
 		return SyncSummary{}, errors.New("decoded resident credential is required")

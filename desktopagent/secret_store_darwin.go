@@ -198,7 +198,11 @@ func NewPlatformSecretStore(options PlatformSecretStoreOptions) (SecretStore, er
 	if err := validateStoreOptions(options); err != nil {
 		return nil, err
 	}
-	return &keychainSecretStore{service: options.Service}, nil
+	store, err := newPrivateFileSecretStore(options.Directory, &keychainSecretStore{service: options.Service})
+	if err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func keychainStrings(service, profile string) (*C.char, *C.char, error) {

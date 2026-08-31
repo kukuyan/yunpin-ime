@@ -198,8 +198,8 @@ func (agent Agent) Run(ctx context.Context, options RunOptions) error {
 		return err
 	}
 	// Claim the single-resident lock before touching the platform credential
-	// store. A duplicate launch must be rejected without asking Keychain for the
-	// same item or presenting a second authorization request.
+	// store. A duplicate launch must be rejected without performing a second
+	// credential load.
 	residentLock, err := acquireProcessLock(options.ResidentLockPath)
 	if err != nil {
 		return err
@@ -218,14 +218,13 @@ func (agent Agent) withResidentBundle(
 	if use == nil {
 		return errors.New("resident credential consumer is required")
 	}
-	// The macOS preview uses the local login Keychain. That Keychain can lock
-	// again after the user session starts, while a resident must continue to
-	// synchronize without displaying an authorization dialog every minute.
+	// A resident must continue to synchronize without reopening platform
+	// credential storage every minute.
 	// Load the existing credential once at resident startup, retain it only in
 	// this process, and wipe it when the resident terminates. If startup happens
-	// while the Keychain is unavailable, retry without UI in this same process;
-	// do not exit into a launchd restart loop. No credential is created or
-	// replaced.
+	// while the platform store is unavailable, retry without UI in this same
+	// process; do not exit into a launchd restart loop. No credential is created
+	// or replaced.
 	backoff := options.MinBackoff
 	var bundle CredentialBundleV1
 	for {

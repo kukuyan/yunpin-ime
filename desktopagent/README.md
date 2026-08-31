@@ -8,11 +8,12 @@ Rime personal snapshot. Keyboard handlers never perform disk or network I/O.
 
 `CredentialBundleV1` contains the device bearer token, Ed25519 seed, X25519
 private key, per-device SQLite key, account object-ID key, epoch keys, and the
-authenticated verification roster. It is stored only in the current user's
-local, non-synchronizable macOS login Keychain or a current-user Windows DPAPI
-record below `%LOCALAPPDATA%`. The ad-hoc signed command-line preview targets
-the file-based login Keychain because Apple's data protection Keychain requires
-provisioning-profile-authorized access-group entitlements.
+authenticated verification roster. On macOS it is stored in an atomic `0600`
+file below the current user's `0700` YunPin state directory; on Windows it is a
+current-user DPAPI record below `%LOCALAPPDATA%`. An existing macOS installation
+may import its default device credential from the legacy login Keychain once,
+but only during an interactive load. Background loads never access Keychain,
+and a deletion tombstone prevents an old Keychain item from being restored.
 
 The recovery root is never stored. First-device provisioning is deliberately
 two phase:
@@ -20,9 +21,9 @@ two phase:
 1. `prepare-account --confirm-display-recovery-key` generates everything with
    zero network access, displays the account ID and recovery root, and waits
    for the user to type `SAVED`. Only after that acknowledgement does it save
-   a resumable `<profile>.provisioning` journal in Keychain/DPAPI. The journal
-   contains recovery authentication and an already sealed recovery keyring,
-   but not the recovery root.
+   a resumable `<profile>.provisioning` journal in the platform-private store.
+   The journal contains recovery authentication and an already sealed recovery
+   keyring, but not the recovery root.
 2. `init-account --confirm-saved-recovery-key` reuses that exact identity for
    idempotent create/keyring/seal/local-commit transitions. Process death or a
    lost response can be resumed. The pending journal is removed only after the
@@ -47,18 +48,18 @@ Before `init-account`, run `register --username <name>` (first use) or
 `login --username <name>` (another desktop). Passwords are read only from an
 interactive terminal, never flags, files, shell history, or agent output. The
 opaque login session is endpoint-bound and saved only in the current user's
-Keychain/DPAPI secret store. `claim-account
+platform-private store. `claim-account
 --confirm-claim-existing-account` adopts an already provisioned account using
-the active device credential already protected by that same OS store; it never
-asks for recovery material or any additional terminal input. Normal
+the active device credential already protected by that same platform store; it
+never asks for recovery material or any additional terminal input. Normal
 `sync-once` and resident `run` continue to use the independent device
 credential, so password-session expiry cannot stop background sync.
 
 ## Two-device pairing preview
 
-The v2 pairing state machine keeps creator and joining journals only in
-Keychain/DPAPI. The invitation carries a high-entropy out-of-band secret; the
-relay receives only a domain-separated verifier. Join and claim proofs bind
+The v2 pairing state machine keeps creator and joining journals only in the
+platform-private store. The invitation carries a high-entropy out-of-band
+secret; the relay receives only a domain-separated verifier. Join and claim proofs bind
 both client-generated device identities, bearer/rollback capabilities, and
 Ed25519/X25519 keys to the complete transcript. The transferred account keys
 and exact two-device roster are encrypted with PSK+X25519 and the roster is

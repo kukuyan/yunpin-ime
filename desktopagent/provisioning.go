@@ -453,8 +453,8 @@ func ensureEncryptedStore(ctx context.Context, path string, bundle CredentialBun
 
 // PrepareAccount is deliberately network-free. It delivers the recovery root
 // through the required confirmation callback exactly once, then commits a
-// resumable pending journal to Keychain/DPAPI and returns without the root. The
-// root itself is never part of that journal.
+// resumable pending journal to the platform-private store and returns without
+// the root. The root itself is never part of that journal.
 func PrepareAccount(ctx context.Context, options InitAccountOptions) (PrepareAccountResult, error) {
 	if options.Secrets == nil || options.Random == nil {
 		return PrepareAccountResult{}, errors.New("OS secret store and cryptographic random source are required")
