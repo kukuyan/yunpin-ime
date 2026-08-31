@@ -134,10 +134,16 @@ func aggregate(input io.Reader, hour time.Time) (hourlyReport, error) {
 	totals := counts{}
 	byRoute := make(map[string]*counts)
 	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 1024), maxInputLineBytes)
+	// Scanner needs room for the delimiter (and for an EOF probe when the final
+	// line has no delimiter). Enforce the documented payload limit ourselves so
+	// a line of exactly maxInputLineBytes remains valid.
+	scanner.Buffer(make([]byte, 1024), maxInputLineBytes+2)
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
+		if len(scanner.Bytes()) > maxInputLineBytes {
+			return hourlyReport{}, fmt.Errorf("invalid input at line %d", lineNumber)
+		}
 		line := scanner.Text()
 		if !isAccessLike(line) {
 			continue
