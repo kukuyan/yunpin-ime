@@ -324,6 +324,17 @@ func TestRimeMaintenanceBusyIsDeferredWithoutGrowingFailureBackoff(t *testing.T)
 	}
 }
 
+func TestRimeMaintenanceUnavailableIsFailedWithBackoff(t *testing.T) {
+	options := RunOptions{Interval: time.Minute, MinBackoff: time.Second, MaxBackoff: 16 * time.Second}
+	event, delay, nextBackoff := classifyRunResult(SyncSummary{},
+		fmt.Errorf("wrapped host response: %w", ErrRimeMaintenanceUnavailable), options, 8*time.Second)
+	if event.Code != "sync_failed" || event.FailureClass != localstore.SyncFailureLocalStore ||
+		event.Successful || delay != 8*time.Second || nextBackoff != options.MaxBackoff {
+		t.Fatalf("unavailable host IPC did not use failed-run backoff: event=%#v delay=%v next=%v",
+			event, delay, nextBackoff)
+	}
+}
+
 func TestSyncFailureClassificationUsesTypedRedactedBoundaries(t *testing.T) {
 	checks := []struct {
 		err  error

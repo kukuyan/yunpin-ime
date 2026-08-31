@@ -42,7 +42,7 @@
       },
       {
         "path": "platform/patches/weasel/0005-yunpin-defer-userdb-sync-while-composing.patch",
-        "sha256": "e9239361a5a52894ddd6c9fe895d1b4a35dd28b7708318fd94feb4f54908cc47"
+        "sha256": "9f1fd9358e3790db36e98da48a603409fb255a50acd83a161536eee5a0e99d97"
       },
       {
         "path": "platform/patches/weasel/0006-yunpin-preserve-session-identity-across-maintenance.patch",

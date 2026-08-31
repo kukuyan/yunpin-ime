@@ -14,12 +14,17 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const windowsRimeMaintenanceBusyExitCode = 75
+const (
+	windowsRimeMaintenanceUnavailableExitCode = 69
+	windowsRimeMaintenanceBusyExitCode        = 75
+)
 
 func windowsRimeMaintenanceExitCodeError(code int) error {
 	switch code {
 	case 0:
 		return nil
+	case windowsRimeMaintenanceUnavailableExitCode:
+		return ErrRimeMaintenanceUnavailable
 	case windowsRimeMaintenanceBusyExitCode:
 		return ErrRimeMaintenanceBusy
 	default:
@@ -56,8 +61,9 @@ func invokeFixedWindowsRimeMaintenance(ctx context.Context, path, nonce string) 
 	var exitError *exec.ExitError
 	if errors.As(err, &exitError) {
 		// Exit status is read from the exact child process started from the fixed
-		// platform path. This is the Windows authenticated busy response; no
-		// writable acknowledgement file or PATH lookup participates.
+		// platform path. The closed contract distinguishes initial IPC
+		// unavailability from an authenticated busy response; no writable
+		// acknowledgement file or PATH lookup participates.
 		return windowsRimeMaintenanceExitCodeError(exitError.ExitCode())
 	}
 	return err
