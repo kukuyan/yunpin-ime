@@ -939,6 +939,60 @@ class WindowsClientTests(unittest.TestCase):
         )
         self.assertIn("repositoryCommit = $repoCommit", package)
 
+    def test_source_subtree_export_keeps_root_eol_attributes(self) -> None:
+        """Subtree archives must retain the repository root attributes.
+
+        ``git archive HEAD:path`` treats the subtree as an attribute root. On a
+        Windows host with ``core.autocrlf=true``, that converted LF-locked patch
+        blobs to CRLF and made the source archive fail Build-Preview.ps1's raw
+        patch hash gate. Archive with a root-relative pathspec, then strip the
+        retained leading path components during extraction.
+        """
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '"archive", "--format=tar", "--output=$archive", "HEAD", "--", $Tree',
+            package,
+        )
+        self.assertIn('("--strip-components=" + $treeComponents.Count)', package)
+        self.assertNotIn('("HEAD:" + $Tree)', package)
+
+        archive = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.autocrlf=true",
+                "archive",
+                "--format=tar",
+                "HEAD",
+                "--",
+                "platform/patches/weasel",
+                "platform/patches/librime-1.17",
+                "platform/windows/scripts/Build-Preview.ps1",
+            ],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as stream:
+            for row in self.lock["weasel"]["patches"] + self.lock["librime"]["patches"]:
+                exported = stream.extractfile(row["path"])
+                self.assertIsNotNone(exported)
+                self.assertEqual(
+                    hashlib.sha256(exported.read()).hexdigest(), row["sha256"]
+                )
+
+            # Do not solve the patch problem with a global LF rewrite: explicit
+            # Windows-script CRLF attributes must still be honored.
+            script = stream.extractfile(
+                "platform/windows/scripts/Build-Preview.ps1"
+            )
+            self.assertIsNotNone(script)
+            script_bytes = script.read()
+            self.assertIn(b"\r\n", script_bytes)
+            self.assertNotIn(b"\n", script_bytes.replace(b"\r\n", b""))
+
     def test_windows_patch_directories_must_match_the_lock(self) -> None:
         """Hashing the locked entries does not notice an unlocked patch.
 

@@ -82,11 +82,23 @@ function Export-GitSubtree {
         [Parameter(Mandatory = $true)][string]$ScratchRoot
     )
     Reset-GeneratedDirectory -Path $Destination -AllowedParent (Split-Path $Destination -Parent)
+    $treeComponents = @($Tree -split '[/\\]' | Where-Object { $_ -ne "" })
+    if ($treeComponents.Count -eq 0 -or
+        @($treeComponents | Where-Object { $_ -eq "." -or $_ -eq ".." }).Count -ne 0) {
+        throw "Refusing to export an invalid Git subtree: $Tree"
+    }
     $archive = Join-Path $ScratchRoot (([IO.Path]::GetFileName($Destination)) + "-" + [guid]::NewGuid().ToString("N") + ".tar")
+    # Archive from the repository root so the root .gitattributes remains in
+    # scope. Archiving HEAD:$Tree drops those attributes; with core.autocrlf on
+    # Windows, that silently rewrites LF-locked patch files to CRLF and makes
+    # the corresponding-source archive fail its own dependency hash gate.
     Invoke-Checked -FilePath "git" -ArgumentList @(
-        "-C", $Checkout, "archive", "--format=tar", "--output=$archive", ("HEAD:" + $Tree)
+        "-C", $Checkout, "archive", "--format=tar", "--output=$archive", "HEAD", "--", $Tree
     )
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @("-xf", $archive, "-C", $Destination)
+    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
+        "-xf", $archive, "-C", $Destination,
+        ("--strip-components=" + $treeComponents.Count)
+    )
     Remove-Item -LiteralPath $archive -Force
 }
 
