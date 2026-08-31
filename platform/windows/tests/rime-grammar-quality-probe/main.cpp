@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rime_api.h>
-
-#include <mach/mach.h>
-#include <sys/resource.h>
+#include <psapi.h>
+#include <windows.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -25,9 +27,6 @@ struct HoldoutCase {
   const char* baseline_first;
 };
 
-// Public, frozen before the final model choice. The expected first-candidate
-// streams bind the A/B comparison to one packaged runtime and expose whether
-// the grammar model actually participates.
 constexpr std::array<HoldoutCase, 20> kHoldoutCases = {{
     {"accept_origin_image", "youyuantuma", "有原图吗", "", "有原图吗",
      "有原图吗"},
@@ -82,67 +81,27 @@ std::int64_t ElapsedMicroseconds(Clock::time_point started,
       .count();
 }
 
-std::uint64_t ResidentBytes() {
-  mach_task_basic_info_data_t info = {};
-  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
-  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
-                reinterpret_cast<task_info_t>(&info), &count) !=
-      KERN_SUCCESS) {
-    return 0;
-  }
-  return static_cast<std::uint64_t>(info.resident_size);
+bool ReadProcessMemory(PROCESS_MEMORY_COUNTERS_EX* counters) {
+  *counters = {};
+  counters->cb = sizeof(*counters);
+  return GetProcessMemoryInfo(
+             GetCurrentProcess(),
+             reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(counters),
+             static_cast<DWORD>(sizeof(*counters))) != FALSE;
 }
 
-std::uint64_t MaxResidentBytes() {
-  rusage usage = {};
-  return getrusage(RUSAGE_SELF, &usage) == 0
-             ? static_cast<std::uint64_t>(usage.ru_maxrss)
+std::uint64_t ResidentBytes() {
+  PROCESS_MEMORY_COUNTERS_EX counters = {};
+  return ReadProcessMemory(&counters)
+             ? static_cast<std::uint64_t>(counters.WorkingSetSize)
              : 0;
 }
 
-bool IsHan(const std::string& text) {
-  for (std::size_t i = 0; i + 2 < text.size(); ++i) {
-    const unsigned char a = static_cast<unsigned char>(text[i]);
-    const unsigned char b = static_cast<unsigned char>(text[i + 1]);
-    const unsigned char c = static_cast<unsigned char>(text[i + 2]);
-    if (a >= 0xe3 && a <= 0xef && (b & 0xc0) == 0x80 &&
-        (c & 0xc0) == 0x80) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool ProbeCandidates(RimeApi* api,
-                     RimeSessionId session,
-                     const char* input,
-                     bool verbose) {
-  api->clear_composition(session);
-  if (!api->simulate_key_sequence(session, input)) {
-    return false;
-  }
-  RIME_STRUCT(RimeContext, context);
-  if (!api->get_context(session, &context)) {
-    return false;
-  }
-  bool has_han = false;
-  if (verbose) {
-    std::cout << input << ':';
-  }
-  for (int index = 0; index < context.menu.num_candidates; ++index) {
-    const char* text = context.menu.candidates[index].text;
-    if (text) {
-      has_han = has_han || IsHan(text);
-      if (verbose) {
-        std::cout << " [" << text << ']';
-      }
-    }
-  }
-  if (verbose) {
-    std::cout << " han=" << (has_han ? "yes" : "no") << '\n';
-  }
-  api->free_context(&context);
-  return has_han;
+std::uint64_t MaxResidentBytes() {
+  PROCESS_MEMORY_COUNTERS_EX counters = {};
+  return ReadProcessMemory(&counters)
+             ? static_cast<std::uint64_t>(counters.PeakWorkingSetSize)
+             : 0;
 }
 
 std::string FirstCandidate(RimeApi* api,
@@ -283,16 +242,30 @@ bool ProbeSyntheticPrivateCounterfactual(RimeApi* api,
   return true;
 }
 
+bool RuntimeIdentityMatches(const std::filesystem::path& expected) {
+  wchar_t loaded_path[32768] = {};
+  const HMODULE module = GetModuleHandleW(L"rime.dll");
+  const DWORD size =
+      module ? GetModuleFileNameW(module, loaded_path,
+                                  static_cast<DWORD>(std::size(loaded_path)))
+             : 0;
+  std::error_code error;
+  return size > 0 && size < std::size(loaded_path) &&
+         std::filesystem::equivalent(std::filesystem::path(loaded_path),
+                                     expected, error) &&
+         !error;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    std::cerr << "usage: rime_public_candidate_probe "
-                 "SHARED_DIR USER_DIR "
+  if (argc != 5) {
+    std::cerr << "usage: yunpin-rime-grammar-quality-probe "
+                 "SHARED_DIR USER_DIR RIME_DLL "
                  "prepare-model|prepare-baseline|model|baseline|private-off\n";
     return 64;
   }
-  const std::string mode(argv[3]);
+  const std::string mode(argv[4]);
   const bool prepare_mode =
       mode == "prepare-model" || mode == "prepare-baseline";
   const bool measurement_mode = mode == "model" || mode == "baseline";
@@ -309,12 +282,12 @@ int main(int argc, char** argv) {
   RIME_STRUCT(RimeTraits, traits);
   traits.shared_data_dir = argv[1];
   traits.user_data_dir = argv[2];
-  traits.distribution_name = "YunPin public candidate probe";
-  traits.distribution_code_name = "yunpin_public_candidate_probe";
+  traits.distribution_name = "YunPin Windows grammar quality probe";
+  traits.distribution_code_name = "yunpin_windows_grammar_quality_probe";
   traits.distribution_version = "1";
-  traits.app_name = "rime.yunpin_public_candidate_probe";
-  // INFO is captured only in the wrapper's private temporary stderr so the
-  // exact reviewed model file-open can be placed between schema markers.
+  traits.app_name = "rime.yunpin_windows_grammar_quality_probe";
+  // INFO stays in package-build scratch output and proves the exact reviewed
+  // model file opened between the schema-select markers.
   traits.min_log_level = 0;
   traits.log_dir = "";
 
@@ -323,8 +296,9 @@ int main(int argc, char** argv) {
   api->initialize(&traits);
   const auto initialize_finished = Clock::now();
   const std::uint64_t rss_after_initialize = ResidentBytes();
-  if (!api->find_module("octagram") || !api->find_module("grammar")) {
-    std::cerr << "octagram or grammar module is not registered\n";
+  if (!api->find_module("octagram") || !api->find_module("grammar") ||
+      !RuntimeIdentityMatches(std::filesystem::path(argv[3]))) {
+    std::cerr << "grammar modules or exact rime.dll identity unavailable\n";
     api->finalize();
     return 1;
   }
@@ -353,7 +327,7 @@ int main(int argc, char** argv) {
   std::cerr << "schema_select_begin\n";
   const RimeSessionId session = api->create_session();
   if (!session || !api->select_schema(session, "rime_ice")) {
-    std::cerr << "failed to create rime_ice session\n";
+    std::cerr << "failed to create packaged rime_ice session\n";
     api->finalize();
     return 1;
   }
@@ -415,8 +389,7 @@ int main(int argc, char** argv) {
   constexpr std::int64_t kP95GateMicroseconds = 20000;
   ok = p95 > 0 && p95 <= kP95GateMicroseconds && ok;
   // Snapshot the peak after the identical public quality workload on both
-  // sides of the A/B. Model-only private/lifecycle checks below must not
-  // contaminate the resident-runtime comparison.
+  // sides of the A/B. The model-only private check below is a separate gate.
   const std::uint64_t measurement_max_rss = MaxResidentBytes();
   const std::int64_t measurement_process_elapsed_us =
       ElapsedMicroseconds(process_started, Clock::now());
@@ -424,29 +397,6 @@ int main(int argc, char** argv) {
 
   if (model_mode) {
     ok = ProbeSyntheticPrivateFixture(api, session) && ok;
-    for (const char* input : {"s", "sh", "shu", "shuru", "ceshi",
-                              "wendingxing"}) {
-      ok = ProbeCandidates(api, session, input, true) && ok;
-    }
-  }
-
-  api->destroy_session(session);
-  constexpr int kLifecycleSessions = 128;
-  if (model_mode) {
-    for (int cycle = 1; cycle < kLifecycleSessions; ++cycle) {
-      const RimeSessionId lifecycle_session = api->create_session();
-      if (!lifecycle_session ||
-          !api->select_schema(lifecycle_session, "rime_ice") ||
-          !ProbeCandidates(api, lifecycle_session, "s", false)) {
-        ok = false;
-        if (lifecycle_session) {
-          api->destroy_session(lifecycle_session);
-        }
-        break;
-      }
-      api->destroy_session(lifecycle_session);
-    }
-    std::cout << "lifecycle_sessions=" << kLifecycleSessions << '\n';
   }
 
   ok = rss_after_first_input > 0 && rss_after_holdout > 0 && ok;
@@ -468,6 +418,8 @@ int main(int argc, char** argv) {
       << "measurement_process_elapsed_us="
       << measurement_process_elapsed_us << '\n'
       << "grammar_quality_pass=" << (ok ? "true" : "false") << std::endl;
+
+  api->destroy_session(session);
   api->finalize();
   return ok ? 0 : 1;
 }

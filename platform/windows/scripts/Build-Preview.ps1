@@ -2,12 +2,15 @@
 [CmdletBinding()]
 param(
     [string]$OutputRoot = "",
-    [switch]$SkipPackage
+    [switch]$SkipPackage,
+    [switch]$Offline,
+    [switch]$TestGrammarCacheSafety
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$script:YunPinOfflineBuild = $Offline.IsPresent
 
 function Invoke-Checked {
     param(
@@ -103,11 +106,393 @@ function Get-VerifiedDownload {
         }
         Remove-Item -LiteralPath $Destination -Force
     }
+    if ($script:YunPinOfflineBuild) {
+        throw "Offline build is missing a locked local dependency: $Destination"
+    }
     Invoke-WebRequest -Uri $Uri -OutFile $Destination -UseBasicParsing
     $observed = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash.ToLowerInvariant()
     if ($observed -ne $Sha256.ToLowerInvariant()) {
         Remove-Item -LiteralPath $Destination -Force
         throw "SHA-256 mismatch for $Uri"
+    }
+}
+
+function Assert-LockedFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Sha256,
+        [Parameter(Mandatory = $true)][long]$Size,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Label is missing or not a regular file: $Path"
+    }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label must not be a reparse point: $Path"
+    }
+    if ($item.Length -ne $Size) {
+        throw "$Label size mismatch: expected $Size, observed $($item.Length)"
+    }
+    $observed = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    if ($observed -cne $Sha256.ToLowerInvariant()) {
+        throw "$Label SHA-256 mismatch"
+    }
+}
+
+function Assert-OnlineGrammarAssetMetadata {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$DependencyLock,
+        [Parameter(Mandatory = $true)][string]$ScratchRoot
+    )
+    if ($script:YunPinOfflineBuild) {
+        throw "Offline build attempted mutable grammar release metadata access"
+    }
+    $metadataRoot = Join-Path $ScratchRoot "grammar-release-metadata"
+    Reset-GeneratedDirectory -Path $metadataRoot -AllowedParent $ScratchRoot
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        "X-GitHub-Api-Version" = "2022-11-28"
+    }
+    try {
+        $releaseJson = Join-Path $metadataRoot "release.json"
+        $tagJson = Join-Path $metadataRoot "tag.json"
+        Invoke-WebRequest `
+            -Uri "https://api.github.com/repos/amzxyz/RIME-LMDG/releases/tags/LTS" `
+            -Headers $headers -OutFile $releaseJson -UseBasicParsing
+        Invoke-WebRequest `
+            -Uri "https://api.github.com/repos/amzxyz/RIME-LMDG/git/ref/tags/LTS" `
+            -Headers $headers -OutFile $tagJson -UseBasicParsing
+        Invoke-Checked -FilePath "python" -ArgumentList @(
+            (Join-Path $RepositoryRoot "scripts\verify_grammar_asset_metadata.py"),
+            "--lock", $DependencyLock,
+            "--release-json", $releaseJson,
+            "--tag-json", $tagJson
+        )
+    } finally {
+        if (Test-Path -LiteralPath $metadataRoot) {
+            Remove-Item -LiteralPath $metadataRoot -Recurse -Force
+        }
+    }
+}
+
+function Assert-SafeCacheTemporaryFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedDirectory,
+        [switch]$RequireEmpty
+    )
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullDirectory = [IO.Path]::GetFullPath($ExpectedDirectory).TrimEnd("\")
+    if (-not [string]::Equals(
+            [IO.Path]::GetDirectoryName($fullPath),
+            $fullDirectory,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Locked cache temporary file escaped its cache directory"
+    }
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        throw "Locked cache temporary file is missing or not a regular file"
+    }
+    $item = Get-Item -LiteralPath $fullPath -Force
+    if ($item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Locked cache temporary file must not be a reparse point"
+    }
+    if ($RequireEmpty -and $item.Length -ne 0) {
+        throw "New locked cache temporary file is unexpectedly non-empty"
+    }
+}
+
+function New-ExclusiveCacheTemporaryFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $fullDestination = [IO.Path]::GetFullPath($Destination)
+    $directory = [IO.Path]::GetDirectoryName($fullDestination)
+    $directoryItem = Get-Item -LiteralPath $directory -Force
+    if (-not $directoryItem.PSIsContainer -or
+        ($directoryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label cache directory must be an ordinary directory"
+    }
+    $leaf = [IO.Path]::GetFileName($fullDestination)
+    foreach ($attempt in 1..16) {
+        $stream = $null
+        $candidate = Join-Path $directory (
+            "." + $leaf + "." + [guid]::NewGuid().ToString("N") + ".part"
+        )
+        try {
+            $stream = [IO.File]::Open(
+                $candidate,
+                [IO.FileMode]::CreateNew,
+                [IO.FileAccess]::Write,
+                [IO.FileShare]::None
+            )
+            Assert-SafeCacheTemporaryFile -Path $candidate `
+                -ExpectedDirectory $directory -RequireEmpty
+            return [pscustomobject]@{
+                Path = $candidate
+                Stream = $stream
+            }
+        } catch [IO.IOException] {
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            continue
+        } catch {
+            if ($null -ne $stream) {
+                $stream.Dispose()
+            }
+            throw
+        }
+    }
+    throw "Could not create an exclusive temporary file for $Label"
+}
+
+function Install-LockedCacheResource {
+    param(
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$Bundled,
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$Sha256,
+        [Parameter(Mandatory = $true)][long]$Size,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [switch]$VerifyOnlineGrammarMetadata,
+        [string]$RepositoryRoot = "",
+        [string]$DependencyLock = "",
+        [string]$ScratchRoot = ""
+    )
+    if (Test-Path -LiteralPath $Destination) {
+        Assert-LockedFile -Path $Destination -Sha256 $Sha256 `
+            -Size $Size -Label "$Label cache"
+        return
+    }
+
+    $temporaryHandle = New-ExclusiveCacheTemporaryFile `
+        -Destination $Destination -Label $Label
+    $temporary = [string]$temporaryHandle.Path
+    $temporaryStream = [IO.FileStream]$temporaryHandle.Stream
+    $temporaryDirectory = [IO.Path]::GetDirectoryName($temporary)
+    try {
+        Assert-SafeCacheTemporaryFile -Path $temporary `
+            -ExpectedDirectory $temporaryDirectory -RequireEmpty
+        if (Test-Path -LiteralPath $Bundled) {
+            Assert-LockedFile -Path $Bundled -Sha256 $Sha256 `
+                -Size $Size -Label "Source-bundled $Label"
+            $sourceStream = [IO.File]::Open(
+                $Bundled,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                [IO.FileShare]::Read
+            )
+            try {
+                $sourceStream.CopyTo($temporaryStream)
+            } finally {
+                $sourceStream.Dispose()
+            }
+        } else {
+            if ($VerifyOnlineGrammarMetadata) {
+                Assert-OnlineGrammarAssetMetadata `
+                    -RepositoryRoot $RepositoryRoot `
+                    -DependencyLock $DependencyLock `
+                    -ScratchRoot $ScratchRoot
+            }
+            if ($script:YunPinOfflineBuild) {
+                throw "Offline build is missing a locked local dependency: $Bundled"
+            }
+            Assert-SafeCacheTemporaryFile -Path $temporary `
+                -ExpectedDirectory $temporaryDirectory -RequireEmpty
+            $httpClient = [Net.Http.HttpClient]::new()
+            $httpResponse = $null
+            $httpStream = $null
+            try {
+                $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+                    "YunPin-locked-dependency-fetch/1")
+                $httpResponse = $httpClient.GetAsync(
+                    $Uri,
+                    [Net.Http.HttpCompletionOption]::ResponseHeadersRead
+                ).GetAwaiter().GetResult()
+                $null = $httpResponse.EnsureSuccessStatusCode()
+                $httpStream = $httpResponse.Content.ReadAsStreamAsync(
+                ).GetAwaiter().GetResult()
+                $httpStream.CopyTo($temporaryStream)
+            } finally {
+                if ($null -ne $httpStream) { $httpStream.Dispose() }
+                if ($null -ne $httpResponse) { $httpResponse.Dispose() }
+                $httpClient.Dispose()
+            }
+        }
+        $temporaryStream.Flush($true)
+        $temporaryStream.Dispose()
+        $temporaryStream = $null
+        Assert-LockedFile -Path $temporary -Sha256 $Sha256 `
+            -Size $Size -Label "Staged $Label"
+        Assert-SafeCacheTemporaryFile -Path $temporary `
+            -ExpectedDirectory $temporaryDirectory
+
+        # File.Move(source, destination) is a same-directory atomic rename and
+        # the two-argument overload refuses to replace a destination that
+        # appeared while the bytes were being staged.
+        [IO.File]::Move($temporary, $Destination)
+        $temporary = ""
+        try {
+            Assert-LockedFile -Path $Destination -Sha256 $Sha256 `
+                -Size $Size -Label "$Label cache"
+        } catch {
+            # The non-clobbering move proves this destination was the file
+            # published by this invocation. Never leave it behind if the
+            # post-publication identity check fails.
+            if (Test-Path -LiteralPath $Destination) {
+                [IO.File]::Delete($Destination)
+            }
+            throw
+        }
+    } finally {
+        if ($null -ne $temporaryStream) {
+            $temporaryStream.Dispose()
+        }
+        if (-not [string]::IsNullOrEmpty($temporary) -and
+            (Test-Path -LiteralPath $temporary)) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+}
+
+function Invoke-GrammarCacheSafetySelfTest {
+    $root = Join-Path ([IO.Path]::GetTempPath()) (
+        "yunpin-grammar-cache-safety-" + [guid]::NewGuid().ToString("N")
+    )
+    $cache = Join-Path $root "cache"
+    $sources = Join-Path $root "sources"
+    $outside = Join-Path $root "outside"
+    New-Item -ItemType Directory -Path $cache, $sources, $outside | Out-Null
+    try {
+        $source = Join-Path $sources "synthetic.gram"
+        [IO.File]::WriteAllText(
+            $source,
+            "fixed public grammar cache safety fixture`n",
+            [Text.Encoding]::UTF8
+        )
+        $sourceSize = (Get-Item -LiteralPath $source).Length
+        $sourceSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash
+        $outsideSentinel = Join-Path $outside "sentinel.txt"
+        [IO.File]::WriteAllText($outsideSentinel, "unchanged`n", [Text.Encoding]::UTF8)
+
+        $destination = Join-Path $cache "synthetic.gram"
+        $predictablePartial = $destination + ".part"
+        New-Item -ItemType Junction -Path $predictablePartial `
+            -Target $outside | Out-Null
+        Install-LockedCacheResource -Destination $destination `
+            -Bundled $source -Uri "https://example.invalid/not-used" `
+            -Sha256 $sourceSha -Size $sourceSize -Label "Synthetic grammar model"
+        Assert-LockedFile -Path $destination -Sha256 $sourceSha `
+            -Size $sourceSize -Label "Synthetic grammar model cache"
+        $outsideNames = @(Get-ChildItem -LiteralPath $outside -Force).Name
+        if ((@($outsideNames) -join ",") -cne "sentinel.txt") {
+            throw "Predictable partial reparse point received an out-of-cache write"
+        }
+
+        $reparseDestination = Join-Path $cache "destination-reparse.gram"
+        New-Item -ItemType Junction -Path $reparseDestination `
+            -Target $outside | Out-Null
+        $reparseRejected = $false
+        try {
+            Install-LockedCacheResource -Destination $reparseDestination `
+                -Bundled $source -Uri "https://example.invalid/not-used" `
+                -Sha256 $sourceSha -Size $sourceSize -Label "Reparse fixture"
+        } catch {
+            $reparseRejected = $true
+        }
+        if (-not $reparseRejected) {
+            throw "Locked cache destination reparse point was accepted"
+        }
+
+        $tampered = Join-Path $sources "tampered.gram"
+        [IO.File]::WriteAllText($tampered, "tampered`n", [Text.Encoding]::UTF8)
+        $tamperedDestination = Join-Path $cache "tampered.gram"
+        $tamperRejected = $false
+        try {
+            Install-LockedCacheResource -Destination $tamperedDestination `
+                -Bundled $tampered -Uri "https://example.invalid/not-used" `
+                -Sha256 $sourceSha -Size $sourceSize -Label "Tampered fixture"
+        } catch {
+            $tamperRejected = $true
+        }
+        if (-not $tamperRejected -or (Test-Path -LiteralPath $tamperedDestination)) {
+            throw "Tampered locked cache resource was published"
+        }
+        if (@(Get-ChildItem -LiteralPath $cache -Force -File |
+                Where-Object { $_.Name -like ".tampered.gram.*.part" }).Count -ne 0) {
+            throw "Failed locked cache staging left a temporary file"
+        }
+        Write-Host "Windows grammar cache exclusive-temp and reparse tests passed"
+    } finally {
+        if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force
+        }
+    }
+}
+
+function Assert-SourceManifest {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd("\")
+    $rootPrefix = $rootFull + "\"
+    $manifestPath = Join-Path $rootFull "SOURCE-MANIFEST.sha256"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Offline source export is missing SOURCE-MANIFEST.sha256"
+    }
+    $manifestItem = Get-Item -LiteralPath $manifestPath -Force
+    if (($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Offline source manifest must not be a reparse point"
+    }
+
+    $expected = New-Object 'Collections.Generic.Dictionary[string,string]' `
+        ([StringComparer]::Ordinal)
+    foreach ($line in [IO.File]::ReadAllLines($manifestPath)) {
+        if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
+            throw "Offline source manifest contains a malformed row"
+        }
+        $digest = $Matches[1]
+        $relative = $Matches[2]
+        if ($relative.Contains("\") -or [IO.Path]::IsPathRooted($relative) -or
+            @($relative.Split('/')) -contains ".." -or
+            $relative -ceq "SOURCE-MANIFEST.sha256" -or
+            $expected.ContainsKey($relative)) {
+            throw "Offline source manifest contains an unsafe or duplicate path"
+        }
+        $path = [IO.Path]::GetFullPath((Join-Path $rootFull $relative.Replace('/', '\')))
+        if (-not $path.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Offline source manifest path is missing or escapes its root: $relative"
+        }
+        $item = Get-Item -LiteralPath $path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Offline source manifest path is a reparse point: $relative"
+        }
+        $observed = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+        if ($observed -cne $digest) {
+            throw "Offline source manifest digest mismatch: $relative"
+        }
+        $expected.Add($relative, $digest)
+    }
+
+    $actualCount = 0
+    Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force | ForEach-Object {
+        if ($_.FullName -cne $manifestPath) {
+            if (($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Offline source export contains a reparse-point file"
+            }
+            $relative = $_.FullName.Substring($rootPrefix.Length).Replace('\', '/')
+            if (-not $expected.ContainsKey($relative)) {
+                throw "Offline source export contains an unmanifested file: $relative"
+            }
+            $actualCount++
+        }
+    }
+    if ($actualCount -ne $expected.Count) {
+        throw "Offline source manifest does not cover every source file"
     }
 }
 
@@ -117,11 +502,34 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if (-not [Environment]::Is64BitOperatingSystem) {
     throw "The preview build requires a 64-bit Windows host"
 }
+if ($TestGrammarCacheSafety) {
+    Invoke-GrammarCacheSafetySelfTest
+    return
+}
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot "..\..\.."))
 $lockPath = Join-Path $repoRoot "platform\windows\dependencies.lock.json"
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+
+if ($script:YunPinOfflineBuild -and
+    (Test-Path (Join-Path $repoRoot ".git"))) {
+    throw "Offline source acceptance must run from an extracted Git-free archive"
+}
+
+if (-not (Test-Path (Join-Path $repoRoot ".git"))) {
+    $sourceMetadataPath = Join-Path $repoRoot "BUILD-SOURCE-METADATA.json"
+    if (-not (Test-Path -LiteralPath $sourceMetadataPath -PathType Leaf)) {
+        throw "Git-free build requires BUILD-SOURCE-METADATA.json"
+    }
+    Assert-SourceManifest -Root $repoRoot
+    $sourceMetadata = Get-Content -LiteralPath $sourceMetadataPath -Raw | ConvertFrom-Json
+    $lockedGrammarJson = $lock.grammarModel | ConvertTo-Json -Depth 8 -Compress
+    $sourceGrammarJson = $sourceMetadata.grammarModel | ConvertTo-Json -Depth 8 -Compress
+    if ($sourceGrammarJson -cne $lockedGrammarJson) {
+        throw "Offline source grammar model metadata differs from its dependency lock"
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repoRoot "build\windows"
@@ -136,6 +544,21 @@ $weaselSource = Join-Path $OutputRoot "weasel-src"
 foreach ($directory in @($cacheRoot, $depsRoot, $scratchRoot)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
 }
+
+$grammarModelPath = Join-Path $cacheRoot ([string]$lock.grammarModel.filename)
+$bundledGrammarModelPath = Join-Path $repoRoot ("sources\" + [string]$lock.grammarModel.filename)
+Install-LockedCacheResource -Destination $grammarModelPath `
+    -Bundled $bundledGrammarModelPath -Uri $lock.grammarModel.url `
+    -Sha256 $lock.grammarModel.sha256 -Size $lock.grammarModel.size `
+    -Label "Grammar model" -VerifyOnlineGrammarMetadata `
+    -RepositoryRoot $repoRoot -DependencyLock $lockPath -ScratchRoot $scratchRoot
+
+$grammarLicensePath = Join-Path $cacheRoot ([string]$lock.grammarModel.licenseFilename)
+$bundledGrammarLicensePath = Join-Path $repoRoot ("sources\" + [string]$lock.grammarModel.licenseFilename)
+Install-LockedCacheResource -Destination $grammarLicensePath `
+    -Bundled $bundledGrammarLicensePath -Uri $lock.grammarModel.licenseUrl `
+    -Sha256 $lock.grammarModel.licenseSha256 `
+    -Size $lock.grammarModel.licenseSize -Label "Grammar model license"
 
 $weaselCheckout = Join-Path $repoRoot "third_party\weasel"
 $librimeCheckout = Join-Path $repoRoot "third_party\librime"
@@ -525,6 +948,29 @@ try {
                 throw "Rime module probe omitted $expectedProbeRow for $($probeTarget.Name)"
             }
         }
+    }
+
+    # Compile the quality probe against the exact x64 import library. Packaging
+    # executes it later against the completed rime-data directory and the
+    # runtime rime.dll, after the locked model is copied into place.
+    $qualityProbeSource = Join-Path $repoRoot "platform\windows\tests\rime-grammar-quality-probe"
+    $qualityProbeBuild = Join-Path $scratchRoot "rime-grammar-quality-probe-x64"
+    Reset-GeneratedDirectory -Path $qualityProbeBuild -AllowedParent $scratchRoot
+    Invoke-Checked -FilePath "cmake.exe" -ArgumentList @(
+        "-S", $qualityProbeSource,
+        "-B", $qualityProbeBuild,
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64",
+        "-DRIME_INCLUDE_DIR=$(Join-Path $weaselSource 'include')",
+        "-DRIME_IMPORT_LIBRARY=$(Join-Path $weaselSource 'lib64\rime.lib')"
+    )
+    Invoke-Checked -FilePath "cmake.exe" -ArgumentList @(
+        "--build", $qualityProbeBuild, "--config", "Release", "--parallel"
+    )
+    if (-not (Test-Path `
+        (Join-Path $qualityProbeBuild "Release\yunpin-rime-grammar-quality-probe.exe") `
+        -PathType Leaf)) {
+        throw "Rime grammar quality probe executable is missing"
     }
     Invoke-Checked -FilePath "cmd.exe" -ArgumentList @("/d", "/c", "call build.bat opencc")
 

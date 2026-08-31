@@ -16,6 +16,7 @@
 | Boost 1.84.0 in the Windows native build | BSL-1.0 | The Windows lock records its official source archive URL/SHA-256; its source and license are bundled. |
 | Boost 1.89.0 in the macOS native build | BSL-1.0 | The macOS source archive URL and SHA-256 are locked and its license is bundled. |
 | Squirrel preset Rime data packages | LGPL-3.0 | Exact Bopomofo, Cangjie, Essay, Luna Pinyin, Prelude, Stroke and Terra Pinyin sources are locked and included in the macOS corresponding-source archive. |
+| Full `wanxiang-lts-zh-hans` grammar model | CC-BY-4.0 | The Rime Ice recipe's `RIME-LMDG` LTS asset and snapshot-scoped license are independently size/SHA-256 locked in identical macOS and Windows records, bundled on both platforms, and retained in corresponding source without entering Git. |
 
 The root `LICENSE` applies only where no narrower license is declared. A desktop binary combining Apache code with GPL frontend code is distributed under GPL-3.0-compatible terms. The iOS implementation must remain independent from GPL desktop code.
 

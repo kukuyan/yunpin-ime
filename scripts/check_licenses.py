@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -26,6 +27,43 @@ APPROVED_LICENSES = {
     "MIT",
     "MPL-2.0",
 }
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def check_grammar_model_license(errors: list[str]) -> None:
+    paths = (
+        ROOT / "platform" / "macos" / "dependencies.lock.json",
+        ROOT / "platform" / "windows" / "dependencies.lock.json",
+    )
+    try:
+        models = [json.loads(path.read_text(encoding="utf-8"))["grammarModel"] for path in paths]
+    except (OSError, KeyError, json.JSONDecodeError, TypeError) as error:
+        errors.append(f"grammar model license lock is unreadable: {type(error).__name__}")
+        return
+    if models[0] != models[1]:
+        errors.append("grammar model license metadata differs between platform locks")
+        return
+    model = models[0]
+    if model.get("license") != "CC-BY-4.0":
+        errors.append("grammar model must retain the reviewed CC-BY-4.0 declaration")
+    snapshot = model.get("sourceSnapshotAtAssetUpdate")
+    expected_url = (
+        "https://raw.githubusercontent.com/amzxyz/RIME-LMDG/"
+        f"{snapshot}/LICENSE"
+    )
+    if model.get("licenseUrl") != expected_url:
+        errors.append(
+            "grammar model license source is not bound to its reviewed observed snapshot"
+        )
+    if not SHA256_PATTERN.fullmatch(str(model.get("licenseSha256", ""))):
+        errors.append("grammar model license lacks an exact SHA-256")
+    if not isinstance(model.get("licenseSize"), int) or model["licenseSize"] <= 0:
+        errors.append("grammar model license lacks an exact positive byte size")
+    notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    matrix = (ROOT / "docs" / "LICENSE_MATRIX.md").read_text(encoding="utf-8")
+    for label, document in (("third-party notices", notices), ("license matrix", matrix)):
+        if "wanxiang-lts-zh-hans" not in document or "CC-BY-4.0" not in document:
+            errors.append(f"grammar model is missing from {label}")
 
 
 def parse_go_sum(path: Path) -> set[tuple[str, str]]:
@@ -193,6 +231,7 @@ def check_go_license_lock(errors: list[str]) -> int:
 def main() -> int:
     data = json.loads(LOCK.read_text(encoding="utf-8"))
     errors: list[str] = []
+    check_grammar_model_license(errors)
     for item in data.get("upstreams", []):
         if len(item.get("commit", "")) != 40:
             errors.append(f"{item.get('name')}: commit is not a full SHA")

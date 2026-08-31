@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 
@@ -14,6 +15,26 @@ ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_TOP_LEVEL = {".git", ".cache", "build", "dist", "third_party"}
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
+UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+GRAMMAR_MODEL_FIELDS = {
+    "name",
+    "filename",
+    "repository",
+    "release",
+    "immutable",
+    "assetId",
+    "assetUpdatedAt",
+    "tagRef",
+    "sourceSnapshotAtAssetUpdate",
+    "url",
+    "sha256",
+    "size",
+    "license",
+    "licenseFilename",
+    "licenseUrl",
+    "licenseSha256",
+    "licenseSize",
+}
 
 
 def _read_json(path: Path, errors: list[str]) -> dict:
@@ -200,18 +221,108 @@ def check_actions(errors: list[str]) -> int:
     return count
 
 
+def check_grammar_model(errors: list[str]) -> int:
+    locks = (
+        ROOT / "platform" / "macos" / "dependencies.lock.json",
+        ROOT / "platform" / "windows" / "dependencies.lock.json",
+    )
+    try:
+        models = [json.loads(path.read_text(encoding="utf-8"))["grammarModel"] for path in locks]
+    except (OSError, KeyError, json.JSONDecodeError, TypeError) as error:
+        errors.append(f"grammar model lock is unreadable: {type(error).__name__}")
+        return 0
+    if models[0] != models[1]:
+        errors.append("macOS and Windows grammarModel objects must be byte-for-byte equivalent")
+        return 0
+    model = models[0]
+    if not isinstance(model, dict) or set(model) != GRAMMAR_MODEL_FIELDS:
+        errors.append("grammarModel has missing or unexpected fields")
+        return 0
+
+    name = model.get("name")
+    filename = model.get("filename")
+    repository = model.get("repository")
+    release = model.get("release")
+    tag_ref = model.get("tagRef")
+    source_snapshot = model.get("sourceSnapshotAtAssetUpdate")
+    if not isinstance(name, str) or not name:
+        errors.append("grammarModel.name must be non-empty")
+    if filename != f"{name}.gram" or Path(str(filename)).name != filename:
+        errors.append("grammarModel.filename must be the exact model name plus .gram")
+    if repository != "https://github.com/amzxyz/RIME-LMDG":
+        errors.append("grammarModel.repository is not the reviewed official upstream")
+    if release != "LTS" or model.get("immutable") is not False:
+        errors.append("grammarModel must explicitly record the mutable reviewed LTS release")
+    if not isinstance(model.get("assetUpdatedAt"), str) or not UTC_TIMESTAMP.fullmatch(
+        model["assetUpdatedAt"]
+    ):
+        errors.append("grammarModel.assetUpdatedAt must be an exact UTC timestamp")
+    if not isinstance(tag_ref, str) or not FULL_SHA.fullmatch(tag_ref):
+        errors.append("grammarModel.tagRef must be a full lowercase commit")
+    if not isinstance(source_snapshot, str) or not FULL_SHA.fullmatch(source_snapshot):
+        errors.append(
+            "grammarModel.sourceSnapshotAtAssetUpdate must be a full lowercase commit"
+        )
+    expected_url = f"{repository}/releases/download/{release}/{filename}"
+    if model.get("url") != expected_url:
+        errors.append("grammarModel.url does not match repository/release/filename")
+    if not isinstance(model.get("assetId"), int) or model["assetId"] <= 0:
+        errors.append("grammarModel.assetId must be a positive GitHub asset ID")
+    if not isinstance(model.get("size"), int) or model["size"] <= 0:
+        errors.append("grammarModel.size must be a positive exact byte count")
+    if not isinstance(model.get("sha256"), str) or not DIGEST.fullmatch(model["sha256"]):
+        errors.append("grammarModel.sha256 must be a lowercase SHA-256")
+    if model.get("license") != "CC-BY-4.0":
+        errors.append("grammarModel must retain its reviewed CC-BY-4.0 license")
+    if model.get("licenseFilename") != "RIME-LMDG-LICENSE.CC-BY-4.0":
+        errors.append("grammarModel.licenseFilename must remain an exact non-generic cache name")
+    expected_license_url = (
+        "https://raw.githubusercontent.com/amzxyz/RIME-LMDG/"
+        f"{source_snapshot}/LICENSE"
+    )
+    if model.get("licenseUrl") != expected_license_url:
+        errors.append(
+            "grammarModel.licenseUrl must bind the reviewed observed source snapshot"
+        )
+    if not isinstance(model.get("licenseSize"), int) or model["licenseSize"] <= 0:
+        errors.append("grammarModel.licenseSize must be a positive exact byte count")
+    if not isinstance(model.get("licenseSha256"), str) or not DIGEST.fullmatch(
+        model["licenseSha256"]
+    ):
+        errors.append("grammarModel.licenseSha256 must be a lowercase SHA-256")
+
+    tracked_models: list[str] = []
+    if (ROOT / ".git").exists():
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "--", "*.gram"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completed.returncode != 0:
+            errors.append("could not inspect Git index for grammar model data")
+        else:
+            tracked_models = [line for line in completed.stdout.splitlines() if line]
+    if tracked_models:
+        errors.append(f"grammar model data entered the repository: {tracked_models[0]}")
+    return 1
+
+
 def main() -> int:
     errors: list[str] = []
     from_count = check_dockerfiles(errors)
     action_count = check_actions(errors)
     native_archive_count = check_octagram_source_lock(errors)
+    grammar_model_count = check_grammar_model(errors)
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
     print(
         "supply-chain pins passed: "
         f"{from_count} FROM instructions, {action_count} Actions references, "
-        f"{native_archive_count} native source archive"
+        f"{native_archive_count} native source archive, "
+        f"{grammar_model_count} shared grammar model"
     )
     return 0
 

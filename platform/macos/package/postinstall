@@ -8,6 +8,7 @@ readonly yunpin_pre_lifecycle_overlay_sha256="25e07ca2754e0bb67407f44b9f675dd8c5
 readonly yunpin_session_learning_hotfix_overlay_sha256="2aa8d5ec68b18dc0bb887e44e67e1d5d2239d95dead73418b1f3d050279ab093"
 readonly yunpin_lifecycle_candidate_overlay_sha256="b4289c5cab6db34eba8073f3e15f8718cc57afc9be94640009c181d9c39a835e"
 readonly yunpin_conservative_overlay_sha256="11576819105dc8daa5142413632c9806d1aa7151c82a4cb1db6b8a6b4be0aa6b"
+readonly yunpin_grammar_model_overlay_sha256="cb87387cadf128c4b90c84cd0a150d9316608e64c2b19db207b28cdb1207c2b2"
 readonly yunpin_previous_default_overlay_sha256="23039527ee16342493e346cdc80ebf50f6729cc562b6c85436f7f60651e97bfa"
 readonly yunpin_candidate_pinyin_default_overlay_sha256="857057ff6b5e939c534f644ec24652ae487c85927591e44135e380f61a25fd1b"
 
@@ -129,13 +130,14 @@ yunpin_migrate_known_overlay() {
 yunpin_migrate_known_correction_overlay() {
   yunpin_migrate_known_overlay \
     "$1" "$2" "$3" \
-    "$yunpin_conservative_overlay_sha256" \
-    "pre-conservative" \
+    "$yunpin_grammar_model_overlay_sha256" \
+    "pre-grammar-model" \
     "$yunpin_legacy_correction_overlay_sha256" \
     "$yunpin_previous_conservative_overlay_sha256" \
     "$yunpin_pre_lifecycle_overlay_sha256" \
     "$yunpin_session_learning_hotfix_overlay_sha256" \
-    "$yunpin_lifecycle_candidate_overlay_sha256"
+    "$yunpin_lifecycle_candidate_overlay_sha256" \
+    "$yunpin_conservative_overlay_sha256"
 }
 
 yunpin_migrate_known_default_overlay() {

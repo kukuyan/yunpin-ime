@@ -1,5 +1,24 @@
 {
   "format": 1,
+  "grammarModel": {
+    "name": "wanxiang-lts-zh-hans",
+    "filename": "wanxiang-lts-zh-hans.gram",
+    "repository": "https://github.com/amzxyz/RIME-LMDG",
+    "release": "LTS",
+    "immutable": false,
+    "assetId": 536587145,
+    "assetUpdatedAt": "2026-08-30T12:25:59Z",
+    "tagRef": "c78463a521aee2681db6cd6424a75a9b413237a3",
+    "sourceSnapshotAtAssetUpdate": "5850e982a73537b1510afc4f99dcb37b335815d0",
+    "url": "https://github.com/amzxyz/RIME-LMDG/releases/download/LTS/wanxiang-lts-zh-hans.gram",
+    "sha256": "1635588006d79cc6955fbcf3d8de12822a36856eb5408735a8b4a2952b16cadf",
+    "size": 420248620,
+    "license": "CC-BY-4.0",
+    "licenseFilename": "RIME-LMDG-LICENSE.CC-BY-4.0",
+    "licenseUrl": "https://raw.githubusercontent.com/amzxyz/RIME-LMDG/5850e982a73537b1510afc4f99dcb37b335815d0/LICENSE",
+    "licenseSha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+    "licenseSize": 18656
+  },
   "squirrel_commit": "876adebaf2f612951dcdca8a591de65401222b9a",
   "boost_version": "1.89.0",
   "nested_submodules": {

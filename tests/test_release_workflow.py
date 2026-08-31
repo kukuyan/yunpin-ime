@@ -342,7 +342,7 @@ def run_publish_scenario(
         (release_dist / "RELEASE-NOTES.md").write_text(
             PUBLIC_NOTES, encoding="utf-8"
         )
-        for index in range(7):
+        for index in range(8):
             (release_dist / f"asset-{index}.bin").write_bytes(
                 f"asset-{index}\n".encode("utf-8")
             )

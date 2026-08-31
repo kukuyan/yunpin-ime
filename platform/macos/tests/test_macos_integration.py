@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +20,25 @@ ROOT = MACOS_DIR.parents[1]
 SQUIRREL = ROOT / "third_party" / "squirrel"
 PATCH_DIR = ROOT / "platform" / "patches" / "squirrel"
 EXPECTED_COMMIT = "876adebaf2f612951dcdca8a591de65401222b9a"
+EXPECTED_GRAMMAR_MODEL = {
+    "name": "wanxiang-lts-zh-hans",
+    "filename": "wanxiang-lts-zh-hans.gram",
+    "repository": "https://github.com/amzxyz/RIME-LMDG",
+    "release": "LTS",
+    "immutable": False,
+    "assetId": 536587145,
+    "assetUpdatedAt": "2026-08-30T12:25:59Z",
+    "tagRef": "c78463a521aee2681db6cd6424a75a9b413237a3",
+    "sourceSnapshotAtAssetUpdate": "5850e982a73537b1510afc4f99dcb37b335815d0",
+    "url": "https://github.com/amzxyz/RIME-LMDG/releases/download/LTS/wanxiang-lts-zh-hans.gram",
+    "sha256": "1635588006d79cc6955fbcf3d8de12822a36856eb5408735a8b4a2952b16cadf",
+    "size": 420248620,
+    "license": "CC-BY-4.0",
+    "licenseFilename": "RIME-LMDG-LICENSE.CC-BY-4.0",
+    "licenseUrl": "https://raw.githubusercontent.com/amzxyz/RIME-LMDG/5850e982a73537b1510afc4f99dcb37b335815d0/LICENSE",
+    "licenseSha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+    "licenseSize": 18656,
+}
 
 
 def run(*args: str, cwd: Path = ROOT, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -73,6 +93,65 @@ class MacOSIntegrationTests(unittest.TestCase):
         boost = [archive for archive in lock["archives"] if archive.get("boost_source")]
         self.assertEqual(1, len(boost))
         self.assertEqual("boost_1_89_0.tar.gz", boost[0]["name"])
+
+    def test_full_grammar_model_lock_is_shared_and_exact(self) -> None:
+        macos = json.loads(
+            (MACOS_DIR / "dependencies.lock.json").read_text(encoding="utf-8")
+        )["grammarModel"]
+        windows = json.loads(
+            (ROOT / "platform" / "windows" / "dependencies.lock.json").read_text(
+                encoding="utf-8"
+            )
+        )["grammarModel"]
+        self.assertEqual(EXPECTED_GRAMMAR_MODEL, macos)
+        self.assertEqual(macos, windows)
+        self.assertFalse(macos["immutable"])
+        self.assertEqual(
+            macos,
+            json.loads((MACOS_DIR / "preview-manifest.json").read_text(encoding="utf-8"))[
+                "grammar_model"
+            ],
+        )
+
+    def test_grammar_resources_are_exact_and_offline_rebuildable(self) -> None:
+        common = (MACOS_DIR / "scripts" / "common.sh").read_text(encoding="utf-8")
+        fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(
+            encoding="utf-8"
+        )
+        build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        source = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
+            encoding="utf-8"
+        )
+        verify = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('[[ -f "$path" && ! -L "$path" ]]', common)
+        self.assertIn('"$REPO_ROOT/sources/$filename"', common)
+        self.assertIn("verify_online_grammar_asset_metadata", fetch)
+        self.assertIn("verify_grammar_asset_metadata.py", fetch)
+        self.assertIn("releases/tags/LTS", fetch)
+        self.assertIn("git/ref/tags/LTS", fetch)
+        self.assertIn('mktemp "$cache_dir/.${filename}.part.XXXXXX"', fetch)
+        self.assertIn('/bin/ln "$partial" "$destination"', fetch)
+        self.assertIn("trap cleanup_temporary_downloads EXIT", fetch)
+        self.assertNotIn('local partial="$destination.part"', fetch)
+        self.assertIn('"grammar model" \\\n  true', fetch)
+        self.assertIn(r"\( -type f -o -type l \) -name '*.gram'", fetch)
+        self.assertNotIn("*.gram.part", fetch)
+        for script in (source, verify):
+            self.assertIn("grammarModel.filename", script)
+            self.assertIn("grammarModel.sha256", script)
+            self.assertIn("grammarModel.size", script)
+            self.assertIn("grammarModel.licenseSha256", script)
+            self.assertIn("grammarModel.licenseSize", script)
+        self.assertIn("resolve_locked_grammar_resource model", build)
+        self.assertIn("resolve_locked_grammar_resource license", build)
+        self.assertIn("SOURCE-MANIFEST.sha256", source)
+        self.assertIn("exactly one locked grammar model", source)
+        self.assertIn("exactly one locked grammar model", verify)
+        self.assertIn("*.gram", (ROOT / ".gitignore").read_text(encoding="utf-8"))
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
@@ -665,6 +744,21 @@ class MacOSIntegrationTests(unittest.TestCase):
         manifest = json.loads((MACOS_DIR / "preview-manifest.json").read_text(encoding="utf-8"))
         self.assertEqual("development-preview", manifest["channel"])
         self.assertTrue(manifest["yunpin_module_merged"])
+        self.assertEqual(
+            {
+                "external_payload": True,
+                "cache_condition": "process-cold-deployed-user-data-os-warm",
+                "comparison_order": ["baseline", "model"],
+                "deployment_process_isolated": True,
+                "measurement_process_maintenance": False,
+                "model_load_stage_evidence": "schema-marker-log-and-ab-rss",
+                "synthetic_private_counterfactual": True,
+                "holdout_case_count": 20,
+                "accepted_quality_cases": {"baseline": 17, "model": 18},
+                "final_key_candidate_p95_gate_microseconds": 20000,
+            },
+            manifest["grammar_quality_evidence"],
+        )
         self.assertTrue(manifest["yunpin_ranking_headless_e2e"])
         self.assertFalse(manifest["yunpin_ranking_native_host_e2e"])
         self.assertTrue(manifest["yunpin_typo_correction_librime_e2e"])
@@ -741,6 +835,19 @@ class MacOSIntegrationTests(unittest.TestCase):
         )
         self.assertIn("yunpin/typo_correction\": false", overlay)
         self.assertIn("yunpin/typo_reviewed_confusions\": false", overlay)
+        for grammar_setting in (
+            '"grammar/language": wanxiang-lts-zh-hans',
+            '"grammar/collocation_max_length": 6',
+            '"grammar/collocation_min_length": 3',
+            '"grammar/collocation_penalty": -14',
+            '"grammar/non_collocation_penalty": -6',
+            '"grammar/weak_collocation_penalty": -100',
+            '"grammar/rear_penalty": -20',
+            '"translator/contextual_suggestions": true',
+            '"translator/max_homophones": 8',
+        ):
+            self.assertIn(grammar_setting, overlay)
+        self.assertNotIn("max_homographs", overlay)
 
     def test_dependency_fetch_initializes_librime_before_runtime_copy(self) -> None:
         fetch = (MACOS_DIR / "scripts" / "fetch-dependencies.sh").read_text(encoding="utf-8")
@@ -856,6 +963,11 @@ class MacOSIntegrationTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('scripts/test-rime-plugin-runtime.sh" "$app" "$source_dir"', build)
+        self.assertLess(
+            build.index('scripts/sign-app-adhoc.sh" "$app"'),
+            build.index('scripts/test-rime-plugin-runtime.sh" "$app"'),
+        )
+        self.assertIn("grammar-quality-metrics.json", build)
         self.assertIn("DYLD_PRINT_LIBRARIES=1", runtime)
         self.assertIn("librime-lua.dylib", runtime)
         self.assertIn("librime-octagram.dylib", runtime)
@@ -867,6 +979,81 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("constexpr int kLifecycleSessions = 128", probe)
         for public_input in ("s", "sh", "shu", "shuru", "ceshi", "wendingxing"):
             self.assertIn(f'"{public_input}"', probe)
+        expected_holdout = (
+            ("accept_origin_image", "youyuantuma", "有原图吗", "有原图吗"),
+            ("accept_semantic_account", "youceshizhanghaoma", "右侧是账号吗", "有测试账号吗"),
+            ("accept_database_version", "shujukushiyongdeshinagebanben", "数据库使用的是哪个版本", "数据库使用的是哪个版本"),
+            ("short_weather", "jintiantianqihenhao", "今天天气很好", "今天天气很好"),
+            ("short_availability", "qingwenyoukongma", "请问有空吗", "请问有空吗"),
+            ("short_how_to", "zhegeshizenmeyongde", "这个是怎么用的", "这个是怎么用的"),
+            ("homophone_retry", "qingzaishiyici", "请再试一次", "请再试一次"),
+            ("homophone_usage", "shiyongfangfa", "使用方法", "使用方法"),
+            ("homophone_which", "yinggaishinage", "应该是那个", "应该是那个"),
+            ("long_email", "qingbaowenjianfadaowodeyouxiang", "情报文件发到我的邮箱", "情报文件发到我的邮箱"),
+            ("long_code", "zhegedaimaweishenmewufayunxing", "这个代码为什么无法运行", "这个代码为什么无法运行"),
+            ("long_meeting", "qingquerenhuiyishijianhedidian", "请确认会议时间和地点", "请确认会议时间和地点"),
+            ("circle_zero", "erlingyilingnianfabu", "二〇一〇年发布", "二〇一〇年发布"),
+            ("ordinary_zero", "lingduyixia", "零度以下", "零度以下"),
+            ("heldout_tomorrow", "womenmingtianjian", "我们明天见", "我们明天见"),
+            ("heldout_feedback", "qingjishifankui", "请及时反馈", "请及时反馈"),
+            ("heldout_network", "wangluolianjiezhengchang", "网络连接正常", "网络连接正常"),
+            ("heldout_open_file", "zhegewenjianzenmedakai", "这个文件怎么打开", "这个文件怎么打开"),
+            ("heldout_send_address", "qingbadizhifageiwo", "请把地址发给我", "请把地址发给我"),
+            ("heldout_received", "woyijingshoudaole", "我已经收到了", "我已经受到了"),
+        )
+        self.assertIn("std::array<HoldoutCase, 20>", probe)
+        for case_id, public_input, model_first, baseline_first in expected_holdout:
+            self.assertIn(f'{{"{case_id}", "{public_input}"', probe)
+            self.assertRegex(
+                probe,
+                re.escape(f'"{model_first}"') + r",\s*" +
+                re.escape(f'"{baseline_first}"'),
+            )
+        self.assertIn("kP95GateMicroseconds = 20000", probe)
+        self.assertIn('"yunpingongcexianhuanqihao"', probe)
+        self.assertIn("CandidatePageContains", probe)
+        self.assertIn("bool* found", probe)
+        self.assertIn("synthetic_private_fixture=pass", probe)
+        self.assertIn("synthetic_private_counterfactual=pass", probe)
+        self.assertIn('mode == "prepare-model"', probe)
+        self.assertIn('mode == "prepare-baseline"', probe)
+        self.assertIn("traits.min_log_level = 0", probe)
+        self.assertIn("if (prepare_mode)", probe)
+        self.assertEqual(1, probe.count("start_maintenance(True)"))
+        prepare_block = probe[
+            probe.index("if (prepare_mode)") : probe.index(
+                "const auto schema_started"
+            )
+        ]
+        self.assertIn("start_maintenance(True)", prepare_block)
+        self.assertIn('std::cerr << "schema_select_begin', probe)
+        self.assertIn('std::cerr << "schema_select_end', probe)
+        self.assertIn("rss_after_initialize_bytes=", probe)
+        self.assertIn("rss_after_schema_select_bytes=", probe)
+        self.assertIn("measurement_max_rss_bytes=", probe)
+        self.assertIn("measurement_process_elapsed_us=", probe)
+        self.assertNotIn("maintenance_us=", probe)
+        self.assertIn("final_key_candidate_p95_us=", runtime)
+        self.assertIn("isolated-deployment-process-os-warm", runtime)
+        self.assertIn("process-cold-deployed-user-data-os-warm", runtime)
+        self.assertIn("prepare-baseline", runtime)
+        self.assertIn("prepare-model", runtime)
+        self.assertIn("private-off", runtime)
+        self.assertIn("synthetic_private_counterfactual=pass", runtime)
+        self.assertIn("accepted_quality_cases=18", runtime)
+        self.assertIn("accepted_quality_cases=17", runtime)
+        self.assertIn('"modelMinusBaseline": deltas', runtime)
+        self.assertIn('"deploymentPhase": {', runtime)
+        self.assertIn('"measurementPhase": {', runtime)
+        self.assertIn('"maintenanceInvoked": False', runtime)
+        self.assertIn('"loadStageEvidence": load_stage_evidence', runtime)
+        self.assertIn("loading gram db:", runtime)
+        self.assertIn("modelFileOpenObservedStage", runtime)
+        self.assertIn("largestResidentGrowthStage", runtime)
+        self.assertIn("modelMinusBaselineRssIncreaseAtHoldoutBytes", runtime)
+        self.assertIn('"probeArchitecture": platform.machine()', runtime)
+        self.assertNotIn('manifest["grammar_quality"]', runtime)
+        self.assertIn("grammar_model_name=\"$(read_lock_value grammarModel.name)\"", runtime)
 
     def test_merged_librime_build_has_bounded_parallelism(self) -> None:
         build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(
@@ -1467,10 +1654,16 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('"$shared/lua/lunar.db" "$user_rime/lua/lunar.db"', postinstall)
         self.assertIn('install -m 600 -o "$login_user"', postinstall)
 
-    def test_postinstall_migrates_only_the_known_legacy_correction_overlay(self) -> None:
+    def test_postinstall_migrates_only_known_shipped_correction_overlays(self) -> None:
         postinstall = MACOS_DIR / "package" / "postinstall"
         legacy = MACOS_DIR / "tests" / "fixtures" / "legacy_correction_rime_ice.custom.yaml"
-        conservative = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        current = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        pre_grammar = (
+            MACOS_DIR
+            / "tests"
+            / "fixtures"
+            / "previous_pre_grammar_rime_ice.custom.yaml"
+        )
         previous = (
             MACOS_DIR
             / "tests"
@@ -1479,7 +1672,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         )
         legacy_hash = hashlib.sha256(legacy.read_bytes()).hexdigest()
         previous_hash = hashlib.sha256(previous.read_bytes()).hexdigest()
-        conservative_hash = hashlib.sha256(conservative.read_bytes()).hexdigest()
+        conservative_hash = hashlib.sha256(pre_grammar.read_bytes()).hexdigest()
+        grammar_model_hash = hashlib.sha256(current.read_bytes()).hexdigest()
         source = postinstall.read_text(encoding="utf-8")
 
         self.assertEqual(
@@ -1494,12 +1688,20 @@ class MacOSIntegrationTests(unittest.TestCase):
             "11576819105dc8daa5142413632c9806d1aa7151c82a4cb1db6b8a6b4be0aa6b",
             conservative_hash,
         )
+        self.assertEqual(
+            "cb87387cadf128c4b90c84cd0a150d9316608e64c2b19db207b28cdb1207c2b2",
+            grammar_model_hash,
+        )
         self.assertIn(f'yunpin_legacy_correction_overlay_sha256="{legacy_hash}"', source)
         self.assertIn(
             f'yunpin_previous_conservative_overlay_sha256="{previous_hash}"',
             source,
         )
         self.assertIn(f'yunpin_conservative_overlay_sha256="{conservative_hash}"', source)
+        self.assertIn(
+            f'yunpin_grammar_model_overlay_sha256="{grammar_model_hash}"',
+            source,
+        )
         # The installer accepts the briefly shipped lifecycle candidate only
         # to migrate it back to the current fail-closed overlay.
         self.assertIn(
@@ -1545,14 +1747,14 @@ class MacOSIntegrationTests(unittest.TestCase):
                 command,
                 "yunpin-postinstall-test",
                 str(postinstall),
-                str(conservative),
+                str(current),
                 str(user_overlay),
                 owner,
             )
 
-            self.assertEqual(conservative.read_bytes(), user_overlay.read_bytes())
+            self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
             self.assertEqual(0o600, user_overlay.stat().st_mode & 0o777)
-            backups = list(root.glob("rime_ice.custom.yaml.pre-conservative-*"))
+            backups = list(root.glob("rime_ice.custom.yaml.pre-grammar-model-*"))
             self.assertEqual(1, len(backups))
             self.assertEqual(legacy.read_bytes(), backups[0].read_bytes())
             self.assertEqual(0o600, backups[0].stat().st_mode & 0o777)
@@ -1565,11 +1767,14 @@ class MacOSIntegrationTests(unittest.TestCase):
                 command,
                 "yunpin-postinstall-test",
                 str(postinstall),
-                str(conservative),
+                str(current),
                 str(user_overlay),
                 owner,
             )
-            self.assertEqual(backups, list(root.glob("rime_ice.custom.yaml.pre-conservative-*")))
+            self.assertEqual(
+                backups,
+                list(root.glob("rime_ice.custom.yaml.pre-grammar-model-*")),
+            )
 
     def test_postinstall_upgrades_the_previous_conservative_overlay(self) -> None:
         postinstall = MACOS_DIR / "package" / "postinstall"
@@ -1601,15 +1806,54 @@ class MacOSIntegrationTests(unittest.TestCase):
                 owner,
             )
             self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
-            backups = list(root.glob("rime_ice.custom.yaml.pre-conservative-*"))
+            backups = list(root.glob("rime_ice.custom.yaml.pre-grammar-model-*"))
+            self.assertEqual(1, len(backups))
+            self.assertEqual(previous.read_bytes(), backups[0].read_bytes())
+
+    def test_postinstall_upgrades_the_frozen_pre_grammar_overlay(self) -> None:
+        postinstall = MACOS_DIR / "package" / "postinstall"
+        previous = (
+            MACOS_DIR
+            / "tests"
+            / "fixtures"
+            / "previous_pre_grammar_rime_ice.custom.yaml"
+        )
+        current = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
+        owner = run("id", "-un").stdout.strip()
+        command = (
+            'source "$1"; '
+            'yunpin_migrate_known_correction_overlay "$2" "$3" "$4"'
+        )
+
+        with tempfile.TemporaryDirectory(prefix="yunpin-postinstall-grammar-") as temporary:
+            root = Path(temporary)
+            user_overlay = root / "rime_ice.custom.yaml"
+            user_overlay.write_bytes(previous.read_bytes())
+            run(
+                "bash",
+                "-c",
+                command,
+                "yunpin-postinstall-test",
+                str(postinstall),
+                str(current),
+                str(user_overlay),
+                owner,
+            )
+            self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
+            backups = list(root.glob("rime_ice.custom.yaml.pre-grammar-model-*"))
             self.assertEqual(1, len(backups))
             self.assertEqual(previous.read_bytes(), backups[0].read_bytes())
 
     def test_postinstall_migrates_known_lifecycle_overlays_to_fail_closed(self) -> None:
         postinstall = MACOS_DIR / "package" / "postinstall"
         current = ROOT / "platform" / "rime" / "squirrel" / "rime_ice.custom.yaml"
-        current_text = current.read_text(encoding="utf-8")
-        pre_lifecycle_text = current_text.replace(
+        frozen_baseline = (
+            MACOS_DIR
+            / "tests"
+            / "fixtures"
+            / "previous_pre_grammar_rime_ice.custom.yaml"
+        ).read_text(encoding="utf-8")
+        pre_lifecycle_text = frozen_baseline.replace(
             "  # Fail closed until the IMK host supplies a trustworthy positive\n"
             "  # yunpin_learning_allowed signal for a non-secure text field.\n",
             "",
@@ -1618,7 +1862,7 @@ class MacOSIntegrationTests(unittest.TestCase):
             '"yunpin/session_learning": true',
             '"yunpin/session_learning": false',
         )
-        lifecycle_candidate_text = current_text.replace(
+        lifecycle_candidate_text = frozen_baseline.replace(
             "  # Fail closed until the IMK host supplies a trustworthy positive\n"
             "  # yunpin_learning_allowed signal for a non-secure text field.\n",
             "  # Bounded in-process word learning is on by default. Protected-context\n"
@@ -1665,7 +1909,7 @@ class MacOSIntegrationTests(unittest.TestCase):
                 )
                 self.assertEqual(current.read_bytes(), user_overlay.read_bytes())
                 backups = list(
-                    root.glob("rime_ice.custom.yaml.pre-conservative-*")
+                    root.glob("rime_ice.custom.yaml.pre-grammar-model-*")
                 )
                 self.assertEqual(1, len(backups))
                 self.assertEqual(old_text.encode("utf-8"), backups[0].read_bytes())
@@ -1775,7 +2019,7 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertTrue(dangling.is_symlink())
             self.assertEqual(str(dangling_target), os.readlink(dangling))
             self.assertFalse(dangling_target.exists())
-            self.assertEqual([], list(root.glob("*.pre-conservative-*")))
+            self.assertEqual([], list(root.glob("*.pre-grammar-model-*")))
             self.assertEqual([], list(root.glob("*.migration.*")))
 
     def test_postinstall_fails_closed_for_an_unreviewed_replacement(self) -> None:
@@ -1808,7 +2052,7 @@ class MacOSIntegrationTests(unittest.TestCase):
             self.assertNotEqual(0, failed.returncode)
             self.assertIn("hash mismatch", failed.stderr)
             self.assertEqual(legacy.read_bytes(), user_overlay.read_bytes())
-            self.assertEqual([], list(root.glob("*.pre-conservative-*")))
+            self.assertEqual([], list(root.glob("*.pre-grammar-model-*")))
             self.assertEqual([], list(root.glob("*.migration.*")))
 
     def test_shell_scripts_parse(self) -> None:

@@ -19,6 +19,10 @@ fi
 "${MACOS_DIR}/scripts/build-librime-yunpin.sh" "$source_dir"
 "${MACOS_DIR}/scripts/build-sync-agents.sh"
 
+grammar_model="$(resolve_locked_grammar_resource model)"
+grammar_model_license="$(resolve_locked_grammar_resource license)"
+grammar_model_filename="$(read_lock_value grammarModel.filename)"
+grammar_model_license_filename="$(read_lock_value grammarModel.licenseFilename)"
 mkdir -p "$source_dir/data/plum"
 cp "${REPO_ROOT}/platform/rime/squirrel/default.custom.yaml" "$source_dir/data/default.custom.yaml"
 cp "${REPO_ROOT}/platform/rime/squirrel/squirrel.custom.yaml" "$source_dir/data/squirrel.custom.yaml"
@@ -28,6 +32,19 @@ cp "$source_dir/data/default.custom.yaml" "$source_dir/data/plum/default.custom.
 cp "$source_dir/data/squirrel.custom.yaml" "$source_dir/data/plum/squirrel.custom.yaml"
 cp "$source_dir/data/rime_ice.custom.yaml" "$source_dir/data/plum/rime_ice.custom.yaml"
 cp "$source_dir/data/yunpin-preview.json" "$source_dir/data/plum/yunpin-preview.json"
+[[ ! -L "$source_dir/data/plum/$grammar_model_filename" ]] ||
+  die "Squirrel grammar model staging path must not be a link"
+/usr/bin/install -m 644 "$grammar_model" \
+  "$source_dir/data/plum/$grammar_model_filename"
+verify_locked_grammar_resource \
+  "$source_dir/data/plum/$grammar_model_filename" \
+  "$(read_lock_value grammarModel.size)" \
+  "$(read_lock_value grammarModel.sha256)" \
+  "staged grammar model"
+staged_grammar_models="$(find "$source_dir/data/plum" -maxdepth 1 \
+  \( -type f -o -type l \) -name '*.gram' -print)"
+[[ "$staged_grammar_models" == "$source_dir/data/plum/$grammar_model_filename" ]] ||
+  die "Squirrel staging must contain exactly one locked grammar model"
 xcrun swift "${MACOS_DIR}/scripts/render-input-icon.swift" "$source_dir/resources/yunpin.pdf"
 
 (
@@ -59,6 +76,13 @@ else
 fi
 shared_support="$app/Contents/SharedSupport"
 mkdir -p "$shared_support" "$shared_support/licenses"
+[[ ! -L "$shared_support/$grammar_model_filename" ]] ||
+  die "app grammar model path must not be a link"
+[[ ! -L "$shared_support/licenses/$grammar_model_license_filename" ]] ||
+  die "app grammar model license path must not be a link"
+/usr/bin/install -m 644 "$grammar_model" "$shared_support/$grammar_model_filename"
+/usr/bin/install -m 644 "$grammar_model_license" \
+  "$shared_support/licenses/$grammar_model_license_filename"
 
 sync_agent="$build_root/sync-agent/public/yunpin-sync-agent"
 replay_lab="$build_root/sync-agent/public/yunpin-replay-lab"
@@ -104,8 +128,9 @@ for package in bopomofo cangjie essay luna-pinyin prelude stroke terra-pinyin; d
 done
 cp "${MACOS_DIR}/preview-manifest.json" "$shared_support/yunpin-preview.json"
 
-"${MACOS_DIR}/scripts/test-rime-plugin-runtime.sh" "$app" "$source_dir"
 "${MACOS_DIR}/scripts/sign-app-adhoc.sh" "$app"
+"${MACOS_DIR}/scripts/test-rime-plugin-runtime.sh" "$app" "$source_dir" \
+  "$build_root/package/grammar-quality-metrics.json"
 "${MACOS_DIR}/scripts/verify-app.sh" --require-universal "$app"
 lsregister="${YUNPIN_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister}"
 [[ -x "$lsregister" ]] || die "LaunchServices registration tool is unavailable"

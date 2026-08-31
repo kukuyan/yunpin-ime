@@ -8,11 +8,12 @@ The release workflow uses this module at three boundaries:
 * bind every platform artifact to the immutable tag commit;
 * assemble one exact, checksum-covered release directory.
 
-DMG integrity is checked with ``hdiutil verify`` on the macOS build runner.  A
-Linux runner cannot inspect that filesystem image without adding another
-unlocked parser, so this module treats the DMG as opaque and binds its bytes to
-the macOS job metadata instead.  All ZIP and tar source/runtime archives are
-opened and inspected here.
+DMG integrity and the package payload are checked with native Apple tools on
+the macOS build runner.  A Linux runner cannot inspect that filesystem image
+without adding another unlocked parser, so cross-platform release assembly
+treats the already-verified DMG as opaque and binds its bytes to the macOS job
+metadata instead.  All ZIP and tar source/runtime archives are opened and
+inspected here.
 """
 
 from __future__ import annotations
@@ -20,14 +21,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
+import plistlib
 import re
 import shutil
+import stat
+import subprocess
 import sys
 import tarfile
+import tempfile
+from typing import BinaryIO
 import zipfile
 
 
+ROOT = Path(__file__).resolve().parents[1]
+WINDOWS_LOCK = ROOT / "platform" / "windows" / "dependencies.lock.json"
+MACOS_LOCK = ROOT / "platform" / "macos" / "dependencies.lock.json"
 TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]+$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -64,7 +74,9 @@ MAX_SECRET_SCAN_BYTES = 8 * 1024 * 1024
 # match alone is never sufficient.
 ALLOWED_LOCKED_FIXTURE_SHA256 = {
     "/platform/macos/tests/fixtures/private.tsv":
-        "b0e81e6a2b933ae9b2638c2527747b11af2d023c53c48b7514623fa24740c44c",
+        "250d4335a7b8ced9232d227da248f62aa0e1f232b3157ebb4696169fa0734733",
+    "/platform/windows/tests/fixtures/synthetic-public-ranking.tsv":
+        "250d4335a7b8ced9232d227da248f62aa0e1f232b3157ebb4696169fa0734733",
     "/third_party/rime-ice/lua/lunar.db":
         "30e66ebc3c7223397f2d98368e159ae6d636571056bbe6885f1fcafad56ad1c9",
     "/rime-data/lua/lunar.db":
@@ -100,8 +112,12 @@ WINDOWS_SOURCE = "YunPin-IME-Windows-development-preview-source.zip"
 WINDOWS_CHECKSUMS = "SHA256SUMS"
 WINDOWS_METADATA = "windows-release-metadata.json"
 MACOS_DMG = "YunPin-IME-macOS-development-preview.dmg"
+MACOS_PACKAGE = "YunPin-IME-development-preview.pkg"
 MACOS_SOURCE = "YunPin-IME-development-preview-source.tar.gz"
+MACOS_INSTRUCTIONS = "安装说明.txt"
+MACOS_DMG_MANIFEST = "SHA256SUMS-macOS.txt"
 MACOS_METADATA = "macos-release-metadata.json"
+MACOS_GRAMMAR_EVIDENCE = "grammar-quality-metrics.json"
 RELEASE_METADATA = "RELEASE-METADATA.json"
 RELEASE_CHECKSUMS = "SHA256SUMS"
 RELEASE_NOTES = "RELEASE-NOTES.md"
@@ -124,6 +140,280 @@ def _validate_tag_commit(tag: str, commit: str) -> None:
         raise VerificationError(f"invalid preview tag: {tag}")
     if not COMMIT_PATTERN.fullmatch(commit):
         raise VerificationError(f"invalid repository commit: {commit}")
+
+
+def locked_grammar_model() -> dict[str, object]:
+    try:
+        windows = json.loads(WINDOWS_LOCK.read_text(encoding="utf-8"))["grammarModel"]
+        macos = json.loads(MACOS_LOCK.read_text(encoding="utf-8"))["grammarModel"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise VerificationError("cannot read shared grammar model lock") from error
+    if not isinstance(windows, dict) or windows != macos:
+        raise VerificationError("macOS and Windows grammar model locks disagree")
+    model_filename = windows.get("filename")
+    license_filename = windows.get("licenseFilename")
+    if (
+        not isinstance(model_filename, str)
+        or PurePosixPath(model_filename).name != model_filename
+        or not model_filename.endswith(".gram")
+        or not isinstance(license_filename, str)
+        or PurePosixPath(license_filename).name != license_filename
+        or not license_filename
+        or not SHA256_PATTERN.fullmatch(str(windows.get("sha256", "")))
+        or not isinstance(windows.get("size"), int)
+        or int(windows["size"]) <= 0
+        or not SHA256_PATTERN.fullmatch(str(windows.get("licenseSha256", "")))
+        or not isinstance(windows.get("licenseSize"), int)
+        or int(windows["licenseSize"]) <= 0
+    ):
+        raise VerificationError("shared grammar model lock lacks exact bytes")
+    return windows
+
+
+GRAMMAR_METRIC_FIELDS = {
+    "initializeMicroseconds",
+    "schemaSelectMicroseconds",
+    "firstCompleteInputMicroseconds",
+    "rssAfterInitializeBytes",
+    "rssAfterSchemaSelectBytes",
+    "rssAfterFirstInputBytes",
+    "rssAfterHoldoutBytes",
+    "measurementMaxRssBytes",
+    "finalKeyCandidateP95Microseconds",
+    "measurementProcessElapsedMicroseconds",
+}
+GRAMMAR_DEPLOYMENT_METRIC_FIELDS = {"elapsedMicroseconds", "peakRssBytes"}
+GRAMMAR_LOAD_STAGE_FIELDS = {
+    "modelFileOpenObservedStage",
+    "largestResidentGrowthStage",
+    "modelMinusBaselineRssAfterInitializeBytes",
+    "modelMinusBaselineRssIncreaseAtSchemaSelectBytes",
+    "modelMinusBaselineRssIncreaseAtFirstInputBytes",
+    "modelMinusBaselineRssIncreaseAtHoldoutBytes",
+    "modelMinusBaselineSchemaSelectMicroseconds",
+    "firstInputLatencyDeltaMicroseconds",
+    "modelFirstInputExceeds20ms",
+}
+
+
+def verify_grammar_quality_contract(
+    quality: object,
+    platform_label: str,
+) -> dict[str, object]:
+    """Recompute the shared two-phase grammar A/B evidence contract."""
+
+    if not isinstance(quality, dict) or set(quality) != {
+        "headlessRimeIce",
+        "cacheCondition",
+        "comparisonOrder",
+        "deploymentPhase",
+        "measurementPhase",
+        "holdoutCaseCount",
+        "acceptedQualityCases",
+        "gateMicroseconds",
+        "syntheticPrivateCounterfactual",
+        "baseline",
+        "model",
+        "modelMinusBaseline",
+        "loadStageEvidence",
+    }:
+        raise VerificationError(f"{platform_label} grammar A/B evidence fields differ")
+    if (
+        quality.get("headlessRimeIce") is not True
+        or quality.get("cacheCondition")
+        != "process-cold-deployed-user-data-os-warm"
+        or quality.get("comparisonOrder") != ["baseline", "model"]
+        or quality.get("holdoutCaseCount") != 20
+        or quality.get("acceptedQualityCases") != {"baseline": 17, "model": 18}
+        or quality.get("gateMicroseconds") != 20000
+        or quality.get("syntheticPrivateCounterfactual") is not True
+    ):
+        raise VerificationError(f"{platform_label} grammar A/B evidence contract differs")
+    deployment = quality.get("deploymentPhase")
+    if not isinstance(deployment, dict) or set(deployment) != {
+        "cacheCondition",
+        "processIsolation",
+        "baseline",
+        "model",
+    }:
+        raise VerificationError(
+            f"{platform_label} grammar deployment evidence fields differ"
+        )
+    if (
+        deployment.get("cacheCondition")
+        != "isolated-deployment-process-os-warm"
+        or deployment.get("processIsolation") != "separate-prepare-process"
+    ):
+        raise VerificationError(
+            f"{platform_label} grammar deployment evidence contract differs"
+        )
+    for mode in ("baseline", "model"):
+        metrics = deployment.get(mode)
+        if (
+            not isinstance(metrics, dict)
+            or set(metrics) != GRAMMAR_DEPLOYMENT_METRIC_FIELDS
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value <= 0
+                for value in metrics.values()
+            )
+        ):
+            raise VerificationError(
+                f"{platform_label} {mode} deployment metrics are malformed"
+            )
+    if quality.get("measurementPhase") != {
+        "processIsolation": "fresh-process-after-deployment",
+        "maintenanceInvoked": False,
+    }:
+        raise VerificationError(
+            f"{platform_label} grammar measurement isolation differs"
+        )
+    for mode in ("baseline", "model"):
+        metrics = quality.get(mode)
+        if not isinstance(metrics, dict) or set(metrics) != GRAMMAR_METRIC_FIELDS:
+            raise VerificationError(
+                f"{platform_label} {mode} grammar metrics are incomplete"
+            )
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            for value in metrics.values()
+        ):
+            raise VerificationError(
+                f"{platform_label} {mode} grammar metrics are malformed"
+            )
+        if metrics["finalKeyCandidateP95Microseconds"] > 20000:
+            raise VerificationError(
+                f"{platform_label} {mode} grammar P95 exceeds 20 ms"
+            )
+    expected_deltas = {
+        name: quality["model"][name] - quality["baseline"][name]
+        for name in GRAMMAR_METRIC_FIELDS
+    }
+    if quality.get("modelMinusBaseline") != expected_deltas:
+        raise VerificationError(
+            f"{platform_label} grammar A/B deltas are inconsistent"
+        )
+    stage_deltas = {
+        "initialize": expected_deltas["rssAfterInitializeBytes"],
+        "schema-select": (
+            expected_deltas["rssAfterSchemaSelectBytes"]
+            - expected_deltas["rssAfterInitializeBytes"]
+        ),
+        "first-input": (
+            expected_deltas["rssAfterFirstInputBytes"]
+            - expected_deltas["rssAfterSchemaSelectBytes"]
+        ),
+        "holdout": (
+            expected_deltas["rssAfterHoldoutBytes"]
+            - expected_deltas["rssAfterFirstInputBytes"]
+        ),
+    }
+    largest_resident_growth_stage = max(stage_deltas, key=stage_deltas.get)
+    expected_load_evidence = {
+        "modelFileOpenObservedStage": "schema-select-before-first-input",
+        "largestResidentGrowthStage": largest_resident_growth_stage,
+        "modelMinusBaselineRssAfterInitializeBytes": stage_deltas["initialize"],
+        "modelMinusBaselineRssIncreaseAtSchemaSelectBytes": stage_deltas[
+            "schema-select"
+        ],
+        "modelMinusBaselineRssIncreaseAtFirstInputBytes": stage_deltas[
+            "first-input"
+        ],
+        "modelMinusBaselineRssIncreaseAtHoldoutBytes": stage_deltas["holdout"],
+        "modelMinusBaselineSchemaSelectMicroseconds": expected_deltas[
+            "schemaSelectMicroseconds"
+        ],
+        "firstInputLatencyDeltaMicroseconds": expected_deltas[
+            "firstCompleteInputMicroseconds"
+        ],
+        "modelFirstInputExceeds20ms": (
+            quality["model"]["firstCompleteInputMicroseconds"] > 20000
+        ),
+    }
+    load_evidence = quality.get("loadStageEvidence")
+    if (
+        not isinstance(load_evidence, dict)
+        or set(load_evidence) != GRAMMAR_LOAD_STAGE_FIELDS
+        or load_evidence != expected_load_evidence
+        or stage_deltas[largest_resident_growth_stage] <= 0
+    ):
+        raise VerificationError(
+            f"{platform_label} grammar load-stage evidence is inconsistent"
+        )
+    return quality
+
+
+def verify_macos_grammar_evidence(
+    evidence: Path,
+    commit: str,
+    app_root: Path | None = None,
+) -> dict[str, object]:
+    """Validate external A/B metrics and optionally bind them to an app payload."""
+
+    if not COMMIT_PATTERN.fullmatch(commit):
+        raise VerificationError(f"invalid repository commit: {commit}")
+    try:
+        document = json.loads(evidence.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise VerificationError("invalid macOS grammar quality evidence") from error
+    if not isinstance(document, dict):
+        raise VerificationError("macOS grammar quality evidence must be an object")
+    if set(document) != {
+        "schemaVersion",
+        "repositoryCommit",
+        "platform",
+        "packagedArchitectures",
+        "probeArchitecture",
+        "bundleIdentifier",
+        "grammarModel",
+        "runtimeIdentity",
+        "qualityComparison",
+    }:
+        raise VerificationError("macOS grammar quality evidence fields differ")
+    if (
+        document.get("schemaVersion") != 1
+        or document.get("repositoryCommit") != commit
+        or document.get("platform") != "macos"
+        or document.get("packagedArchitectures") != ["arm64", "x86_64"]
+        or document.get("probeArchitecture") not in {"arm64", "x86_64"}
+        or document.get("bundleIdentifier")
+        != "io.github.kukuyan.inputmethod.YunPin"
+        or document.get("grammarModel") != locked_grammar_model()
+    ):
+        raise VerificationError("macOS grammar evidence identity differs")
+
+    quality = document.get("qualityComparison")
+    verify_grammar_quality_contract(quality, "macOS")
+
+    identities = document.get("runtimeIdentity")
+    expected_paths = {
+        "librime": "Contents/Frameworks/librime.1.dylib",
+        "octagram": "Contents/Frameworks/rime-plugins/librime-octagram.dylib",
+        "executable": "Contents/MacOS/YunPin",
+    }
+    if not isinstance(identities, dict) or set(identities) != set(expected_paths):
+        raise VerificationError("macOS grammar runtime identities are incomplete")
+    for name, expected_path in expected_paths.items():
+        identity = identities[name]
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {"path", "size", "sha256"}
+            or identity.get("path") != expected_path
+            or not isinstance(identity.get("size"), int)
+            or identity["size"] <= 0
+            or not SHA256_PATTERN.fullmatch(str(identity.get("sha256", "")))
+        ):
+            raise VerificationError(f"macOS grammar runtime identity is invalid: {name}")
+        if app_root is not None:
+            _verify_exact_payload_file(
+                app_root,
+                expected_path,
+                int(identity["size"]),
+                str(identity["sha256"]),
+                f"macOS grammar evidence runtime {name}",
+            )
+    return document
 
 
 def _locked_fixture_sha256(name: str) -> str | None:
@@ -163,7 +453,88 @@ def _scan_member_bytes(name: str, content: bytes, archive: Path) -> None:
         raise VerificationError(f"credential-like content in {archive.name}: {name}")
 
 
+def _grammar_archive_layout(path: Path) -> dict[str, object] | None:
+    model = locked_grammar_model()
+    filename = str(model["filename"])
+    license_filename = str(model["licenseFilename"])
+    paths = {
+        WINDOWS_RUNTIME: (
+            f"rime-data/{filename}",
+            f"licenses/{license_filename}",
+        ),
+        WINDOWS_SOURCE: (
+            f"sources/{filename}",
+            f"sources/{license_filename}",
+        ),
+        MACOS_SOURCE: (
+            f"YunPin-IME/YunPin/sources/{filename}",
+            f"YunPin-IME/YunPin/sources/{license_filename}",
+        ),
+    }
+    expected = paths.get(path.name)
+    if expected is None:
+        return None
+    return {
+        "model_path": expected[0],
+        "model_size": int(model["size"]),
+        "model_sha256": str(model["sha256"]),
+        "license_path": expected[1],
+        "license_size": int(model["licenseSize"]),
+        "license_sha256": str(model["licenseSha256"]),
+    }
+
+
+def _sha256_stream(stream: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    while True:
+        chunk = stream.read(1024 * 1024)
+        if not chunk:
+            return digest.hexdigest()
+        digest.update(chunk)
+
+
+def _scan_locked_grammar_resource(
+    *,
+    name: str,
+    size: int,
+    stream: BinaryIO,
+    archive: Path,
+    layout: dict[str, object],
+    kind: str,
+) -> None:
+    expected_path = str(layout[f"{kind}_path"])
+    expected_size = int(layout[f"{kind}_size"])
+    expected_sha256 = str(layout[f"{kind}_sha256"])
+    if name != expected_path:
+        raise VerificationError(
+            f"locked grammar {kind} is at the wrong path in {archive.name}: {name}"
+        )
+    if size != expected_size:
+        raise VerificationError(
+            f"locked grammar {kind} has the wrong size in {archive.name}"
+        )
+    if _sha256_stream(stream) != expected_sha256:
+        raise VerificationError(
+            f"locked grammar {kind} has the wrong SHA-256 in {archive.name}"
+        )
+
+
+def _finish_grammar_archive_scan(
+    path: Path,
+    layout: dict[str, object] | None,
+    model_count: int,
+    license_count: int,
+) -> None:
+    if layout is not None and (model_count != 1 or license_count != 1):
+        raise VerificationError(
+            f"{path.name} must contain exactly one locked grammar model and license"
+        )
+
+
 def _scan_zip(path: Path) -> None:
+    layout = _grammar_archive_layout(path)
+    model_count = 0
+    license_count = 0
     try:
         with zipfile.ZipFile(path) as archive:
             corrupt = archive.testzip()
@@ -173,23 +544,83 @@ def _scan_zip(path: Path) -> None:
                 if member.filename.replace("\\", "/") in {".", "./"}:
                     continue
                 name = _check_member_name(member.filename, path)
+                basename = PurePosixPath(name).name
+                is_model = name.lower().endswith(".gram")
+                is_license = layout is not None and basename == PurePosixPath(
+                    str(layout["license_path"])
+                ).name
+                if is_model or is_license:
+                    if layout is None or member.is_dir() or (
+                        (member.external_attr >> 16) & 0o170000
+                    ) == 0o120000:
+                        raise VerificationError(
+                            f"unexpected or linked grammar resource in {path.name}: {name}"
+                        )
+                    kind = "model" if is_model else "license"
+                    with archive.open(member, "r") as stream:
+                        _scan_locked_grammar_resource(
+                            name=name,
+                            size=member.file_size,
+                            stream=stream,
+                            archive=path,
+                            layout=layout,
+                            kind=kind,
+                        )
+                    if kind == "model":
+                        model_count += 1
+                    else:
+                        license_count += 1
+                    continue
                 if member.is_dir() or (
                     member.file_size > MAX_SECRET_SCAN_BYTES
                     and _locked_fixture_sha256(name) is None
                 ):
                     continue
                 _scan_member_bytes(name, archive.read(member), path)
+            _finish_grammar_archive_scan(path, layout, model_count, license_count)
     except zipfile.BadZipFile as error:
         raise VerificationError(f"invalid ZIP archive: {path}") from error
 
 
 def _scan_tar(path: Path) -> None:
+    layout = _grammar_archive_layout(path)
+    model_count = 0
+    license_count = 0
     try:
         with tarfile.open(path, mode="r:*") as archive:
             for member in archive:
                 if member.name.replace("\\", "/") in {".", "./"}:
                     continue
                 name = _check_member_name(member.name, path)
+                basename = PurePosixPath(name).name
+                is_model = name.lower().endswith(".gram")
+                is_license = layout is not None and basename == PurePosixPath(
+                    str(layout["license_path"])
+                ).name
+                if is_model or is_license:
+                    if layout is None or not member.isfile():
+                        raise VerificationError(
+                            f"unexpected or linked grammar resource in {path.name}: {name}"
+                        )
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise VerificationError(
+                            f"cannot read grammar resource in {path.name}: {name}"
+                        )
+                    with stream:
+                        _scan_locked_grammar_resource(
+                            name=name,
+                            size=member.size,
+                            stream=stream,
+                            archive=path,
+                            layout=layout,
+                            kind="model" if is_model else "license",
+                        )
+                    if is_model:
+                        model_count += 1
+                    else:
+                        license_count += 1
+                    continue
                 if member.issym() or member.islnk():
                     link = PurePosixPath(member.linkname)
                     if link.is_absolute() or ".." in link.parts:
@@ -204,8 +635,382 @@ def _scan_tar(path: Path) -> None:
                 stream = archive.extractfile(member)
                 if stream is not None:
                     _scan_member_bytes(name, stream.read(), path)
+            _finish_grammar_archive_scan(path, layout, model_count, license_count)
     except (tarfile.TarError, OSError) as error:
         raise VerificationError(f"invalid tar archive: {path}") from error
+
+
+def _run_native_tool(command: list[str], description: str) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as error:
+        raise VerificationError(f"{description} tool is unavailable: {command[0]}") from error
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode("utf-8", errors="replace").strip()
+        if detail:
+            detail = detail.splitlines()[-1][:500]
+            raise VerificationError(f"{description} failed: {detail}") from error
+        raise VerificationError(f"{description} failed") from error
+
+
+def _normalized_payload_member(raw: str) -> str:
+    if "\\" in raw or "\x00" in raw:
+        raise VerificationError(f"unsafe macOS package payload path: {raw!r}")
+    normalized = raw
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized in {"", "."}:
+        return "."
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise VerificationError(f"unsafe macOS package payload path: {raw!r}")
+    return path.as_posix()
+
+
+def _expected_macos_payload_paths() -> tuple[str, str]:
+    model = locked_grammar_model()
+    shared_support = "Library/Input Methods/YunPin.app/Contents/SharedSupport"
+    return (
+        f"{shared_support}/{model['filename']}",
+        f"{shared_support}/licenses/{model['licenseFilename']}",
+    )
+
+
+def _verify_macos_payload_listing(package: Path) -> None:
+    result = _run_native_tool(
+        ["/usr/sbin/pkgutil", "--payload-files", str(package)],
+        "macOS package payload listing",
+    )
+    try:
+        members = [
+            _normalized_payload_member(row)
+            for row in result.stdout.decode("utf-8").splitlines()
+        ]
+    except UnicodeDecodeError as error:
+        raise VerificationError("macOS package payload paths are not UTF-8") from error
+    expected_model, expected_license = _expected_macos_payload_paths()
+    expected_model_sidecar = str(
+        PurePosixPath(expected_model).parent
+        / f"._{PurePosixPath(expected_model).name}"
+    )
+    expected_license_sidecar = str(
+        PurePosixPath(expected_license).parent
+        / f"._{PurePosixPath(expected_license).name}"
+    )
+    models = [
+        name
+        for name in members
+        if name.lower().endswith(".gram")
+        and not PurePosixPath(name).name.startswith("._")
+    ]
+    model_sidecars = [
+        name
+        for name in members
+        if name.lower().endswith(".gram")
+        and PurePosixPath(name).name.startswith("._")
+    ]
+    licenses = [
+        name
+        for name in members
+        if PurePosixPath(name).name == PurePosixPath(expected_license).name
+    ]
+    license_sidecars = [
+        name
+        for name in members
+        if PurePosixPath(name).name
+        == f"._{PurePosixPath(expected_license).name}"
+    ]
+    if models != [expected_model]:
+        raise VerificationError(
+            "macOS package payload must list exactly one locked grammar model at "
+            f"{expected_model}"
+        )
+    if model_sidecars not in ([], [expected_model_sidecar]):
+        raise VerificationError("macOS package payload has an unexpected grammar sidecar")
+    if licenses != [expected_license]:
+        raise VerificationError(
+            "macOS package payload must list exactly one locked grammar license at "
+            f"{expected_license}"
+        )
+    if license_sidecars not in ([], [expected_license_sidecar]):
+        raise VerificationError("macOS package payload has an unexpected grammar license sidecar")
+
+
+def _payload_entries(root: Path) -> list[Path]:
+    entries: list[Path] = []
+    for directory, names, files in os.walk(root, followlinks=False):
+        current = Path(directory)
+        entries.extend(current / name for name in names)
+        entries.extend(current / name for name in files)
+    return entries
+
+
+def _verify_exact_payload_file(
+    root: Path,
+    relative: str,
+    expected_size: int,
+    expected_sha256: str,
+    label: str,
+) -> None:
+    path = root / PurePosixPath(relative)
+    cursor = path
+    try:
+        while cursor != root:
+            mode = cursor.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise VerificationError(f"{label} path contains a symbolic link: {relative}")
+            cursor = cursor.parent
+    except FileNotFoundError as error:
+        raise VerificationError(f"{label} is missing from macOS package: {relative}") from error
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise VerificationError(f"{label} is not a regular file: {relative}")
+    if path.stat().st_size != expected_size:
+        raise VerificationError(f"{label} has the wrong size in macOS package")
+    try:
+        digest = sha256_file(path)
+    except OSError as error:
+        raise VerificationError(f"cannot hash {label} in macOS package") from error
+    if digest != expected_sha256:
+        raise VerificationError(f"{label} has the wrong SHA-256 in macOS package")
+
+
+def verify_macos_package_payload(
+    root: Path,
+    evidence: Path | None = None,
+    commit: str | None = None,
+) -> None:
+    """Verify locked grammar bytes in an already-expanded component payload."""
+
+    if root.is_symlink() or not root.is_dir():
+        raise VerificationError("expanded macOS package payload is missing")
+    model = locked_grammar_model()
+    expected_model, expected_license = _expected_macos_payload_paths()
+    entries = _payload_entries(root)
+    model_entries = [
+        path.relative_to(root).as_posix()
+        for path in entries
+        if path.name.lower().endswith(".gram")
+    ]
+    license_entries = [
+        path.relative_to(root).as_posix()
+        for path in entries
+        if path.name == str(model["licenseFilename"])
+    ]
+    if model_entries != [expected_model]:
+        raise VerificationError(
+            "expanded macOS package must contain exactly one locked grammar model "
+            f"at {expected_model}"
+        )
+    if license_entries != [expected_license]:
+        raise VerificationError(
+            "expanded macOS package must contain exactly one locked grammar license "
+            f"at {expected_license}"
+        )
+    _verify_exact_payload_file(
+        root,
+        expected_model,
+        int(model["size"]),
+        str(model["sha256"]),
+        "locked grammar model",
+    )
+    _verify_exact_payload_file(
+        root,
+        expected_license,
+        int(model["licenseSize"]),
+        str(model["licenseSha256"]),
+        "locked grammar model license",
+    )
+    if evidence is not None:
+        if commit is None:
+            raise VerificationError("macOS grammar evidence requires a commit")
+        app_root = root / "Library/Input Methods/YunPin.app"
+        verify_macos_grammar_evidence(evidence, commit, app_root)
+
+
+def _verify_macos_dmg_manifest(root: Path) -> None:
+    manifest = root / MACOS_DMG_MANIFEST
+    expected_names = {MACOS_PACKAGE, MACOS_SOURCE, MACOS_INSTRUCTIONS}
+    rows: dict[str, str] = {}
+    try:
+        raw_rows = manifest.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as error:
+        raise VerificationError("invalid macOS DMG checksum manifest") from error
+    for raw in raw_rows:
+        match = CHECKSUM_ROW.fullmatch(raw)
+        if not match or match.group(2) in rows:
+            raise VerificationError(f"invalid macOS DMG checksum row: {raw!r}")
+        rows[match.group(2)] = match.group(1)
+    if set(rows) != expected_names:
+        raise VerificationError("macOS DMG checksum manifest has an unexpected file set")
+    for name, expected in rows.items():
+        if sha256_file(root / name) != expected:
+            raise VerificationError(f"macOS DMG checksum mismatch: {name}")
+
+
+def _verify_macos_package(
+    package: Path,
+    work: Path,
+    evidence: Path | None = None,
+    commit: str | None = None,
+) -> None:
+    _verify_macos_payload_listing(package)
+    expanded = work / "expanded-package"
+    _run_native_tool(
+        ["/usr/sbin/pkgutil", "--expand", str(package), str(expanded)],
+        "macOS package expansion",
+    )
+    payload = expanded / "Payload"
+    try:
+        payload_mode = payload.lstat().st_mode
+    except FileNotFoundError as error:
+        raise VerificationError("expanded macOS component package has no Payload") from error
+    if stat.S_ISLNK(payload_mode) or not stat.S_ISREG(payload_mode):
+        raise VerificationError("expanded macOS package Payload is not a regular file")
+    payload_root = work / "payload-root"
+    payload_root.mkdir()
+    _run_native_tool(
+        [
+            "/usr/bin/ditto",
+            "-x",
+            # Reconstitute pkgbuild's AppleDouble metadata instead of leaving
+            # ._*.gram as ordinary files.  Avoid applying quarantine, ACL, or
+            # rootless metadata inside the private inspection directory.
+            "--rsrc",
+            "--extattr",
+            "--noqtn",
+            "--noacl",
+            "--nopersistRootless",
+            str(payload),
+            str(payload_root),
+        ],
+        "macOS package payload expansion",
+    )
+    verify_macos_package_payload(payload_root, evidence, commit)
+
+
+def _verify_macos_dmg_mount(
+    root: Path,
+    work: Path,
+    evidence: Path | None = None,
+    commit: str | None = None,
+) -> None:
+    expected_names = {
+        MACOS_PACKAGE,
+        MACOS_SOURCE,
+        MACOS_INSTRUCTIONS,
+        MACOS_DMG_MANIFEST,
+    }
+    try:
+        contents = {path.name: path for path in root.iterdir()}
+    except OSError as error:
+        raise VerificationError("cannot enumerate mounted macOS DMG") from error
+    if set(contents) != expected_names:
+        raise VerificationError("mounted macOS DMG has an unexpected top-level file set")
+    for name, path in contents.items():
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            raise VerificationError(f"mounted macOS DMG member is not a regular file: {name}")
+    _verify_macos_dmg_manifest(root)
+    _verify_macos_package(contents[MACOS_PACKAGE], work, evidence, commit)
+
+
+def verify_macos_installer(
+    dmg: Path,
+    evidence: Path | None = None,
+    commit: str | None = None,
+) -> None:
+    """Mount a final DMG and verify the locked grammar model inside its PKG."""
+
+    if sys.platform != "darwin":
+        raise VerificationError("native macOS installer verification requires Darwin")
+    if (
+        dmg.name != MACOS_DMG
+        or dmg.is_symlink()
+        or not dmg.is_file()
+        or dmg.stat().st_size == 0
+    ):
+        raise VerificationError(f"invalid final macOS DMG: {dmg}")
+    _run_native_tool(["/usr/bin/hdiutil", "verify", str(dmg)], "macOS DMG integrity")
+
+    work = Path(tempfile.mkdtemp(prefix="yunpin-macos-installer-"))
+    mount = work / "mount"
+    mount.mkdir()
+    attached = False
+    try:
+        attach = _run_native_tool(
+            [
+                "/usr/bin/hdiutil",
+                "attach",
+                "-readonly",
+                "-nobrowse",
+                "-noautoopen",
+                "-plist",
+                "-mountpoint",
+                str(mount),
+                str(dmg),
+            ],
+            "read-only macOS DMG attachment",
+        )
+        attached = True
+        try:
+            attach_document = plistlib.loads(attach.stdout)
+        except (plistlib.InvalidFileException, ValueError) as error:
+            raise VerificationError("hdiutil returned invalid attachment metadata") from error
+        if not isinstance(attach_document, dict):
+            raise VerificationError("hdiutil returned malformed attachment metadata")
+        mount_points = [
+            entity.get("mount-point")
+            for entity in attach_document.get("system-entities", [])
+            if isinstance(entity, dict) and entity.get("mount-point") is not None
+        ]
+        # macOS canonicalizes /var to /private/var in hdiutil's plist.  Compare
+        # the resolved mount identity while still requiring one mounted volume.
+        if (
+            len(mount_points) != 1
+            or not isinstance(mount_points[0], str)
+            or Path(mount_points[0]).resolve() != mount.resolve()
+        ):
+            raise VerificationError("macOS DMG did not attach at the private mount point")
+        disk_info = _run_native_tool(
+            ["/usr/sbin/diskutil", "info", "-plist", str(mount)],
+            "mounted macOS DMG inspection",
+        )
+        try:
+            disk_document = plistlib.loads(disk_info.stdout)
+        except (plistlib.InvalidFileException, ValueError) as error:
+            raise VerificationError("diskutil returned invalid mounted-volume metadata") from error
+        if not isinstance(disk_document, dict):
+            raise VerificationError("diskutil returned malformed mounted-volume metadata")
+        if disk_document.get("WritableVolume") is not False:
+            raise VerificationError("final macOS DMG did not mount read-only")
+        _verify_macos_dmg_mount(mount, work, evidence, commit)
+    finally:
+        detach_failed = False
+        if attached:
+            detached = subprocess.run(
+                ["/usr/bin/hdiutil", "detach", str(mount)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if detached.returncode != 0:
+                forced = subprocess.run(
+                    ["/usr/bin/hdiutil", "detach", "-force", str(mount)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                if forced.returncode != 0:
+                    detach_failed = True
+        if not detach_failed:
+            shutil.rmtree(work, ignore_errors=True)
+        if detach_failed:
+            # Keep the private mount root intact for manual recovery instead of
+            # recursively touching a volume that is still attached.
+            raise VerificationError("failed to detach private macOS DMG mount")
 
 
 def scan_asset(path: Path) -> None:
@@ -255,6 +1060,7 @@ def write_job_metadata(
         "repositoryCommit": commit,
         "signed": False,
         "productionReady": False,
+        "grammarModel": locked_grammar_model(),
         "assets": _asset_rows(assets),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -293,6 +1099,10 @@ def verify_windows_commit(runtime: Path, source: Path, commit: str) -> None:
             raise VerificationError(
                 f"{archive_path.name} was not built from expected commit {commit}"
             )
+        if document.get("grammarModel") != locked_grammar_model():
+            raise VerificationError(
+                f"{archive_path.name} grammar model differs from platform locks"
+            )
         if runtime_metadata and (
             document.get("signed") is not False
             or document.get("productionReady") is not False
@@ -300,6 +1110,38 @@ def verify_windows_commit(runtime: Path, source: Path, commit: str) -> None:
             raise VerificationError(
                 f"{archive_path.name} is not marked as an unsigned development build"
             )
+        if runtime_metadata:
+            grammar_quality = document.get("grammarQuality")
+            if not isinstance(grammar_quality, dict):
+                raise VerificationError(
+                    f"{archive_path.name} lacks Windows grammar quality evidence"
+                )
+            shared_quality = dict(grammar_quality)
+            try:
+                top_level_p95 = shared_quality.pop(
+                    "finalKeyCandidateP95Microseconds"
+                )
+                public_cases = shared_quality.pop("publicCases")
+            except KeyError as error:
+                raise VerificationError(
+                    f"{archive_path.name} grammar quality evidence is incomplete"
+                ) from error
+            verify_grammar_quality_contract(shared_quality, "Windows")
+            if (
+                top_level_p95
+                != shared_quality["model"]["finalKeyCandidateP95Microseconds"]
+                or public_cases
+                != [
+                    "youyuantuma",
+                    "youceshizhanghaoma",
+                    "shujukushiyongdeshinagebanben",
+                    "qingzaishiyici",
+                    "woyijingshoudaole",
+                ]
+            ):
+                raise VerificationError(
+                    f"{archive_path.name} Windows grammar quality summary differs"
+                )
 
 
 def _read_metadata(
@@ -322,6 +1164,7 @@ def _read_metadata(
         "repositoryCommit": commit,
         "signed": False,
         "productionReady": False,
+        "grammarModel": locked_grammar_model(),
         "assets": _asset_rows(expected_assets),
     }
     if document != expected:
@@ -369,6 +1212,7 @@ Repository commit: `{commit}`
 - `YunPin-IME-development-preview-source.tar.gz`: matching macOS corresponding source.
 - `SHA256SUMS` and `RELEASE-METADATA.json`: byte hashes and immutable source identity.
 - `YunPin-IME-{tag}.spdx.json`: SPDX 2.3 software bill of materials generated from reviewed locks.
+- `grammar-quality-metrics.json`: commit- and runtime-bound public A/B quality, latency and RSS evidence.
 
 No personal dictionary, Sogou export, input replay, credential, or encryption key is bundled.
 Read the installer documentation before accepting either unsigned build.
@@ -392,7 +1236,12 @@ def finalize_release(
         WINDOWS_CHECKSUMS,
         WINDOWS_METADATA,
     }
-    expected_macos_names = {MACOS_DMG, MACOS_SOURCE, MACOS_METADATA}
+    expected_macos_names = {
+        MACOS_DMG,
+        MACOS_SOURCE,
+        MACOS_METADATA,
+        MACOS_GRAMMAR_EVIDENCE,
+    }
     if set(windows) != expected_windows_names:
         raise VerificationError(
             f"unexpected Windows artifact set: {sorted(windows)}"
@@ -405,10 +1254,18 @@ def finalize_release(
     for asset in windows_assets + macos_assets:
         scan_asset(asset)
     _verify_platform_checksums(windows[WINDOWS_CHECKSUMS], windows_assets)
-    _read_metadata(
+    verify_windows_commit(
+        windows[WINDOWS_RUNTIME], windows[WINDOWS_SOURCE], commit
+    )
+    windows_metadata = _read_metadata(
         windows[WINDOWS_METADATA], "windows", tag, commit, windows_assets
     )
-    _read_metadata(macos[MACOS_METADATA], "macos", tag, commit, macos_assets)
+    macos_metadata = _read_metadata(
+        macos[MACOS_METADATA], "macos", tag, commit, macos_assets
+    )
+    verify_macos_grammar_evidence(macos[MACOS_GRAMMAR_EVIDENCE], commit)
+    if windows_metadata["grammarModel"] != macos_metadata["grammarModel"]:
+        raise VerificationError("platform release metadata names different grammar models")
 
     expected_sbom_name = f"YunPin-IME-{tag}.spdx.json"
     if sbom.name != expected_sbom_name or not sbom.is_file() or sbom.stat().st_size == 0:
@@ -432,7 +1289,9 @@ def finalize_release(
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
     core_assets = windows_assets + macos_assets
-    for asset in core_assets + [sbom]:
+    grammar_evidence = macos[MACOS_GRAMMAR_EVIDENCE]
+    durable_assets = core_assets + [sbom, grammar_evidence]
+    for asset in durable_assets:
         shutil.copy2(asset, output_dir / asset.name)
 
     roles = {
@@ -441,6 +1300,7 @@ def finalize_release(
         MACOS_DMG: ("macos", "installer-image"),
         MACOS_SOURCE: ("macos", "corresponding-source"),
         expected_sbom_name: ("all", "sbom"),
+        MACOS_GRAMMAR_EVIDENCE: ("macos", "quality-performance-evidence"),
     }
     release_document = {
         "schemaVersion": 1,
@@ -450,6 +1310,7 @@ def finalize_release(
         "repositoryCommit": commit,
         "signed": False,
         "productionReady": False,
+        "grammarModel": locked_grammar_model(),
         "assets": [
             {
                 "name": asset.name,
@@ -457,7 +1318,7 @@ def finalize_release(
                 "role": roles[asset.name][1],
                 "sha256": sha256_file(asset),
             }
-            for asset in sorted(core_assets + [sbom], key=lambda item: item.name)
+            for asset in sorted(durable_assets, key=lambda item: item.name)
         ],
     }
     metadata_path = output_dir / RELEASE_METADATA
@@ -466,7 +1327,7 @@ def finalize_release(
         encoding="utf-8",
     )
     checksum_assets = sorted(
-        [*(output_dir / item.name for item in core_assets + [sbom]), metadata_path],
+        [*(output_dir / item.name for item in durable_assets), metadata_path],
         key=lambda item: item.name,
     )
     (output_dir / RELEASE_CHECKSUMS).write_text(
@@ -493,8 +1354,8 @@ def verify_remote_assets(document_path: Path, local_directory: Path) -> None:
         for path in local_directory.iterdir()
         if path.name != RELEASE_NOTES
     }
-    if len(local_assets) != 7:
-        raise VerificationError("local release directory must contain exactly seven assets")
+    if len(local_assets) != 8:
+        raise VerificationError("local release directory must contain exactly eight assets")
     for path in local_assets.values():
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise VerificationError(f"invalid local release asset: {path.name}")
@@ -540,6 +1401,14 @@ def _parser() -> argparse.ArgumentParser:
     windows_commit.add_argument("runtime", type=Path)
     windows_commit.add_argument("source", type=Path)
 
+    macos_installer = commands.add_parser(
+        "verify-macos-installer",
+        help="mount a final DMG and inspect the locked grammar bytes inside its PKG",
+    )
+    macos_installer.add_argument("--evidence", required=True, type=Path)
+    macos_installer.add_argument("--commit", required=True)
+    macos_installer.add_argument("dmg", type=Path)
+
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--tag", required=True)
     finalize.add_argument("--commit", required=True)
@@ -573,6 +1442,13 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "verify-windows-commit":
             verify_windows_commit(arguments.runtime, arguments.source, arguments.commit)
             print("Windows archive commit metadata passed")
+        elif arguments.command == "verify-macos-installer":
+            verify_macos_installer(
+                arguments.dmg, arguments.evidence, arguments.commit
+            )
+            print(
+                "macOS DMG, expanded PKG grammar resources, and A/B evidence passed"
+            )
         elif arguments.command == "finalize":
             finalize_release(
                 arguments.tag,

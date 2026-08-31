@@ -44,6 +44,7 @@ RELEASE_SNIPPETS = {
     "verify-published": "published title, body, and state recheck",
     '[[ "${release_id}" =~ ^[0-9]+$ ]]': "numeric release ID gate",
     'https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets': "ID-addressed release asset upload",
+    'test "${#assets[@]}" -eq 8': "exact eight-asset release allowlist",
     "draft=false": "atomic public visibility transition",
     "--json isImmutable": "immutable-release publication gate",
     "gh release verify": "GitHub release attestation verification",
@@ -211,15 +212,26 @@ CI_SNIPPETS = {
     'tags: ["v*-preview.*"]': "preview tag trigger",
     "python3 scripts/check_release_workflow.py": "PR static release check",
     'python3 -m unittest discover -s tests -p "test_release_*.py" -v': "release verifier tests",
+    "python3 -m unittest tests.test_grammar_asset_metadata -v": "mutable grammar asset metadata tests",
     "runs-on: windows-2022": "Windows v143-compatible runner",
     ".\\platform\\windows\\scripts\\Build-Preview.ps1": "Windows package entry point",
     "YunPin-IME-Windows-development-preview.zip": "Windows runtime asset",
     "YunPin-IME-Windows-development-preview-source.zip": "Windows source asset",
+    "name: Rebuild extracted Windows source archive offline": "Windows extracted-source acceptance",
+    "name: Verify grammar cache exclusive temporary-file safety": "Windows grammar cache reparse negative test",
+    "-TestGrammarCacheSafety": "Windows grammar cache safety self-test entry point",
+    "-SkipPackage -Offline": "Windows fail-closed offline rebuild mode",
+    '$env:GOPROXY = "off"': "Windows offline Go module gate",
     "windows-release-metadata.json": "Windows commit metadata",
     "runs-on: macos-26": "macOS 26 runner",
     'YUNPIN_MACOS_BUILD_JOBS: "2"': "bounded macOS build parallelism",
     "Xcode_26.4.1.app": "pinned Xcode selection",
     "make -C platform/macos dmg BUILD_ROOT=build/macos": "macOS DMG entry point",
+    "name: Verify final macOS installer grammar resources": "unconditional macOS installer grammar step",
+    "scripts/verify_release_assets.py verify-macos-installer": "expanded macOS installer grammar gate",
+    "--evidence build/macos/package/grammar-quality-metrics.json": "external macOS grammar A/B evidence",
+    "--commit \"$GITHUB_SHA\"": "macOS grammar evidence commit binding",
+    "build/macos/package/grammar-quality-metrics.json": "macOS grammar metrics artifact",
     "YunPin-IME-macOS-development-preview.dmg": "macOS DMG asset",
     "YunPin-IME-development-preview-source.tar.gz": "macOS source asset",
     "macos-release-metadata.json": "macOS commit metadata",
@@ -275,6 +287,45 @@ def check_static_contract() -> int:
         errors.append("publisher must be called by the full CI workflow, not tag-triggered independently")
     if "if: startsWith(github.ref, 'refs/tags/')" not in ci:
         errors.append("CI publisher call must be tag-only")
+    windows_source_marker = "      - name: Rebuild extracted Windows source archive offline"
+    windows_source_start = ci.find(windows_source_marker)
+    if windows_source_start >= 0:
+        windows_source_end = ci.find(
+            "\n      - ", windows_source_start + len(windows_source_marker)
+        )
+        if windows_source_end < 0:
+            windows_source_end = len(ci)
+        windows_source_gate = ci[windows_source_start:windows_source_end]
+        for required in (
+            "Expand-Archive",
+            '-Filter "Build-Preview.ps1"',
+            "-SkipPackage -Offline",
+            '$env:GOPROXY = "off"',
+            '$env:GOSUMDB = "off"',
+        ):
+            if required not in windows_source_gate:
+                errors.append(
+                    f"Windows extracted-source acceptance omits {required}"
+                )
+        if "\n        if:" in windows_source_gate:
+            errors.append(
+                "Windows extracted-source acceptance must run on ordinary CI"
+            )
+    macos_gate_marker = "      - name: Verify final macOS installer grammar resources"
+    macos_gate_start = ci.find(macos_gate_marker)
+    if macos_gate_start >= 0:
+        macos_gate_end = ci.find("\n      - ", macos_gate_start + len(macos_gate_marker))
+        if macos_gate_end < 0:
+            macos_gate_end = len(ci)
+        macos_gate = ci[macos_gate_start:macos_gate_end]
+        if "verify-macos-installer" not in macos_gate:
+            errors.append("macOS installer grammar step does not run its native verifier")
+        if "--evidence build/macos/package/grammar-quality-metrics.json" not in macos_gate:
+            errors.append("macOS installer grammar step omits external A/B evidence")
+        if '--commit "$GITHUB_SHA"' not in macos_gate:
+            errors.append("macOS installer grammar evidence is not commit-bound")
+        if "\n        if:" in macos_gate:
+            errors.append("macOS installer grammar verification must run on ordinary CI branches")
     if "softprops/action-gh-release" in release or "ncipollo/release-action" in release:
         errors.append("release publishing must use the runner's built-in gh CLI")
     for forbidden in ("private-pairing", "e2e-private", "yunpin_pairing_private"):

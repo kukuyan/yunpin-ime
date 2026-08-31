@@ -143,3 +143,60 @@ for component in sys.argv[2].split("."):
 print(value)
 PY
 }
+
+verify_locked_grammar_resource() {
+  local path="$1"
+  local expected_size="$2"
+  local expected_sha256="$3"
+  local label="$4"
+  local actual_size
+  local actual_sha256
+
+  [[ -f "$path" && ! -L "$path" ]] ||
+    die "$label is missing, linked, or not a regular file: $path"
+  actual_size="$(/usr/bin/stat -f%z "$path")" ||
+    die "could not read $label size: $path"
+  [[ "$actual_size" == "$expected_size" ]] ||
+    die "$label size mismatch: expected $expected_size, observed $actual_size"
+  actual_sha256="$(/usr/bin/shasum -a 256 "$path" | /usr/bin/awk '{print $1}')" ||
+    die "could not hash $label: $path"
+  [[ "$actual_sha256" == "$expected_sha256" ]] ||
+    die "$label SHA-256 mismatch"
+}
+
+resolve_locked_grammar_resource() {
+  local kind="$1"
+  local cache_dir="${YUNPIN_MACOS_CACHE_DIR:-${REPO_ROOT}/build/macos/downloads}"
+  local filename
+  local expected_size
+  local expected_sha256
+  local label
+  local candidate
+
+  case "$kind" in
+    model)
+      filename="$(read_lock_value grammarModel.filename)"
+      expected_size="$(read_lock_value grammarModel.size)"
+      expected_sha256="$(read_lock_value grammarModel.sha256)"
+      label="grammar model"
+      ;;
+    license)
+      filename="$(read_lock_value grammarModel.licenseFilename)"
+      expected_size="$(read_lock_value grammarModel.licenseSize)"
+      expected_sha256="$(read_lock_value grammarModel.licenseSha256)"
+      label="grammar model license"
+      ;;
+    *)
+      die "unknown grammar resource kind: $kind"
+      ;;
+  esac
+
+  for candidate in "$cache_dir/$filename" "$REPO_ROOT/sources/$filename"; do
+    [[ -e "$candidate" || -L "$candidate" ]] || continue
+    verify_locked_grammar_resource \
+      "$candidate" "$expected_size" "$expected_sha256" "$label"
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  die "verified $label is unavailable as exact file $filename"
+}

@@ -62,6 +62,18 @@ NAMESPACED_READ = re.compile(r'name_space_ \+ "/([a-z_]+)"')
 # knobs: an overlay may leave them out. They still must not be *set* to
 # something nothing reads, which the reverse direction covers.
 DIRECT_READ = re.compile(r'ConfigBool\(ticket, "yunpin/([a-z_]+)"')
+GRAMMAR_SETTINGS = {
+    "grammar/language": "wanxiang-lts-zh-hans",
+    "grammar/collocation_max_length": "6",
+    "grammar/collocation_min_length": "3",
+    "grammar/collocation_penalty": "-14",
+    "grammar/non_collocation_penalty": "-6",
+    "grammar/weak_collocation_penalty": "-100",
+    "grammar/rear_penalty": "-20",
+    "translator/contextual_suggestions": "true",
+    "translator/max_homophones": "8",
+    "translator/enable_correction": "false",
+}
 
 
 def overlay_options(path: Path) -> set[str]:
@@ -124,6 +136,17 @@ class SchemaOverlayContractTests(unittest.TestCase):
             "the macOS and Windows overlays configure different option sets; "
             "values may differ per platform but the option set must not",
         )
+
+    def test_both_overlays_use_the_reviewed_full_grammar_recipe(self) -> None:
+        for overlay in OVERLAYS:
+            text = overlay.read_text(encoding="utf-8")
+            for key, value in GRAMMAR_SETTINGS.items():
+                self.assertEqual(
+                    1,
+                    text.count(f'"{key}": {value}'),
+                    f"{overlay.relative_to(ROOT)} must pin {key} to {value}",
+                )
+            self.assertNotIn("max_homographs", text)
 
     def test_host_capability_option_has_a_setter(self) -> None:
         """The option that made the filter inert must be set by a host patch.

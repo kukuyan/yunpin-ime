@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -14,6 +15,25 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 WINDOWS = ROOT / "platform" / "windows"
 LOCK_PATH = WINDOWS / "dependencies.lock.json"
+EXPECTED_GRAMMAR_MODEL = {
+    "name": "wanxiang-lts-zh-hans",
+    "filename": "wanxiang-lts-zh-hans.gram",
+    "repository": "https://github.com/amzxyz/RIME-LMDG",
+    "release": "LTS",
+    "immutable": False,
+    "assetId": 536587145,
+    "assetUpdatedAt": "2026-08-30T12:25:59Z",
+    "tagRef": "c78463a521aee2681db6cd6424a75a9b413237a3",
+    "sourceSnapshotAtAssetUpdate": "5850e982a73537b1510afc4f99dcb37b335815d0",
+    "url": "https://github.com/amzxyz/RIME-LMDG/releases/download/LTS/wanxiang-lts-zh-hans.gram",
+    "sha256": "1635588006d79cc6955fbcf3d8de12822a36856eb5408735a8b4a2952b16cadf",
+    "size": 420248620,
+    "license": "CC-BY-4.0",
+    "licenseFilename": "RIME-LMDG-LICENSE.CC-BY-4.0",
+    "licenseUrl": "https://raw.githubusercontent.com/amzxyz/RIME-LMDG/5850e982a73537b1510afc4f99dcb37b335815d0/LICENSE",
+    "licenseSha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+    "licenseSize": 18656,
+}
 
 
 def run(*args: str, cwd: Path = ROOT) -> str:
@@ -103,6 +123,147 @@ class WindowsClientTests(unittest.TestCase):
             self.assertEqual(fields[2], expected)
             if (checkout / ".git").exists():
                 self.assertEqual(run("git", "-C", str(checkout), "rev-parse", "HEAD"), expected)
+
+    def test_full_grammar_model_lock_is_shared_and_exact(self) -> None:
+        macos = json.loads(
+            (ROOT / "platform" / "macos" / "dependencies.lock.json").read_text(
+                encoding="utf-8"
+            )
+        )["grammarModel"]
+        self.assertEqual(EXPECTED_GRAMMAR_MODEL, self.lock["grammarModel"])
+        self.assertEqual(macos, self.lock["grammarModel"])
+
+    def test_full_grammar_model_is_packaged_and_headless_gated(self) -> None:
+        build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        package_test = (WINDOWS / "scripts" / "Test-Package.ps1").read_text(
+            encoding="utf-8"
+        )
+        probe = (
+            WINDOWS / "tests" / "rime-grammar-quality-probe" / "main.cpp"
+        ).read_text(encoding="utf-8")
+        for script in (build, package, package_test):
+            self.assertIn("grammarModel.sha256", script)
+            self.assertIn("grammarModel.size", script)
+            self.assertIn("grammarModel.licenseSha256", script)
+            self.assertIn("grammarModel.licenseSize", script)
+            self.assertIn("ReparsePoint", script)
+        self.assertIn("SOURCE-MANIFEST.sha256", build)
+        self.assertIn("Assert-SourceManifest -Root $repoRoot", build)
+        self.assertIn("Assert-OnlineGrammarAssetMetadata", build)
+        self.assertIn("verify_grammar_asset_metadata.py", build)
+        self.assertIn("releases/tags/LTS", build)
+        self.assertIn("git/ref/tags/LTS", build)
+        self.assertIn("-DependencyLock $lockPath -ScratchRoot $scratchRoot", build)
+        self.assertIn("[switch]$Offline", build)
+        self.assertIn("$script:YunPinOfflineBuild", build)
+        self.assertIn("[switch]$TestGrammarCacheSafety", build)
+        self.assertIn("[IO.FileMode]::CreateNew", build)
+        self.assertIn("[IO.FileShare]::None", build)
+        self.assertIn('[guid]::NewGuid().ToString("N")', build)
+        self.assertIn("Assert-SafeCacheTemporaryFile", build)
+        self.assertIn("$sourceStream.CopyTo($temporaryStream)", build)
+        self.assertIn("$httpStream.CopyTo($temporaryStream)", build)
+        self.assertIn("$temporaryStream.Flush($true)", build)
+        self.assertNotIn("-OutFile $temporary", build)
+        self.assertNotIn("Copy-Item -LiteralPath $Bundled -Destination $temporary", build)
+        self.assertIn(
+            "[IO.Path]::GetDirectoryName($fullPath),\n"
+            "            $fullDirectory,\n"
+            "            [StringComparison]::OrdinalIgnoreCase",
+            build,
+        )
+        self.assertIn("[IO.File]::Move($temporary, $Destination)", build)
+        self.assertIn("Invoke-GrammarCacheSafetySelfTest", build)
+        self.assertIn("Predictable partial reparse point", build)
+        self.assertIn("Tampered locked cache resource", build)
+        self.assertNotIn('$grammarModelPath + ".part"', build)
+        self.assertNotIn('$grammarLicensePath + ".part"', build)
+        self.assertIn("BUILD-SOURCE-METADATA.json", package)
+        self.assertIn("Source export is missing required subtree", package)
+        self.assertIn("exactly one locked grammar model", package)
+        self.assertIn("synthetic-public-ranking.tsv", package)
+        self.assertIn("synthetic_private_fixture=pass", package)
+        self.assertIn("synthetic_private_counterfactual=pass", package)
+        self.assertIn('"prepare-baseline"', package)
+        self.assertIn('"prepare-model"', package)
+        self.assertIn('"private-off"', package)
+        self.assertIn("deploymentPhase", package)
+        self.assertIn("measurementPhase", package)
+        self.assertIn("loadStageEvidence", package)
+        self.assertIn("fresh-process-after-deployment", package)
+        expected_holdout = (
+            ("accept_origin_image", "youyuantuma", "有原图吗", "有原图吗"),
+            ("accept_semantic_account", "youceshizhanghaoma", "右侧是账号吗", "有测试账号吗"),
+            ("accept_database_version", "shujukushiyongdeshinagebanben", "数据库使用的是哪个版本", "数据库使用的是哪个版本"),
+            ("short_weather", "jintiantianqihenhao", "今天天气很好", "今天天气很好"),
+            ("short_availability", "qingwenyoukongma", "请问有空吗", "请问有空吗"),
+            ("short_how_to", "zhegeshizenmeyongde", "这个是怎么用的", "这个是怎么用的"),
+            ("homophone_retry", "qingzaishiyici", "请再试一次", "请再试一次"),
+            ("homophone_usage", "shiyongfangfa", "使用方法", "使用方法"),
+            ("homophone_which", "yinggaishinage", "应该是那个", "应该是那个"),
+            ("long_email", "qingbaowenjianfadaowodeyouxiang", "情报文件发到我的邮箱", "情报文件发到我的邮箱"),
+            ("long_code", "zhegedaimaweishenmewufayunxing", "这个代码为什么无法运行", "这个代码为什么无法运行"),
+            ("long_meeting", "qingquerenhuiyishijianhedidian", "请确认会议时间和地点", "请确认会议时间和地点"),
+            ("circle_zero", "erlingyilingnianfabu", "二〇一〇年发布", "二〇一〇年发布"),
+            ("ordinary_zero", "lingduyixia", "零度以下", "零度以下"),
+            ("heldout_tomorrow", "womenmingtianjian", "我们明天见", "我们明天见"),
+            ("heldout_feedback", "qingjishifankui", "请及时反馈", "请及时反馈"),
+            ("heldout_network", "wangluolianjiezhengchang", "网络连接正常", "网络连接正常"),
+            ("heldout_open_file", "zhegewenjianzenmedakai", "这个文件怎么打开", "这个文件怎么打开"),
+            ("heldout_send_address", "qingbadizhifageiwo", "请把地址发给我", "请把地址发给我"),
+            ("heldout_received", "woyijingshoudaole", "我已经收到了", "我已经受到了"),
+        )
+        self.assertIn("std::array<HoldoutCase, 20>", probe)
+        for case_id, public_input, model_first, baseline_first in expected_holdout:
+            self.assertIn(f'{{"{case_id}", "{public_input}"', probe)
+            self.assertRegex(
+                probe,
+                re.escape(f'"{model_first}"') + r",\s*" +
+                re.escape(f'"{baseline_first}"'),
+            )
+        self.assertIn("kP95GateMicroseconds = 20000", probe)
+        self.assertIn('"yunpingongcexianhuanqihao"', probe)
+        self.assertIn("CandidatePageContains", probe)
+        self.assertIn("bool* found", probe)
+        self.assertIn("synthetic_private_fixture=pass", probe)
+        self.assertIn("synthetic_private_counterfactual=pass", probe)
+        self.assertIn('mode == "prepare-model"', probe)
+        self.assertIn('mode == "prepare-baseline"', probe)
+        self.assertIn("traits.min_log_level = 0", probe)
+        self.assertIn("if (prepare_mode)", probe)
+        self.assertEqual(1, probe.count("start_maintenance(True)"))
+        prepare_block = probe[
+            probe.index("if (prepare_mode)") : probe.index(
+                "const auto schema_started"
+            )
+        ]
+        self.assertIn("start_maintenance(True)", prepare_block)
+        self.assertIn('std::cerr << "schema_select_begin', probe)
+        self.assertIn('std::cerr << "schema_select_end', probe)
+        self.assertIn("rss_after_initialize_bytes=", probe)
+        self.assertIn("rss_after_schema_select_bytes=", probe)
+        self.assertIn("measurement_max_rss_bytes=", probe)
+        self.assertIn("measurement_process_elapsed_us=", probe)
+        self.assertNotIn("maintenance_us=", probe)
+        self.assertIn("process-cold-deployed-user-data-os-warm", probe)
+        self.assertIn("acceptedQualityCases", package)
+        self.assertIn("modelMinusBaseline", package)
+        self.assertIn("rssAfterHoldoutBytes", package)
+        self.assertIn("rssAfterInitializeBytes", package)
+        self.assertIn("rssAfterSchemaSelectBytes", package)
+        self.assertIn("loading gram db:", package)
+        self.assertIn("modelFileOpenObservedStage", package)
+        self.assertIn("largestResidentGrowthStage", package)
+        self.assertIn("modelMinusBaselineRssIncreaseAtHoldoutBytes", package)
+        cmake = (
+            WINDOWS / "tests" / "rime-grammar-quality-probe" / "CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Psapi.lib", cmake)
 
     def test_patch_series_hashes_apply_and_isolate_preview(self) -> None:
         for row in self.lock["weasel"]["patches"]:
@@ -787,6 +948,19 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"translator/enable_correction": false', config)
         self.assertIn('"yunpin/typo_correction": false', config)
         self.assertIn('"yunpin/typo_reviewed_confusions": false', config)
+        for grammar_setting in (
+            '"grammar/language": wanxiang-lts-zh-hans',
+            '"grammar/collocation_max_length": 6',
+            '"grammar/collocation_min_length": 3',
+            '"grammar/collocation_penalty": -14',
+            '"grammar/non_collocation_penalty": -6',
+            '"grammar/weak_collocation_penalty": -100',
+            '"grammar/rear_penalty": -20',
+            '"translator/contextual_suggestions": true',
+            '"translator/max_homophones": 8',
+        ):
+            self.assertIn(grammar_setting, config)
+        self.assertNotIn("max_homographs", config)
         self.assertFalse((WINDOWS / "rime" / "private.tsv").exists())
         self.assertFalse((WINDOWS / "rime" / "yunpin" / "private.tsv").exists())
         example = (WINDOWS / "rime" / "yunpin-private.tsv.example").read_text(

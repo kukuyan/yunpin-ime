@@ -19,6 +19,7 @@ jobs:
       - run: python3 -m unittest tests.test_privacy_gate -v
       - run: python3 -m unittest tests.test_schema_overlay_contract -v
       - run: python3 -m unittest tests.test_patch_series_lock -v
+      - run: python3 -m unittest tests.test_grammar_asset_metadata -v
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
       - run: python3 -m unittest tests.test_mobile_contract -v
@@ -117,6 +118,9 @@ jobs:
       - name: Verify private snapshot E2E gate recovery fixtures
         shell: pwsh
         run: .\platform\windows\e2e\Test-Private-Snapshot-E2E.ps1
+      - name: Verify grammar cache exclusive temporary-file safety
+        shell: pwsh
+        run: .\platform\windows\scripts\Build-Preview.ps1 -TestGrammarCacheSafety
       - name: Build portable plugin tests with MSVC
         run: cmake -S librime-yunpin -B build/librime-yunpin-windows -A x64
       - run: cmake --build build/librime-yunpin-windows --config Release --parallel
@@ -124,6 +128,59 @@ jobs:
       - name: Build and package merged Weasel preview
         shell: pwsh
         run: .\platform\windows\scripts\Build-Preview.ps1
+      - name: Rebuild extracted Windows source archive offline
+        shell: pwsh
+        run: |
+          $sourceArchive = [IO.Path]::GetFullPath(
+            "build/windows/artifacts/YunPin-IME-Windows-development-preview-source.zip"
+          )
+          $extractRoot = [IO.Path]::GetFullPath(
+            "build/windows/offline-source-checkout"
+          )
+          $offlineOutput = [IO.Path]::GetFullPath(
+            "build/windows/offline-source-output"
+          )
+          $buildRoot = [IO.Path]::GetFullPath("build/windows").TrimEnd("\") + "\"
+          foreach ($target in @($extractRoot, $offlineOutput)) {
+            if (-not $target.StartsWith(
+                $buildRoot, [StringComparison]::OrdinalIgnoreCase)) {
+              throw "Offline source target escaped the Windows build root"
+            }
+            if (Test-Path -LiteralPath $target) {
+              Remove-Item -LiteralPath $target -Recurse -Force
+            }
+          }
+          Expand-Archive -LiteralPath $sourceArchive -DestinationPath $extractRoot
+          $buildScripts = @(
+            Get-ChildItem -LiteralPath $extractRoot -File -Recurse `
+              -Filter "Build-Preview.ps1" |
+              Where-Object {
+                $_.FullName -match 'platform[\\/]windows[\\/]scripts[\\/]Build-Preview\.ps1$'
+              }
+          )
+          if ($buildScripts.Count -ne 1) {
+            throw "Extracted source must contain one Windows build entry point"
+          }
+          if (@(
+              Get-ChildItem -LiteralPath $extractRoot -Force -Recurse |
+              Where-Object { $_.Name -eq ".git" }
+            ).Count -ne 0) {
+            throw "Extracted source acceptance must not contain Git metadata"
+          }
+          $previousGoProxy = $env:GOPROXY
+          $previousGoSumDb = $env:GOSUMDB
+          try {
+            $env:GOPROXY = "off"
+            $env:GOSUMDB = "off"
+            & $buildScripts[0].FullName -OutputRoot $offlineOutput `
+              -SkipPackage -Offline
+            if ($LASTEXITCODE -ne 0) {
+              throw "Extracted Windows source archive offline rebuild failed"
+            }
+          } finally {
+            $env:GOPROXY = $previousGoProxy
+            $env:GOSUMDB = $previousGoSumDb
+          }
       - name: Verify private Windows E2E artifact identity
         shell: pwsh
         run: |
@@ -376,6 +433,12 @@ jobs:
       - run: cmake --version
       - run: make -C platform/macos test
       - run: make -C platform/macos dmg BUILD_ROOT=build/macos
+      - name: Verify final macOS installer grammar resources
+        run: |
+          python3 scripts/verify_release_assets.py verify-macos-installer \
+            --evidence build/macos/package/grammar-quality-metrics.json \
+            --commit "$GITHUB_SHA" \
+            build/macos/package/YunPin-IME-macOS-development-preview.dmg
       - name: Verify private macOS E2E artifact identity
         run: |
           python3 - <<'PY'
@@ -409,6 +472,7 @@ jobs:
             build/macos/package/YunPin-IME-macOS-development-preview.dmg
             build/macos/package/YunPin-IME-development-preview-source.tar.gz
             build/macos/package/macos-release-metadata.json
+            build/macos/package/grammar-quality-metrics.json
           if-no-files-found: error
           retention-days: 7
       - name: Upload private-pairing macOS E2E agent only

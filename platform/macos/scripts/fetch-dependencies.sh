@@ -9,6 +9,93 @@ cache_dir="${YUNPIN_MACOS_CACHE_DIR:-${REPO_ROOT}/build/macos/downloads}"
 [[ -f "$source_dir/.yunpin-base-commit" ]] || die "run prepare-source.sh before fetching dependencies"
 mkdir -p "$cache_dir" "$source_dir/download"
 
+temporary_downloads=()
+cleanup_temporary_downloads() {
+  local path
+  for path in "${temporary_downloads[@]-}"; do
+    [[ -n "$path" ]] || continue
+    [[ -e "$path" || -L "$path" ]] || continue
+    /bin/rm -f -- "$path"
+  done
+}
+trap cleanup_temporary_downloads EXIT
+
+verify_online_grammar_asset_metadata() {
+  local metadata_dir
+  metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/yunpin-grammar-metadata.XXXXXX")"
+  /usr/bin/curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    --output "$metadata_dir/release.json" \
+    'https://api.github.com/repos/amzxyz/RIME-LMDG/releases/tags/LTS'
+  /usr/bin/curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    --output "$metadata_dir/tag.json" \
+    'https://api.github.com/repos/amzxyz/RIME-LMDG/git/ref/tags/LTS'
+  /usr/bin/python3 "$REPO_ROOT/scripts/verify_grammar_asset_metadata.py" \
+    --lock "$MACOS_DIR/dependencies.lock.json" \
+    --release-json "$metadata_dir/release.json" \
+    --tag-json "$metadata_dir/tag.json" ||
+    die "mutable grammar release metadata differs from the dependency lock"
+  /bin/rm -rf -- "$metadata_dir"
+}
+
+fetch_grammar_resource() {
+  local filename="$1"
+  local url="$2"
+  local expected_size="$3"
+  local expected_sha256="$4"
+  local label="$5"
+  local verify_release_metadata="${6:-false}"
+  local destination="$cache_dir/$filename"
+  local bundled="$REPO_ROOT/sources/$filename"
+  local partial
+
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    verify_locked_grammar_resource \
+      "$destination" "$expected_size" "$expected_sha256" "$label"
+    return 0
+  fi
+  partial="$(/usr/bin/mktemp "$cache_dir/.${filename}.part.XXXXXX")" ||
+    die "could not create a private temporary file for $label"
+  temporary_downloads+=("$partial")
+  if [[ -e "$bundled" || -L "$bundled" ]]; then
+    verify_locked_grammar_resource \
+      "$bundled" "$expected_size" "$expected_sha256" "$label"
+    /usr/bin/install -m 600 "$bundled" "$partial"
+  else
+    if [[ "$verify_release_metadata" == true ]]; then
+      verify_online_grammar_asset_metadata
+    fi
+    /usr/bin/curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+      --output "$partial" "$url"
+    verify_locked_grammar_resource \
+      "$partial" "$expected_size" "$expected_sha256" "$label"
+  fi
+  verify_locked_grammar_resource \
+    "$partial" "$expected_size" "$expected_sha256" "$label"
+  /bin/ln "$partial" "$destination" ||
+    die "$label cache destination appeared while staging: $destination"
+  /bin/rm -f -- "$partial"
+  verify_locked_grammar_resource \
+    "$destination" "$expected_size" "$expected_sha256" "$label"
+}
+
+fetch_grammar_resource \
+  "$(read_lock_value grammarModel.filename)" \
+  "$(read_lock_value grammarModel.url)" \
+  "$(read_lock_value grammarModel.size)" \
+  "$(read_lock_value grammarModel.sha256)" \
+  "grammar model" \
+  true
+fetch_grammar_resource \
+  "$(read_lock_value grammarModel.licenseFilename)" \
+  "$(read_lock_value grammarModel.licenseUrl)" \
+  "$(read_lock_value grammarModel.licenseSize)" \
+  "$(read_lock_value grammarModel.licenseSha256)" \
+  "grammar model license"
+
 while IFS=$'\t' read -r name url expected; do
   archive="$cache_dir/$name"
   if [[ ! -f "$archive" ]]; then
@@ -174,6 +261,23 @@ actual_source_commit="$(git -C "$source_dir" rev-parse HEAD)"
 while IFS= read -r file_path; do
   [[ -f "$source_dir/$file_path" ]] || die "Squirrel project input is missing after dependency installation: $file_path"
 done < <(sed -n 's/.*path = \(data\/plum\/[^;]*\);.*/\1/p' "$source_dir/Squirrel.xcodeproj/project.pbxproj" | sort -u)
+
+grammar_model="$(resolve_locked_grammar_resource model)"
+grammar_model_filename="$(read_lock_value grammarModel.filename)"
+mkdir -p "$source_dir/data/plum"
+staged_grammar_model="$source_dir/data/plum/$grammar_model_filename"
+[[ ! -L "$staged_grammar_model" ]] ||
+  die "locked grammar model staging path must not be a link"
+find "$source_dir/data/plum" -maxdepth 1 \( -type f -o -type l \) -name '*.gram' \
+  ! -name "$grammar_model_filename" -print -quit | grep -q . &&
+  die "unexpected extra grammar model in Squirrel data staging"
+/usr/bin/install -m 644 "$grammar_model" \
+  "$staged_grammar_model"
+verify_locked_grammar_resource \
+  "$staged_grammar_model" \
+  "$(read_lock_value grammarModel.size)" \
+  "$(read_lock_value grammarModel.sha256)" \
+  "staged grammar model"
 
 touch "$source_dir/.yunpin-dependencies-ready"
 printf 'verified and installed pinned macOS dependencies\n'

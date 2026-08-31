@@ -241,7 +241,7 @@ jobs:
             assets+=("${asset}")
           done < <(find build/release-dist -maxdepth 1 -type f \
             ! -name RELEASE-NOTES.md -print | sort)
-          test "${#assets[@]}" -eq 7
+          test "${#assets[@]}" -eq 8
           for asset in "${assets[@]}"; do
             asset_name="$(basename "${asset}")"
             encoded_name="$(python3 -c \

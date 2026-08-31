@@ -10,6 +10,9 @@ out/
 *.dll
 *.exe
 *.pdb
+# Official octagram language models are fetched by exact locked digest and
+# belong only in generated runtime/corresponding-source artifacts.
+*.gram
 
 # Tooling caches
 .cache/

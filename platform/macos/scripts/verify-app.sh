@@ -47,16 +47,36 @@ if [[ "$require_universal" -eq 1 ]]; then
 fi
 
 shared_support="$app/Contents/SharedSupport"
+grammar_model_filename="$(read_lock_value grammarModel.filename)"
+grammar_model="$shared_support/$grammar_model_filename"
+grammar_model_license_filename="$(read_lock_value grammarModel.licenseFilename)"
+grammar_model_license="$shared_support/licenses/$grammar_model_license_filename"
 for required in \
   "$shared_support/default.custom.yaml" \
   "$shared_support/squirrel.custom.yaml" \
   "$shared_support/rime_ice.custom.yaml" \
   "$shared_support/rime_ice.schema.yaml" \
   "$shared_support/rime_ice.dict.yaml" \
+  "$grammar_model" \
+  "$grammar_model_license" \
   "$shared_support/yunpin-preview.json" \
   "$app/Contents/Resources/yunpin.pdf"; do
   [[ -f "$required" ]] || die "missing packaged resource: $required"
 done
+packaged_grammar_models="$(find "$app" \( -type f -o -type l \) \
+  -name '*.gram' -print)"
+[[ "$packaged_grammar_models" == "$grammar_model" ]] ||
+  die "YunPin.app must contain exactly one locked grammar model"
+verify_locked_grammar_resource \
+  "$grammar_model" \
+  "$(read_lock_value grammarModel.size)" \
+  "$(read_lock_value grammarModel.sha256)" \
+  "packaged grammar model"
+verify_locked_grammar_resource \
+  "$grammar_model_license" \
+  "$(read_lock_value grammarModel.licenseSize)" \
+  "$(read_lock_value grammarModel.licenseSha256)" \
+  "packaged grammar model license"
 
 sync_support="$shared_support/SyncAgent"
 for required in \
@@ -160,15 +180,35 @@ PY
 actual_octagram_license_sha256="$(shasum -a 256 "$shared_support/licenses/librime-octagram-BSD-3-Clause-LICENSE" | awk '{print $1}')"
 [[ "$actual_octagram_license_sha256" == "$expected_octagram_license_sha256" ]] ||
   die "bundled octagram license does not match the dependency lock"
-/usr/bin/python3 - "$shared_support/yunpin-preview.json" <<'PY'
+/usr/bin/python3 - "$shared_support/yunpin-preview.json" \
+  "$MACOS_DIR/dependencies.lock.json" <<'PY'
 import json
 import sys
 
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+lock = json.load(open(sys.argv[2], encoding="utf-8"))
 if manifest.get("yunpin_module_merged") is not True:
     raise SystemExit("preview manifest does not record the merged YunPin module")
 if manifest.get("yunpin_ranking_native_host_e2e") is not False:
     raise SystemExit("development preview must not overstate native host evidence")
+expected = lock["grammarModel"]
+observed = manifest.get("grammar_model")
+if observed != expected:
+    raise SystemExit("preview manifest grammar model identity differs from lock")
+quality_contract = manifest.get("grammar_quality_evidence")
+if quality_contract != {
+    "external_payload": True,
+    "cache_condition": "process-cold-deployed-user-data-os-warm",
+    "comparison_order": ["baseline", "model"],
+    "deployment_process_isolated": True,
+    "measurement_process_maintenance": False,
+    "model_load_stage_evidence": "schema-marker-log-and-ab-rss",
+    "synthetic_private_counterfactual": True,
+    "holdout_case_count": 20,
+    "accepted_quality_cases": {"baseline": 17, "model": 18},
+    "final_key_candidate_p95_gate_microseconds": 20000,
+}:
+    raise SystemExit("preview manifest grammar evidence contract differs")
 PY
 
 public_lunar_db="$shared_support/lua/lunar.db"
