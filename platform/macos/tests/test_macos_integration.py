@@ -780,6 +780,20 @@ class MacOSIntegrationTests(unittest.TestCase):
             "68f9c364a2d25a04c7d4794981d7c796b05ab627",
             plugin_sources["lua"]["commit"],
         )
+        octagram = plugin_sources["octagram"]
+        self.assertEqual(
+            "57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+            octagram["commit"],
+        )
+        self.assertEqual(
+            "7b9c77bcf17566b64204791b72cdb1b4471e22efec5eef9b79ca764ab99a1576",
+            octagram["sha256"],
+        )
+        self.assertEqual("BSD-3-Clause", octagram["license"])
+        self.assertEqual(
+            "f67d27a6d2d586fcfed4b4c886a83747095396a39b6641e18e855086be2ec400",
+            octagram["license_sha256"],
+        )
         thirdparty = [
             row for row in lock["archives"] if "rime_plugin_thirdparty" in row
         ]
@@ -796,6 +810,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn(".yunpin-source-commit", fetch)
         self.assertIn('archive["rime_plugin"]', fetch)
         self.assertIn('archive["rime_plugin_thirdparty"]', fetch)
+        self.assertIn('archive.get("license_sha256", "")', fetch)
+        self.assertIn("u <<= 7;", fetch)
 
         build = (MACOS_DIR / "scripts" / "build-librime-yunpin.sh").read_text(
             encoding="utf-8"
@@ -807,6 +823,18 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("expected_runtime_plugins='librime-lua.dylib librime-octagram.dylib librime-predict.dylib '", build)
         self.assertIn("xcrun vtool -show-build", build)
         self.assertIn("install -m 755", build)
+
+        package_build = (MACOS_DIR / "scripts" / "build-preview.sh").read_text(
+            encoding="utf-8"
+        )
+        verify = (MACOS_DIR / "scripts" / "verify-app.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("librime-octagram-BSD-3-Clause-LICENSE", package_build)
+        self.assertIn("librime-octagram-BSD-3-Clause-LICENSE", verify)
+        self.assertIn("expected_octagram_license_sha256", verify)
+        self.assertNotIn("librime-octagram-GPL-3.0-LICENSE", package_build)
+        self.assertNotIn("librime-octagram-GPL-3.0-LICENSE", verify)
 
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
         for component in (
@@ -833,6 +861,9 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("librime-octagram.dylib", runtime)
         self.assertIn("librime-predict.dylib", runtime)
         self.assertIn("English-only public candidate page", runtime)
+        self.assertIn("octagram_modules=registered", runtime)
+        self.assertIn('api->find_module("octagram")', probe)
+        self.assertIn('api->find_module("grammar")', probe)
         self.assertIn("constexpr int kLifecycleSessions = 128", probe)
         for public_input in ("s", "sh", "shu", "shuru", "ceshi", "wendingxing"):
             self.assertIn(f'"{public_input}"', probe)

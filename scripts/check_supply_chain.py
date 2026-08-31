@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import sys
@@ -13,6 +14,106 @@ ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_TOP_LEVEL = {".git", ".cache", "build", "dist", "third_party"}
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _read_json(path: Path, errors: list[str]) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"{path.relative_to(ROOT)}: unreadable JSON ({type(exc).__name__})")
+        return {}
+    if not isinstance(value, dict):
+        errors.append(f"{path.relative_to(ROOT)}: root must be an object")
+        return {}
+    return value
+
+
+def check_octagram_source_lock(errors: list[str]) -> int:
+    upstream_path = ROOT / "third_party" / "upstreams.lock.json"
+    windows_path = ROOT / "platform" / "windows" / "dependencies.lock.json"
+    macos_path = ROOT / "platform" / "macos" / "dependencies.lock.json"
+    upstream = _read_json(upstream_path, errors)
+    windows = _read_json(windows_path, errors)
+    macos = _read_json(macos_path, errors)
+    if not upstream or not windows or not macos:
+        return 0
+
+    matches = [
+        item
+        for item in upstream.get("upstreams", [])
+        if isinstance(item, dict) and item.get("name") == "librime-octagram"
+    ]
+    if len(matches) != 1:
+        errors.append("third_party/upstreams.lock.json: require one librime-octagram row")
+        return 0
+    canonical = matches[0]
+    commit = canonical.get("commit", "")
+    expected_archive_url = (
+        "https://codeload.github.com/lotem/librime-octagram/tar.gz/" + commit
+    )
+    expected_license_url = (
+        "https://raw.githubusercontent.com/lotem/librime-octagram/"
+        + commit
+        + "/LICENSE"
+    )
+    required = {
+        "license": "BSD-3-Clause",
+        "archive_url": expected_archive_url,
+        "license_source": expected_license_url,
+    }
+    for field, expected in required.items():
+        if canonical.get(field) != expected:
+            errors.append(f"librime-octagram.{field} does not match the immutable source lock")
+    for field in ("commit",):
+        if not FULL_SHA.fullmatch(str(canonical.get(field, ""))):
+            errors.append(f"librime-octagram.{field} is not a full commit")
+    for field in ("archive_sha256", "license_sha256"):
+        if not DIGEST.fullmatch(str(canonical.get(field, ""))):
+            errors.append(f"librime-octagram.{field} is not a SHA-256")
+
+    windows_lock = windows.get("librimeOctagram")
+    if not isinstance(windows_lock, dict):
+        errors.append("Windows lock lacks librimeOctagram")
+    else:
+        field_map = {
+            "commit": "commit",
+            "url": "archive_url",
+            "sha256": "archive_sha256",
+            "license": "license",
+            "licenseSource": "license_source",
+            "licenseSha256": "license_sha256",
+            "archiveName": "archive_name",
+        }
+        for platform_field, canonical_field in field_map.items():
+            if windows_lock.get(platform_field) != canonical.get(canonical_field):
+                errors.append(
+                    f"Windows librimeOctagram.{platform_field} disagrees with the canonical lock"
+                )
+
+    macos_matches = [
+        item
+        for item in macos.get("archives", [])
+        if isinstance(item, dict) and item.get("rime_plugin") == "octagram"
+    ]
+    if len(macos_matches) != 1:
+        errors.append("macOS lock must contain one octagram plugin archive")
+    else:
+        macos_lock = macos_matches[0]
+        field_map = {
+            "commit": "commit",
+            "url": "archive_url",
+            "sha256": "archive_sha256",
+            "license": "license",
+            "license_source": "license_source",
+            "license_sha256": "license_sha256",
+            "name": "archive_name",
+        }
+        for platform_field, canonical_field in field_map.items():
+            if macos_lock.get(platform_field) != canonical.get(canonical_field):
+                errors.append(
+                    f"macOS octagram.{platform_field} disagrees with the canonical lock"
+                )
+    return 1
 
 
 def project_dockerfiles() -> list[Path]:
@@ -103,10 +204,15 @@ def main() -> int:
     errors: list[str] = []
     from_count = check_dockerfiles(errors)
     action_count = check_actions(errors)
+    native_archive_count = check_octagram_source_lock(errors)
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"supply-chain pins passed: {from_count} FROM instructions, {action_count} Actions references")
+    print(
+        "supply-chain pins passed: "
+        f"{from_count} FROM instructions, {action_count} Actions references, "
+        f"{native_archive_count} native source archive"
+    )
     return 0
 
 

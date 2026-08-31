@@ -60,6 +60,21 @@ class WindowsClientTests(unittest.TestCase):
         self.assertEqual(self.lock["weasel"]["commit"], pinned["weasel"])
         self.assertEqual(self.lock["librime"]["commit"], pinned["librime"])
         self.assertEqual(self.lock["rimeIce"]["commit"], pinned["rime-ice"])
+        octagram = self.lock["librimeOctagram"]
+        self.assertEqual(octagram["commit"], pinned["librime-octagram"])
+        self.assertEqual(
+            "57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+            octagram["commit"],
+        )
+        self.assertEqual(
+            "7b9c77bcf17566b64204791b72cdb1b4471e22efec5eef9b79ca764ab99a1576",
+            octagram["sha256"],
+        )
+        self.assertEqual("BSD-3-Clause", octagram["license"])
+        self.assertEqual(
+            "f67d27a6d2d586fcfed4b4c886a83747095396a39b6641e18e855086be2ec400",
+            octagram["licenseSha256"],
+        )
         for name, relative in (
             ("weasel", "third_party/weasel"),
             ("librime", "third_party/librime"),
@@ -411,7 +426,8 @@ class WindowsClientTests(unittest.TestCase):
         build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(encoding="utf-8")
         for required in (
             '"plugins\\librime-yunpin"',
-            '$env:RIME_PLUGINS = "librime-yunpin"',
+            '"plugins\\octagram"',
+            '$env:RIME_PLUGINS = "librime-yunpin octagram"',
             'exit code ${LASTEXITCODE}:',
             'Join-Path $engineRoot "include"',
             'Join-Path $engineRoot "src"',
@@ -421,7 +437,18 @@ class WindowsClientTests(unittest.TestCase):
             '"resource\\weasel.ico"',
             '"WeaselSetup\\WeaselSetup.ico"',
             '"x64", "Win32"',
-            "Q\\(yunpin\\)",
+            '"yunpin", "octagram"',
+            "('Q\\(' + $module + '\\)')",
+            "rime-octagram-objs.vcxproj",
+            "gram_encoding.cc",
+            "grammar_module.cc",
+            "u <<= 7;",
+            '"x64"',
+            '"x86"',
+            "rime-module-probe",
+            "octagram_module_registered=true",
+            "grammar_module_registered=true",
+            "rime_runtime_identity_exact=true",
             "YunPinStartNativeSelectionSpoolerV1",
             '"dumpbin.exe" /nologo /exports',
             'libboost_wserialization-vc143-mt-s-x32-1_84.lib',
@@ -462,6 +489,20 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("return nullptr;", corrector)
         self.assertNotIn("new NearSearchCorrector", corrector)
         self.assertTrue((ROOT / "engine" / "src" / "phrase_engine.cpp").is_file())
+        probe = (
+            WINDOWS / "tests" / "rime-module-probe" / "main.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn('api->find_module("octagram")', probe)
+        self.assertIn('api->find_module("grammar")', probe)
+        self.assertIn('api->find_module("yunpin")', probe)
+        self.assertIn("GetModuleFileNameW", probe)
+        self.assertIn("std::filesystem::equivalent", probe)
+        self.assertIn("rime_runtime_identity_exact", probe)
+        probe_cmake = (
+            WINDOWS / "tests" / "rime-module-probe" / "CMakeLists.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("RIME_IMPORT_LIBRARY", probe_cmake)
+        self.assertIn("/W4 /WX /permissive-", probe_cmake)
 
     def test_sync_agent_package_and_private_e2e_artifact_are_separate(self) -> None:
         build = (WINDOWS / "scripts" / "Build-Preview.ps1").read_text(
@@ -798,6 +839,9 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("MANIFEST.sha256", package)
         self.assertIn("development-preview-source.zip", package)
         self.assertIn("boost_1_84_0.7z", package)
+        self.assertIn("librimeOctagram.archiveName", package)
+        self.assertIn("librime-octagram-BSD-3-Clause.txt", package)
+        self.assertIn("librimeOctagramSourceSha256", package)
         self.assertIn("SOURCE-MANIFEST.sha256", package)
         self.assertIn("Write-SourceCommitMarker", package)
         self.assertIn("Export-GitSubtree", package)
@@ -808,6 +852,8 @@ class WindowsClientTests(unittest.TestCase):
             "binaries and corresponding source use the same commit", package
         )
         self.assertIn("privateCandidateSnapshotEnabled = $false", package)
+        self.assertIn('mergedPlugins = @("librime-yunpin", "librime-octagram")', package)
+        self.assertIn('mergedModules = @("yunpin", "octagram", "grammar")', package)
         package_test = (
             WINDOWS / "scripts" / "Test-Package.ps1"
         ).read_text(encoding="utf-8")
@@ -816,6 +862,7 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"yunpin/typo_correction": false', package_test)
         self.assertNotIn('"translator/enable_correction": true', package_test)
         self.assertNotIn('"yunpin/typo_correction": true', package_test)
+        self.assertIn("Packaged librime-octagram license", package_test)
 
     def test_runtime_rename_map_has_no_stock_identity(self) -> None:
         mapping = self.lock["package"]["runtimeFiles"]

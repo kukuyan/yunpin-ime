@@ -138,11 +138,28 @@ done
 for license in \
   librime-lua-BSD-3-Clause-LICENSE \
   Lua-5.4.8-Copyright-Notice.h \
-  librime-octagram-GPL-3.0-LICENSE \
+  librime-octagram-BSD-3-Clause-LICENSE \
   librime-predict-BSD-3-Clause-LICENSE; do
   [[ -f "$shared_support/licenses/$license" ]] ||
     die "rebuilt Rime plugin license is missing: $license"
 done
+expected_octagram_license_sha256="$(/usr/bin/python3 - "$MACOS_DIR/dependencies.lock.json" <<'PY'
+import json
+import sys
+
+rows = [
+    item
+    for item in json.load(open(sys.argv[1], encoding="utf-8"))["archives"]
+    if item.get("rime_plugin") == "octagram"
+]
+if len(rows) != 1 or not rows[0].get("license_sha256"):
+    raise SystemExit("macOS dependency lock must contain one octagram license SHA-256")
+print(rows[0]["license_sha256"])
+PY
+)" || die "cannot resolve the locked octagram license SHA-256"
+actual_octagram_license_sha256="$(shasum -a 256 "$shared_support/licenses/librime-octagram-BSD-3-Clause-LICENSE" | awk '{print $1}')"
+[[ "$actual_octagram_license_sha256" == "$expected_octagram_license_sha256" ]] ||
+  die "bundled octagram license does not match the dependency lock"
 /usr/bin/python3 - "$shared_support/yunpin-preview.json" <<'PY'
 import json
 import sys

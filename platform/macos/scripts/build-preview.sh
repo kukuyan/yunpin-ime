@@ -96,7 +96,7 @@ cp "$source_dir/librime/plugins/lua/LICENSE" \
 cp "$source_dir/librime/plugins/lua/thirdparty/lua5.4/lua.h" \
   "$shared_support/licenses/Lua-5.4.8-Copyright-Notice.h"
 cp "$source_dir/librime/plugins/octagram/LICENSE" \
-  "$shared_support/licenses/librime-octagram-GPL-3.0-LICENSE"
+  "$shared_support/licenses/librime-octagram-BSD-3-Clause-LICENSE"
 cp "$source_dir/librime/plugins/predict/LICENSE" \
   "$shared_support/licenses/librime-predict-BSD-3-Clause-LICENSE"
 for package in bopomofo cangjie essay luna-pinyin prelude stroke terra-pinyin; do

@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "observed_at": "2026-08-06",
+  "observed_at": "2026-08-31",
   "upstreams": [
     {
       "name": "rime-ice",
@@ -33,6 +33,18 @@
       "license": "BSD-3-Clause",
       "update_policy": "manual-release",
       "release": "1.17.0"
+    },
+    {
+      "name": "librime-octagram",
+      "url": "https://github.com/lotem/librime-octagram.git",
+      "commit": "57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+      "license": "BSD-3-Clause",
+      "archive_name": "librime-octagram-57d18b9.tar.gz",
+      "archive_url": "https://codeload.github.com/lotem/librime-octagram/tar.gz/57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+      "archive_sha256": "7b9c77bcf17566b64204791b72cdb1b4471e22efec5eef9b79ca764ab99a1576",
+      "license_source": "https://raw.githubusercontent.com/lotem/librime-octagram/57d18b9f58e5284bd891d559f6bdd16cf60341e9/LICENSE",
+      "license_sha256": "f67d27a6d2d586fcfed4b4c886a83747095396a39b6641e18e855086be2ec400",
+      "update_policy": "manual-compatibility"
     },
     {
       "name": "weasel",

@@ -136,12 +136,14 @@
       "license": "MIT"
     },
     {
-      "name": "librime-octagram-dfcc151.tar.gz",
-      "url": "https://codeload.github.com/lotem/librime-octagram/tar.gz/dfcc15115788c828d9dd7b4bff68067d3ce2ffb8",
-      "sha256": "7da3df7a5dae82557f7a4842b94dfe81dd21ef7e036b132df0f462f2dae18393",
+      "name": "librime-octagram-57d18b9.tar.gz",
+      "url": "https://codeload.github.com/lotem/librime-octagram/tar.gz/57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+      "sha256": "7b9c77bcf17566b64204791b72cdb1b4471e22efec5eef9b79ca764ab99a1576",
       "rime_plugin": "octagram",
-      "commit": "dfcc15115788c828d9dd7b4bff68067d3ce2ffb8",
-      "license": "GPL-3.0-only"
+      "commit": "57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+      "license": "BSD-3-Clause",
+      "license_source": "https://raw.githubusercontent.com/lotem/librime-octagram/57d18b9f58e5284bd891d559f6bdd16cf60341e9/LICENSE",
+      "license_sha256": "f67d27a6d2d586fcfed4b4c886a83747095396a39b6641e18e855086be2ec400"
     },
     {
       "name": "librime-predict-920bd41.tar.gz",

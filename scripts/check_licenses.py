@@ -200,7 +200,17 @@ def main() -> int:
             errors.append(f"{item.get('name')}: missing license")
         if not item.get("url", "").startswith("https://github.com/"):
             errors.append(f"{item.get('name')}: non-GitHub or insecure URL")
-    required = {"rime-ice", "rime-essay", "THUOCL", "phrase-pinyin-data", "librime", "weasel", "squirrel", "imewlconverter"}
+    required = {
+        "rime-ice",
+        "rime-essay",
+        "THUOCL",
+        "phrase-pinyin-data",
+        "librime",
+        "librime-octagram",
+        "weasel",
+        "squirrel",
+        "imewlconverter",
+    }
     names = {item.get("name") for item in data.get("upstreams", [])}
     errors.extend(f"missing upstream: {name}" for name in sorted(required - names))
     platform_lock = json.loads((ROOT / "platform" / "upstream-lock.json").read_text(encoding="utf-8"))
@@ -211,6 +221,15 @@ def main() -> int:
             errors.append(
                 f"{component['name']}: platform commit {component['commit']} "
                 f"does not match root lock {root_commits[key]}"
+            )
+        matching = next(
+            (item for item in data["upstreams"] if item["name"].lower() == key),
+            None,
+        )
+        if matching is not None and matching.get("license") != component.get("license"):
+            errors.append(
+                f"{component['name']}: platform license {component.get('license')} "
+                f"does not match root lock {matching.get('license')}"
             )
     go_module_count = check_go_license_lock(errors)
     if errors:

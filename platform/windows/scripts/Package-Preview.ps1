@@ -236,6 +236,16 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "docs\LICENSE_MATRIX.md") -Destinati
 Copy-Item -LiteralPath (Join-Path $repoRoot "third_party\weasel\LICENSE.txt") -Destination (Join-Path $licenseRoot "Weasel-GPL-3.0.txt") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "third_party\librime\LICENSE") -Destination (Join-Path $licenseRoot "librime-BSD-3-Clause.txt") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "third_party\rime-ice\LICENSE") -Destination (Join-Path $licenseRoot "Rime-Ice-GPL-3.0.txt") -Force
+$octagramLicense = Join-Path $WeaselSource "librime\plugins\octagram\LICENSE"
+if (-not (Test-Path $octagramLicense -PathType Leaf)) {
+    throw "Verified librime-octagram license is missing from the staged source"
+}
+$octagramLicenseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $octagramLicense).Hash.ToLowerInvariant()
+if ($octagramLicenseHash -ne ([string]$lock.librimeOctagram.licenseSha256).ToLowerInvariant()) {
+    throw "Staged librime-octagram license does not match the dependency lock"
+}
+Copy-Item -LiteralPath $octagramLicense `
+    -Destination (Join-Path $licenseRoot "librime-octagram-BSD-3-Clause.txt") -Force
 $boostLicense = Join-Path $OutputRoot "deps\boost_1_84_0\LICENSE_1_0.txt"
 if (-not (Test-Path $boostLicense -PathType Leaf)) {
     throw "Boost license is missing from the verified source tree: $boostLicense"
@@ -275,6 +285,8 @@ $metadata = [ordered]@{
     productionReady = $false
     architectures = @("x86-tsf", "x64-tsf", "x64-service")
     mergedPlugin = "librime-yunpin"
+    mergedPlugins = @("librime-yunpin", "librime-octagram")
+    mergedModules = @("yunpin", "octagram", "grammar")
     privateCandidateSnapshotEnabled = $false
     syncAgent = [ordered]@{
         bundled = $true
@@ -286,6 +298,8 @@ $metadata = [ordered]@{
     upstreams = [ordered]@{
         weasel = $lock.weasel.commit
         librime = $lock.librime.commit
+        librimeOctagram = $lock.librimeOctagram.commit
+        librimeOctagramSourceSha256 = $lock.librimeOctagram.sha256
         rimeIce = $lock.rimeIce.commit
         boost = $lock.boost.sha256
     }
@@ -353,15 +367,28 @@ foreach ($file in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
 }
 New-Item -ItemType Directory -Path (Join-Path $sourceRoot "third_party"), (Join-Path $sourceRoot "scripts") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "third_party\go-modules.lock.json") -Destination (Join-Path $sourceRoot "third_party\go-modules.lock.json") -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "third_party\upstreams.lock.json") -Destination (Join-Path $sourceRoot "third_party\upstreams.lock.json") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\package_go_licenses.py") -Destination (Join-Path $sourceRoot "scripts\package_go_licenses.py") -Force
 New-Item -ItemType Directory -Path (Join-Path $sourceRoot "docs") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\LICENSE_MATRIX.md") -Destination (Join-Path $sourceRoot "docs\LICENSE_MATRIX.md") -Force
+New-Item -ItemType Directory -Path (Join-Path $sourceRoot "platform") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "platform\upstream-lock.json") -Destination (Join-Path $sourceRoot "platform\upstream-lock.json") -Force
 $sourceBoost = Join-Path $OutputRoot "cache\boost_1_84_0.7z"
 if (-not (Test-Path $sourceBoost -PathType Leaf)) {
     throw "Verified Boost source archive is missing: $sourceBoost"
 }
 New-Item -ItemType Directory -Path (Join-Path $sourceRoot "sources") -Force | Out-Null
 Copy-Item -LiteralPath $sourceBoost -Destination (Join-Path $sourceRoot "sources\boost_1_84_0.7z") -Force
+$sourceOctagram = Join-Path $OutputRoot ("cache\" + [string]$lock.librimeOctagram.archiveName)
+if (-not (Test-Path $sourceOctagram -PathType Leaf)) {
+    throw "Verified librime-octagram source archive is missing: $sourceOctagram"
+}
+$sourceOctagramHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceOctagram).Hash.ToLowerInvariant()
+if ($sourceOctagramHash -ne ([string]$lock.librimeOctagram.sha256).ToLowerInvariant()) {
+    throw "Verified librime-octagram source archive no longer matches the dependency lock"
+}
+Copy-Item -LiteralPath $sourceOctagram `
+    -Destination (Join-Path $sourceRoot ("sources\" + [string]$lock.librimeOctagram.archiveName)) -Force
 $sourceMetadata = [ordered]@{
     schemaVersion = 1
     repositoryCommit = $repoCommit
@@ -371,6 +398,7 @@ $sourceMetadata = [ordered]@{
     librime = $lock.librime.commit
     librimePatches = $lock.librime.patches
     librimeDependencies = $lock.librime.dependencies
+    librimeOctagram = $lock.librimeOctagram
     rimeIce = $lock.rimeIce.commit
     boostSourceSha256 = $lock.boost.sha256
 }
@@ -383,8 +411,9 @@ This archive contains the exact exported source trees and commit markers for
 Weasel, librime, librime's nested dependencies, and Rime Ice, plus YunPin's
 engine, merged plugin, public default-tag sync agent source and its local Go
 modules, Windows scripts, ordered GPL patches, licenses, and the verified Boost
-source archive. It contains no private phrase data, E2E binary artifact, or
-private E2E activation script.
+and librime-octagram source archives. It contains no language model, grammar
+overlay, private phrase data, E2E binary artifact, or private E2E activation
+script.
 
 Verify SOURCE-MANIFEST.sha256, then run from a Visual Studio 2022 developer
 PowerShell:

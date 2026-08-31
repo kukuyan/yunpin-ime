@@ -7,6 +7,7 @@
 | `platform/patches/squirrel/`, `platform/macos/`, macOS frontend overlays and derivative distribution | GPL-3.0-only | The development preview preserves the exact Squirrel base, ordered patches, source archive and notices. Production distribution still requires native-plugin and host acceptance. |
 | `platform/ios/` | Apache-2.0-compatible only | Phase two; must not copy or link GPL desktop frontend code. |
 | `rime/librime` | BSD-3-Clause | Pinned upstream dependency. |
+| librime-octagram | BSD-3-Clause | Commit-pinned grammar engine plugin; external in macOS and statically merged into both Windows `rime.dll` architectures. Preserve its license text and verified source archive. Language-model data has a separate provenance and license boundary. |
 | Rime Ice | GPL-3.0 | Distributed data/build outputs must comply with its license. |
 | Rime Essay | LGPL-3.0 | Preserve license and source/modification notices. |
 | THUOCL | MIT | Preserve copyright and license notice. |

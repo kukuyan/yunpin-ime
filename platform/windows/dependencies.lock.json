@@ -74,6 +74,15 @@
     "commit": "569ff3bc65dd4aec0a26b33c49c8bbdfa8b5fd57",
     "license": "GPL-3.0-only"
   },
+  "librimeOctagram": {
+    "commit": "57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+    "archiveName": "librime-octagram-57d18b9.tar.gz",
+    "url": "https://codeload.github.com/lotem/librime-octagram/tar.gz/57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+    "sha256": "7b9c77bcf17566b64204791b72cdb1b4471e22efec5eef9b79ca764ab99a1576",
+    "license": "BSD-3-Clause",
+    "licenseSource": "https://raw.githubusercontent.com/lotem/librime-octagram/57d18b9f58e5284bd891d559f6bdd16cf60341e9/LICENSE",
+    "licenseSha256": "f67d27a6d2d586fcfed4b4c886a83747095396a39b6641e18e855086be2ec400"
+  },
   "boost": {
     "version": "1.84.0",
     "url": "https://archives.boost.io/release/1.84.0/source/boost_1_84_0.7z",

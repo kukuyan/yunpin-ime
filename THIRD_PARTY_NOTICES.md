@@ -1,8 +1,12 @@
 # Third-party notices
 
-YunPin records the following upstreams as commit-pinned Git submodules. A normal clone fetches their contents only when submodules are initialized.
+YunPin records the following upstreams with immutable source identities. Most
+are commit-pinned Git submodules fetched only when submodules are initialized;
+librime-octagram is fetched as a commit-specific, SHA-256-pinned source archive
+for both desktop build chains.
 
 - [librime](https://github.com/rime/librime), BSD-3-Clause.
+- [librime-octagram](https://github.com/lotem/librime-octagram), BSD-3-Clause.
 - [Weasel](https://github.com/rime/weasel), GPL-3.0.
 - [Squirrel](https://github.com/rime/squirrel), GPL-3.0.
 - [Rime Ice](https://github.com/iDvel/rime-ice), GPL-3.0.
@@ -20,7 +24,7 @@ removes its upstream automatic-update framework and update entry points from
 YunPin builds.
 
 The same preview rebuilds the external librime-lua (BSD-3-Clause),
-librime-octagram (GPL-3.0-only), and librime-predict (BSD-3-Clause) plugins
+librime-octagram (BSD-3-Clause), and librime-predict (BSD-3-Clause) plugins
 from their locked upstream commits with the same compiler and SDK as the
 bundled librime. librime-lua embeds Lua 5.4.8 (MIT). The exact source archive
 URLs, commit IDs, and SHA-256 values are recorded in the macOS dependency
@@ -34,6 +38,14 @@ ordered GPL patch series, nested librime dependency commits, official Boost
 source archive are part of the reproducible package process. WinSparkle is not
 linked or distributed in the YunPin runtime, and all upstream update calls are
 disabled.
+
+The Windows `rime.dll` statically merges librime-octagram from the same
+commit-pinned, SHA-256-verified source archive used by macOS. The Windows build
+verifies the upstream BSD-3-Clause license text, the multi-byte encoder fix,
+the x86 and x64 generated object projects, and headless C-API registration of
+the `octagram` and `grammar` modules. The runtime carries the complete license
+text, while the corresponding-source archive carries the verified source
+archive. No language model or user data is part of this plugin source pin.
 
 Squirrel's bundled Bopomofo, Cangjie, Essay, Luna Pinyin, Prelude, Stroke and
 Terra Pinyin data packages are LGPL-3.0. The macOS lock records an exact source

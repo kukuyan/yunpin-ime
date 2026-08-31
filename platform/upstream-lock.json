@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updated": "2026-08-06",
+  "updated": "2026-08-31",
   "components": [
     {
       "name": "Weasel",
@@ -25,6 +25,14 @@
       "commit": "33e78140250125871856cdc5b42ddc6a5fcd3cd4",
       "license": "BSD-3-Clause",
       "role": "Rime engine dependency"
+    },
+    {
+      "name": "librime-octagram",
+      "repository": "https://github.com/lotem/librime-octagram",
+      "tag": "57d18b9",
+      "commit": "57d18b9f58e5284bd891d559f6bdd16cf60341e9",
+      "license": "BSD-3-Clause",
+      "role": "macOS external and Windows merged grammar engine plugin"
     },
     {
       "name": "ImeWlConverter",

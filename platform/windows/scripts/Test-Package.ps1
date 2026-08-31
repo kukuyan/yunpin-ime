@@ -9,6 +9,8 @@ $ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot "..\..\.."))
+$dependencyLock = Get-Content -LiteralPath `
+    (Join-Path $repoRoot "platform\windows\dependencies.lock.json") -Raw | ConvertFrom-Json
 
 function Assert-BundleManifest {
     param([Parameter(Mandatory = $true)][string]$Root)
@@ -198,6 +200,14 @@ if (-not (Test-Path (Join-Path $BundleRoot "licenses\YunPin-Sync-Agent-Go\LICENS
 if (-not (Test-Path (Join-Path $BundleRoot "licenses\YunPin-Replay-Lab-Go\LICENSES.json") -PathType Leaf)) {
     throw "Replay Lab license-text bundle is missing"
 }
+$octagramLicense = Join-Path $BundleRoot "licenses\librime-octagram-BSD-3-Clause.txt"
+if (-not (Test-Path $octagramLicense -PathType Leaf)) {
+    throw "librime-octagram BSD-3-Clause license is missing"
+}
+$octagramLicenseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $octagramLicense).Hash.ToLowerInvariant()
+if ($octagramLicenseHash -ne ([string]$dependencyLock.librimeOctagram.licenseSha256).ToLowerInvariant()) {
+    throw "Packaged librime-octagram license does not match the dependency lock"
+}
 $replayLicenseManifest = Get-Content -LiteralPath `
     (Join-Path $BundleRoot "licenses\YunPin-Replay-Lab-Go\LICENSES.json") -Raw | ConvertFrom-Json
 if ([string]$replayLicenseManifest.artifact -cne "yunpin-replay-lab") {
@@ -284,6 +294,10 @@ if ($installer -notmatch 'AcceptUnsignedDevelopmentBuild' -or $installer -notmat
 $metadata = Get-Content -LiteralPath (Join-Path $BundleRoot "BUILD-METADATA.json") -Raw | ConvertFrom-Json
 if ($metadata.signed -ne $false -or $metadata.productionReady -ne $false -or
     $metadata.mergedPlugin -ne "librime-yunpin" -or
+    (@($metadata.mergedPlugins) -join ",") -cne "librime-yunpin,librime-octagram" -or
+    (@($metadata.mergedModules) -join ",") -cne "yunpin,octagram,grammar" -or
+    $metadata.upstreams.librimeOctagram -cne $dependencyLock.librimeOctagram.commit -or
+    $metadata.upstreams.librimeOctagramSourceSha256 -cne $dependencyLock.librimeOctagram.sha256 -or
     $metadata.syncAgent.build -cne "public-default-tag" -or
     $metadata.syncAgent.privatePairingCommands -ne $false -or
     $metadata.syncAgent.residentDefault -cne "disabled") {
