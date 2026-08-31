@@ -970,6 +970,13 @@ class MacOSIntegrationTests(unittest.TestCase):
             build.index('scripts/test-rime-plugin-runtime.sh" "$app"'),
         )
         self.assertIn("grammar-quality-metrics.json", build)
+        for serialized_penalty_pattern in (
+            'collocation_penalty:[[:space:]]+(-14|"-14")',
+            'non_collocation_penalty:[[:space:]]+(-6|"-6")',
+            'weak_collocation_penalty:[[:space:]]+(-100|"-100")',
+            'rear_penalty:[[:space:]]+(-20|"-20")',
+        ):
+            self.assertIn(serialized_penalty_pattern, runtime)
         self.assertIn("DYLD_PRINT_LIBRARIES=1", runtime)
         self.assertIn("librime-lua.dylib", runtime)
         self.assertIn("librime-octagram.dylib", runtime)

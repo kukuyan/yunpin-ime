@@ -220,10 +220,6 @@ for expected_schema in \
   "  language: \"$grammar_model_name\"" \
   '  collocation_max_length: 6' \
   '  collocation_min_length: 3' \
-  '  collocation_penalty: -14' \
-  '  non_collocation_penalty: -6' \
-  '  weak_collocation_penalty: -100' \
-  '  rear_penalty: -20' \
   '  contextual_suggestions: true' \
   '  enable_correction: false' \
   '  max_homophones: 8' \
@@ -232,6 +228,14 @@ for expected_schema in \
   '  typo_correction: false'; do
   grep -F "$expected_schema" "$built_schema" >/dev/null ||
     die "built rime_ice schema omitted grammar/safety setting: $expected_schema"
+done
+for expected_schema_pattern in \
+  '^  collocation_penalty:[[:space:]]+(-14|"-14")[[:space:]]*$' \
+  '^  non_collocation_penalty:[[:space:]]+(-6|"-6")[[:space:]]*$' \
+  '^  weak_collocation_penalty:[[:space:]]+(-100|"-100")[[:space:]]*$' \
+  '^  rear_penalty:[[:space:]]+(-20|"-20")[[:space:]]*$'; do
+  grep -Eq "$expected_schema_pattern" "$built_schema" >/dev/null ||
+    die "built rime_ice schema omitted grammar penalty: $expected_schema_pattern"
 done
 if grep -F 'max_homographs:' "$built_schema" >/dev/null; then
   die "built Rime Ice schema contains ineffective max_homographs"

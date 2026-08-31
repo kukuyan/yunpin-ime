@@ -967,6 +967,17 @@ class WindowsClientTests(unittest.TestCase):
         ):
             self.assertIn(grammar_setting, config)
         self.assertNotIn("max_homographs", config)
+
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        for serialized_penalty_pattern in (
+            'collocation_penalty:\\s*(?:-14|"-14")',
+            'non_collocation_penalty:\\s*(?:-6|"-6")',
+            'weak_collocation_penalty:\\s*(?:-100|"-100")',
+            'rear_penalty:\\s*(?:-20|"-20")',
+        ):
+            self.assertIn(serialized_penalty_pattern, package)
         self.assertFalse((WINDOWS / "rime" / "private.tsv").exists())
         self.assertFalse((WINDOWS / "rime" / "yunpin" / "private.tsv").exists())
         example = (WINDOWS / "rime" / "yunpin-private.tsv.example").read_text(
