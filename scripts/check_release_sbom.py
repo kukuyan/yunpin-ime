@@ -181,9 +181,32 @@ def validate_document(document: dict[str, Any], tag: str, commit: str) -> None:
         boost = _package(packages, "Boost", boost_version)
         if boost.get("licenseDeclared") != "BSL-1.0":
             raise CheckError(f"Boost@{boost_version} lacks its locked BSL-1.0 license")
-    for name in ("weasel", "squirrel", "librime", "rime-ice", "rime-essay"):
+    for name in (
+        "weasel",
+        "squirrel",
+        "librime",
+        "librime-octagram",
+        "rime-ice",
+        "rime-essay",
+    ):
         if not any(str(package.get("name", "")).lower() == name for package in packages):
             raise CheckError(f"release-critical upstream is absent: {name}")
+    octagram_lock = next(
+        row
+        for row in generator.load_json(generator.UPSTREAM_LOCK)["upstreams"]
+        if row["name"] == "librime-octagram"
+    )
+    octagram = _package(packages, "librime-octagram", octagram_lock["commit"])
+    if octagram.get("licenseDeclared") != "BSD-3-Clause":
+        raise CheckError("librime-octagram lacks its locked BSD-3-Clause license")
+    checksums = octagram.get("checksums")
+    if checksums != [
+        {
+            "algorithm": "SHA256",
+            "checksumValue": octagram_lock["archive_sha256"],
+        }
+    ]:
+        raise CheckError("librime-octagram lacks its locked source archive SHA-256")
 
     relationships = document.get("relationships")
     if not isinstance(relationships, list) or not relationships:

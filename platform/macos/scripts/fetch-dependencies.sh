@@ -74,7 +74,7 @@ fi
 # YunPin librime mixes two libc++ ABIs and corrupts session teardown.  Stage the
 # exact source revisions recorded by the release's version-info.txt so the
 # plugins can be rebuilt together with the YunPin core.
-while IFS=$'\t' read -r name plugin commit; do
+while IFS=$'\t' read -r name plugin commit license_sha256; do
   plugin_dir="$source_dir/librime/plugins/$plugin"
   marker="$plugin_dir/.yunpin-source-commit"
   if [[ -d "$plugin_dir" ]]; then
@@ -84,6 +84,14 @@ while IFS=$'\t' read -r name plugin commit; do
   temporary="$(mktemp -d "${TMPDIR:-/tmp}/yunpin-rime-plugin.XXXXXX")"
   tar -xzf "$cache_dir/$name" -C "$temporary" --strip-components 1
   [[ -f "$temporary/CMakeLists.txt" && -f "$temporary/LICENSE" ]] || die "Rime plugin source archive is incomplete: $name"
+  if [[ -n "$license_sha256" ]]; then
+    actual_license_sha256="$(shasum -a 256 "$temporary/LICENSE" | awk '{print $1}')"
+    [[ "$actual_license_sha256" == "$license_sha256" ]] || die "Rime plugin license SHA-256 mismatch: $name"
+  fi
+  if [[ "$plugin" == octagram ]]; then
+    grep -F 'u <<= 7;' "$temporary/src/gram_encoding.cc" >/dev/null ||
+      die "librime-octagram source lacks the locked multi-byte encoder fix"
+  fi
   printf '%s\n' "$commit" > "$temporary/.yunpin-source-commit"
   mkdir -p "$(dirname "$plugin_dir")"
   mv "$temporary" "$plugin_dir"
@@ -93,7 +101,13 @@ import sys
 
 for archive in json.load(open(sys.argv[1], encoding="utf-8"))["archives"]:
     if "rime_plugin" in archive:
-        print(archive["name"], archive["rime_plugin"], archive["commit"], sep="\t")
+        print(
+            archive["name"],
+            archive["rime_plugin"],
+            archive["commit"],
+            archive.get("license_sha256", ""),
+            sep="\t",
+        )
 PY
 )
 

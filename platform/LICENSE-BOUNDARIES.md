@@ -9,6 +9,7 @@ not legal advice.
 | macOS frontend and its Squirrel patch set | GPL-3.0 | Built from pinned Squirrel source; complete corresponding source and patches must accompany a binary release. |
 | `librime-yunpin`, protocol, sync service and importer | Apache-2.0 | Original YunPin components. Their notices remain intact when included in a desktop distribution. |
 | librime | BSD-3-Clause | Preserve the upstream copyright and license text. |
+| librime-octagram | BSD-3-Clause | Preserve the upstream copyright, license text, exact source commit and archive hash. Grammar model data is separately licensed and must not be inferred from the plugin license. |
 | ImeWlConverter | GPL-3.0 | Optional external executable. YunPin does not link, copy, or redistribute it; the importer invokes a user-supplied, hash-pinned binary. |
 | Personal vocabulary and migrated output | User data, never repository content | Must stay outside Git, CI artifacts, fixtures, logs, images and releases. |
 

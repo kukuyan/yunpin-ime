@@ -300,6 +300,48 @@ New-Item -ItemType Directory -Path $stagedEngine -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $engineRoot "include") -Destination $stagedEngine -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $engineRoot "src") -Destination $stagedEngine -Recurse -Force
 
+# Windows has no production external-plugin loader. Fetch the same immutable
+# octagram source used by macOS, verify both source and license identities, and
+# stage it as a second merged librime plugin for both generated architectures.
+$octagramArchive = Join-Path $cacheRoot ([string]$lock.librimeOctagram.archiveName)
+$bundledOctagramArchive = Join-Path $repoRoot ("sources\" + [string]$lock.librimeOctagram.archiveName)
+if (-not (Test-Path $octagramArchive -PathType Leaf) -and
+    (Test-Path $bundledOctagramArchive -PathType Leaf)) {
+    $bundledOctagramHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundledOctagramArchive).Hash.ToLowerInvariant()
+    if ($bundledOctagramHash -ne ([string]$lock.librimeOctagram.sha256).ToLowerInvariant()) {
+        throw "Bundled librime-octagram source archive does not match the Windows lock"
+    }
+    Copy-Item -LiteralPath $bundledOctagramArchive -Destination $octagramArchive -Force
+}
+Get-VerifiedDownload -Uri $lock.librimeOctagram.url `
+    -Sha256 $lock.librimeOctagram.sha256 -Destination $octagramArchive
+$stagedOctagram = Join-Path $stagedLibrime "plugins\octagram"
+Reset-GeneratedDirectory -Path $stagedOctagram -AllowedParent (Join-Path $stagedLibrime "plugins")
+Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
+    "-xzf", $octagramArchive, "-C", $stagedOctagram, "--strip-components=1"
+)
+foreach ($requiredOctagramSource in @(
+    "CMakeLists.txt", "LICENSE", "src\gram_encoding.cc", "src\grammar_module.cc"
+)) {
+    if (-not (Test-Path (Join-Path $stagedOctagram $requiredOctagramSource) -PathType Leaf)) {
+        throw "librime-octagram source archive is incomplete: $requiredOctagramSource"
+    }
+}
+$octagramLicenseHash = (Get-FileHash -Algorithm SHA256 `
+    -LiteralPath (Join-Path $stagedOctagram "LICENSE")).Hash.ToLowerInvariant()
+if ($octagramLicenseHash -ne ([string]$lock.librimeOctagram.licenseSha256).ToLowerInvariant()) {
+    throw "librime-octagram license does not match the Windows lock"
+}
+$octagramEncoding = Get-Content -LiteralPath (Join-Path $stagedOctagram "src\gram_encoding.cc") -Raw
+if (-not $octagramEncoding.Contains("u <<= 7;")) {
+    throw "librime-octagram source lacks the locked multi-byte encoder fix"
+}
+[IO.File]::WriteAllText(
+    (Join-Path $stagedOctagram ".yunpin-source-commit"),
+    ([string]$lock.librimeOctagram.commit + "`r`n"),
+    [Text.Encoding]::ASCII
+)
+
 $sevenZip = (Get-Command "7z.exe" -ErrorAction Stop).Source
 $boostArchive = Join-Path $cacheRoot "boost_1_84_0.7z"
 $bundledBoostArchive = Join-Path $repoRoot "sources\boost_1_84_0.7z"
@@ -351,7 +393,7 @@ $env:BOOST_COMPILED_LIBS = $boostBuildOptions
 $env:BJAM_TOOLSET = "msvc-14.3"
 $env:CMAKE_GENERATOR = '"Visual Studio 17 2022"'
 $env:PLATFORM_TOOLSET = "v143"
-$env:RIME_PLUGINS = "librime-yunpin"
+$env:RIME_PLUGINS = "librime-yunpin octagram"
 $env:VERSION_MAJOR = "0"
 $env:VERSION_MINOR = "17"
 $env:VERSION_PATCH = "4"
@@ -405,8 +447,83 @@ try {
             throw "Merged librime project is missing for $architecture"
         }
         $projectText = Get-Content -LiteralPath $generatedProject -Raw
-        if ($projectText -notmatch 'Q\(yunpin\)') {
-            throw "Merged yunpin module is absent from the $architecture librime project"
+        foreach ($module in @("yunpin", "octagram")) {
+            if ($projectText -notmatch ('Q\(' + $module + '\)')) {
+                throw "Merged $module module is absent from the $architecture librime project"
+            }
+        }
+        $octagramProject = Join-Path $stagedLibrime `
+            ("build_" + $architecture + "\plugins\octagram\rime-octagram-objs.vcxproj")
+        if (-not (Test-Path $octagramProject -PathType Leaf)) {
+            throw "Merged octagram object project is missing for $architecture"
+        }
+        $octagramProjectText = Get-Content -LiteralPath $octagramProject -Raw
+        foreach ($octagramSource in @("gram_encoding.cc", "grammar_module.cc")) {
+            if (-not $octagramProjectText.Contains($octagramSource)) {
+                throw "Merged octagram $architecture project omits $octagramSource"
+            }
+        }
+    }
+
+    # Execute a C-API registration probe against each exact rime.dll. This is
+    # stronger than process survival or project generation: the default module
+    # set must load octagram and its grammar module in both x64 and x86 images.
+    $moduleProbeSource = Join-Path $repoRoot "platform\windows\tests\rime-module-probe"
+    foreach ($probeTarget in @(
+        [pscustomobject]@{
+            Name = "x64"
+            Platform = "x64"
+            ImportLibrary = (Join-Path $weaselSource "lib64\rime.lib")
+            RuntimeDirectory = (Join-Path $weaselSource "output")
+        }
+        [pscustomobject]@{
+            Name = "x86"
+            Platform = "Win32"
+            ImportLibrary = (Join-Path $weaselSource "lib\rime.lib")
+            RuntimeDirectory = (Join-Path $weaselSource "output\Win32")
+        }
+    )) {
+        $probeBuild = Join-Path $scratchRoot ("rime-module-probe-" + $probeTarget.Name)
+        Reset-GeneratedDirectory -Path $probeBuild -AllowedParent $scratchRoot
+        Invoke-Checked -FilePath "cmake.exe" -ArgumentList @(
+            "-S", $moduleProbeSource,
+            "-B", $probeBuild,
+            "-G", "Visual Studio 17 2022",
+            "-A", $probeTarget.Platform,
+            "-DRIME_INCLUDE_DIR=$(Join-Path $weaselSource 'include')",
+            "-DRIME_IMPORT_LIBRARY=$($probeTarget.ImportLibrary)"
+        )
+        Invoke-Checked -FilePath "cmake.exe" -ArgumentList @(
+            "--build", $probeBuild, "--config", "Release", "--parallel"
+        )
+        $probeExecutable = Join-Path $probeBuild "Release\yunpin-rime-module-probe.exe"
+        if (-not (Test-Path $probeExecutable -PathType Leaf)) {
+            throw "Rime module probe executable is missing for $($probeTarget.Name)"
+        }
+        $probeShared = Join-Path $probeBuild "shared"
+        $probeUser = Join-Path $probeBuild "user"
+        New-Item -ItemType Directory -Path $probeShared, $probeUser -Force | Out-Null
+        $previousPath = $env:PATH
+        try {
+            $env:PATH = $probeTarget.RuntimeDirectory + ";" + $previousPath
+            $expectedRimeDll = Join-Path $probeTarget.RuntimeDirectory "rime.dll"
+            $probeOutput = @(& $probeExecutable $probeShared $probeUser $expectedRimeDll 2>&1)
+            $probeExitCode = $LASTEXITCODE
+        } finally {
+            $env:PATH = $previousPath
+        }
+        if ($probeExitCode -ne 0) {
+            throw "Rime module probe failed for $($probeTarget.Name): $($probeOutput -join '; ')"
+        }
+        foreach ($expectedProbeRow in @(
+            "octagram_module_registered=true",
+            "grammar_module_registered=true",
+            "yunpin_module_registered=true",
+            "rime_runtime_identity_exact=true"
+        )) {
+            if ($probeOutput -notcontains $expectedProbeRow) {
+                throw "Rime module probe omitted $expectedProbeRow for $($probeTarget.Name)"
+            }
         }
     }
     Invoke-Checked -FilePath "cmd.exe" -ArgumentList @("/d", "/c", "call build.bat opencc")

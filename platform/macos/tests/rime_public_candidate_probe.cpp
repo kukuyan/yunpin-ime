@@ -79,6 +79,12 @@ int main(int argc, char** argv) {
 
   api->setup(&traits);
   api->initialize(&traits);
+  if (!api->find_module("octagram") || !api->find_module("grammar")) {
+    std::cerr << "octagram or grammar module is not registered\n";
+    api->finalize();
+    return 1;
+  }
+  std::cout << "octagram_modules=registered" << std::endl;
   if (api->start_maintenance(True)) {
     api->join_maintenance_thread();
   }

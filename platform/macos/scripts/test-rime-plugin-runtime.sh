@@ -57,6 +57,7 @@ for plugin in librime-lua.dylib librime-octagram.dylib librime-predict.dylib; do
     die "real Rime runtime did not load packaged plugin: $plugin"
 done
 for expected in \
+  'octagram_modules=registered' \
   's:' 'sh:' 'shu:' 'shuru:' 'ceshi:' 'wendingxing:' \
   'lifecycle_sessions=128'; do
   grep -F "$expected" "$temporary/stdout" >/dev/null ||

@@ -250,6 +250,20 @@ def _load_upstream_packages(
                 raise SBOMError(f"platform and third-party URLs disagree for {name}")
             source += " and platform/upstream-lock.json"
 
+        archive_url = item.get("archive_url")
+        archive_sha256 = item.get("archive_sha256")
+        archive_name = item.get("archive_name")
+        if any(value is not None for value in (archive_url, archive_sha256, archive_name)):
+            if not all(value is not None for value in (archive_url, archive_sha256, archive_name)):
+                raise SBOMError(f"{name}: incomplete immutable source archive lock")
+            download_location = _https_url(archive_url, f"{name}.archive_url")
+            checksum = _sha256(archive_sha256, f"{name}.archive_sha256")
+            package_file_name = _string(archive_name, f"{name}.archive_name")
+        else:
+            download_location = repository
+            checksum = None
+            package_file_name = None
+
         purpose = "DATA" if folded in {
             "rime-ice", "rime-essay", "thuocl", "phrase-pinyin-data"
         } else "APPLICATION" if folded in {"weasel", "squirrel", "imewlconverter"} else "LIBRARY"
@@ -258,12 +272,14 @@ def _load_upstream_packages(
                 identity=f"upstream:{name}:{commit}",
                 name=name,
                 version=version,
-                download_location=repository,
+                download_location=download_location,
                 declared_license=declared,
                 source_info=source,
                 purpose=purpose,
                 repository=repository,
                 commit=commit,
+                sha256=checksum,
+                archive_name=package_file_name,
             )
         )
     missing = set(platform_components) - names
