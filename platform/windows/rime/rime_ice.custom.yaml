@@ -29,7 +29,9 @@ patch:
   "translator/contextual_suggestions": true
   "translator/max_homophones": 8
   "translator/enable_word_completion": true
-  "translator/max_sentences": 2
+  # Keep the same single-sentence ranking path as macOS. librime 1.17 uses a
+  # different multi-sentence beam search when this is greater than one.
+  "translator/max_sentences": 1
   "yunpin/tag": abc
   "yunpin/snapshot": "yunpin/private.tsv"
   "yunpin/max_candidates": 2

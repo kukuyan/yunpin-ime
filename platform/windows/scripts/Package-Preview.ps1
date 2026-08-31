@@ -638,6 +638,7 @@ foreach ($pattern in @(
     '(?m)^\s+contextual_suggestions:\s*true\s*$',
     '(?m)^\s+enable_correction:\s*false\s*$',
     '(?m)^\s+max_homophones:\s*8\s*$',
+    '(?m)^\s+max_sentences:\s*1\s*$',
     '(?m)^\s+long_correction_guard:\s*true\s*$',
     '(?m)^\s+short_input_guard:\s*true\s*$',
     '(?m)^\s+typo_correction:\s*false\s*$'
@@ -656,6 +657,7 @@ if ($baselineSchema -notmatch '(?m)^\s+contextual_suggestions:\s*false\s*$' -or
 }
 foreach ($pattern in @(
     '(?m)^\s+enable_correction:\s*false\s*$',
+    '(?m)^\s+max_sentences:\s*1\s*$',
     '(?m)^\s+long_correction_guard:\s*true\s*$',
     '(?m)^\s+short_input_guard:\s*true\s*$',
     '(?m)^\s+typo_correction:\s*false\s*$'
