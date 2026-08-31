@@ -230,6 +230,10 @@ class WindowsClientTests(unittest.TestCase):
             )
         self.assertIn("kP95GateMicroseconds = 20000", probe)
         self.assertLess(
+            probe.index("#define NOMINMAX"),
+            probe.index("#include <windows.h>"),
+        )
+        self.assertLess(
             probe.index("#include <windows.h>"),
             probe.index("#include <psapi.h>"),
         )

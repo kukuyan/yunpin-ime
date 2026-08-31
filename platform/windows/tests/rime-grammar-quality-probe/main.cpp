@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rime_api.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <psapi.h>
 
