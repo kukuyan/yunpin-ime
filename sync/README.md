@@ -21,6 +21,44 @@ The production image runs as a non-root distroless user. Put TLS and coarse netw
 
 The Dockerfile exposes explicit `test` and `runtime` targets. The complete HTTP contract is in [`openapi.yaml`](openapi.yaml).
 
+## Hourly redacted access aggregation
+
+The relay already writes one UTC application log line per request to stdout.
+It contains only the method, a fixed route label, HTTP status and duration; the
+route label is produced before logging and never contains an account, device or
+pairing identifier. `yunpin-access-hourly` aggregates those existing lines on
+the log side without changing the request handler or opening the relay database:
+
+```bash
+set -o pipefail
+CGO_ENABLED=0 go build -trimpath -o yunpin-access-hourly ./cmd/yunpin-access-hourly
+docker logs \
+  --since 2026-08-31T09:00:00Z \
+  --until 2026-08-31T10:00:00Z \
+  <exact-sync-container-id> 2>&1 |
+  ./yunpin-access-hourly --hour 2026-08-31T09:00:00Z
+```
+
+`--hour` accepts only a canonical RFC3339 UTC hour ending in `Z` and counts the
+half-open interval from that hour through, but not including, the next hour.
+The single deterministic JSON line reports `total`, `2xx`, `4xx`, `5xx`,
+`other`, and the same counters under lexically sorted fixed `route` groups.
+It never emits the method, duration or any source-log text. Non-access startup
+lines are ignored. An access-like malformed line, an unknown route label, an
+invalid timestamp/status or an input line over 4 KiB stops the aggregation with
+only a generic input line number and no partial JSON or source text.
+
+Run the host-side collector shortly after every UTC boundary and write its
+stdout to a mode-0600 temporary file before an atomic, non-overwriting publish
+for that hour. Resolve exactly one running Compose `sync` container and use
+`pipefail`; a failed `docker logs` call must not become a successful zero-count
+hour. Docker's retained raw log is bounded, so a missed hour that has already
+rotated out remains explicitly missing rather than being reconstructed as
+zero. The collector needs read-only log access only: do not mount the relay
+database, grant network access, or place the Docker socket inside another
+container. Rollback disables the collector schedule and removes its binary;
+the relay process, image, database and stdout logging remain unchanged.
+
 ## API summary
 
 | Method | Path | Authentication | Purpose |
