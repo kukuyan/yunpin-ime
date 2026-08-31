@@ -70,7 +70,10 @@ function Export-GitTree {
     Invoke-Checked -FilePath "git" -ArgumentList @(
         "-C", $Checkout, "archive", "--format=tar", "--output=$archive", "HEAD"
     )
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @("-xf", $archive, "-C", $Destination)
+    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
+        "-xf", $archive, "-C", $Destination,
+        "--options", "hdrcharset=UTF-8"
+    )
     Remove-Item -LiteralPath $archive -Force
 }
 
@@ -107,7 +110,8 @@ function Export-GitSubtree {
     )
     Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
         "-xf", $archive, "-C", $Destination,
-        ("--strip-components=" + $treeComponents.Count)
+        ("--strip-components=" + $treeComponents.Count),
+        "--options", "hdrcharset=UTF-8"
     )
     Remove-Item -LiteralPath $archive -Force
 }
@@ -120,8 +124,12 @@ function Write-ZipArchive {
     if (Test-Path $Destination) {
         Remove-Item -LiteralPath $Destination -Force
     }
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
-        "-a", "-c", "-f", $Destination, "-C", $Source, "."
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $Source,
+        $Destination,
+        [IO.Compression.CompressionLevel]::Optimal,
+        $false,
+        [Text.UTF8Encoding]::new($false, $true)
     )
 }
 
@@ -776,6 +784,14 @@ foreach ($dependency in $lock.librime.dependencies.PSObject.Properties) {
 }
 Export-GitTree -Checkout (Join-Path $repoRoot "third_party\rime-ice") -Destination (Join-Path $sourceRoot "third_party\rime-ice") -ScratchRoot $scratchRoot
 Write-SourceCommitMarker -Path (Join-Path $sourceRoot "third_party\rime-ice") -Commit $lock.rimeIce.commit
+$unicodeSourceRelative = "third_party\rime-ice\others\asserts\扩展-Unicode_compressed.webp"
+$mojibakeSourceRelative = "third_party\rime-ice\others\asserts\µë⌐σ▒ò-Unicode_compressed.webp"
+$unicodeSourcePath = Join-Path $sourceRoot $unicodeSourceRelative
+$mojibakeSourcePath = Join-Path $sourceRoot $mojibakeSourceRelative
+if (-not (Test-Path -LiteralPath $unicodeSourcePath -PathType Leaf) -or
+    (Test-Path -LiteralPath $mojibakeSourcePath)) {
+    throw "Windows corresponding source export did not preserve the locked UTF-8 path"
+}
 Export-GitSubtree -Checkout $repoRoot -Tree "librime-yunpin" -Destination (Join-Path $sourceRoot "librime-yunpin") -ScratchRoot $scratchRoot
 # Every other subtree in this archive comes from the git tree, so its contents
 # correspond to $repoCommit, which BUILD-SOURCE-METADATA.json records. The
@@ -895,6 +911,18 @@ Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | Sort-Object FullName | F
 
 $sourceArchive = Join-Path $artifactsRoot "YunPin-IME-Windows-development-preview-source.zip"
 Write-ZipArchive -Source $sourceRoot -Destination $sourceArchive
+$unicodeSourceEntry = $unicodeSourceRelative.Replace("\", "/")
+$mojibakeSourceEntry = $mojibakeSourceRelative.Replace("\", "/")
+$sourceZip = [IO.Compression.ZipFile]::OpenRead($sourceArchive)
+try {
+    $sourceArchiveEntries = @($sourceZip.Entries | ForEach-Object { $_.FullName })
+    if (@($sourceArchiveEntries | Where-Object { $_ -ceq $unicodeSourceEntry }).Count -ne 1 -or
+        @($sourceArchiveEntries | Where-Object { $_ -ceq $mojibakeSourceEntry }).Count -ne 0) {
+        throw "Windows corresponding source ZIP did not preserve the locked UTF-8 entry name"
+    }
+} finally {
+    $sourceZip.Dispose()
+}
 $runtimeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $runtimeArchive).Hash.ToLowerInvariant()
 $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceArchive).Hash.ToLowerInvariant()
 $artifactHashes = @(

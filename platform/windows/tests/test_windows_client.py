@@ -1077,6 +1077,44 @@ class WindowsClientTests(unittest.TestCase):
         self.assertEqual(mapping["WeaselSetup.exe"], "YunPinSetup.exe")
         self.assertEqual(len(set(mapping.values())), len(mapping))
 
+    def test_windows_source_archive_preserves_utf8_paths(self) -> None:
+        package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(
+            encoding="utf-8"
+        )
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        unicode_path = (
+            "third_party\\rime-ice\\others\\asserts\\"
+            "扩展-Unicode_compressed.webp"
+        )
+        mojibake_path = (
+            "third_party\\rime-ice\\others\\asserts\\"
+            "µë⌐σ▒ò-Unicode_compressed.webp"
+        )
+
+        self.assertEqual(package.count('"--options", "hdrcharset=UTF-8"'), 2)
+        self.assertIn("[IO.Compression.ZipFile]::CreateFromDirectory(", package)
+        self.assertIn("[Text.UTF8Encoding]::new($false, $true)", package)
+        self.assertNotIn('"-a", "-c", "-f"', package)
+        self.assertIn(f'$unicodeSourceRelative = "{unicode_path}"', package)
+        self.assertIn(f'$mojibakeSourceRelative = "{mojibake_path}"', package)
+        self.assertIn(
+            "Test-Path -LiteralPath $unicodeSourcePath -PathType Leaf", package
+        )
+        self.assertIn("Test-Path -LiteralPath $mojibakeSourcePath", package)
+        self.assertIn("[IO.Compression.ZipFile]::OpenRead($sourceArchive)", package)
+        self.assertIn("$sourceZip.Entries", package)
+        self.assertIn(
+            "Where-Object { $_ -ceq $mojibakeSourceEntry }", package
+        )
+        self.assertIn(unicode_path, workflow)
+        self.assertIn(mojibake_path, workflow)
+        self.assertIn(
+            "Test-Path -LiteralPath $unicodeSourcePath -PathType Leaf", workflow
+        )
+        self.assertIn("Test-Path -LiteralPath $mojibakeSourcePath", workflow)
+
     def test_native_spool_producer_matches_windows_consumer_contract(self) -> None:
         source = (
             ROOT / "librime-yunpin" / "src" / "native_selection_events.cpp"
