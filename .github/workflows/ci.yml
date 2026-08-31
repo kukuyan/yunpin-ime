@@ -153,6 +153,14 @@ jobs:
             }
           }
           Expand-Archive -LiteralPath $sourceArchive -DestinationPath $extractRoot
+          $unicodeSourcePath = Join-Path $extractRoot `
+            "third_party\rime-ice\others\asserts\扩展-Unicode_compressed.webp"
+          $mojibakeSourcePath = Join-Path $extractRoot `
+            "third_party\rime-ice\others\asserts\µë⌐σ▒ò-Unicode_compressed.webp"
+          if (-not (Test-Path -LiteralPath $unicodeSourcePath -PathType Leaf) -or
+              (Test-Path -LiteralPath $mojibakeSourcePath)) {
+            throw "Expanded Windows source archive did not preserve the locked UTF-8 path"
+          }
           $buildScripts = @(
             Get-ChildItem -LiteralPath $extractRoot -File -Recurse `
               -Filter "Build-Preview.ps1" |
