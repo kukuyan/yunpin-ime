@@ -481,13 +481,21 @@ class WindowsClientTests(unittest.TestCase):
             self.assertIn("Finalize();", start_maintenance)
             self.assertNotIn("m_session_status_map.clear()", start_maintenance)
             sync_method = configurator[configurator.index("int Configurator::SyncUserData()") :]
+            self.assertIn("constexpr int kMaintenanceUnavailableExitCode = 69", sync_method)
             self.assertIn("constexpr int kMaintenanceBusyExitCode = 75", sync_method)
             self.assertIn("client.TryStartMaintenance()", sync_method)
             connect_gate = sync_method[
                 sync_method.index("if (!client.Connect())") :
                 sync_method.index("LOG(INFO) << \"Requesting idle-only")
             ]
-            self.assertIn("return kMaintenanceBusyExitCode", connect_gate)
+            self.assertIn("return kMaintenanceUnavailableExitCode", connect_gate)
+            self.assertNotIn("return kMaintenanceBusyExitCode", connect_gate)
+            busy_gate = sync_method[
+                sync_method.index("if (!client.TryStartMaintenance())") :
+                sync_method.index("int result = 0;")
+            ]
+            self.assertIn("return kMaintenanceBusyExitCode", busy_gate)
+            self.assertNotIn("return kMaintenanceUnavailableExitCode", busy_gate)
             self.assertLess(
                 sync_method.index("client.TryStartMaintenance()"),
                 sync_method.index("rime->sync_user_data()"),

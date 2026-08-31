@@ -28,6 +28,12 @@ const (
 // deferred without treating it as a synchronization failure.
 var ErrRimeMaintenanceBusy = errors.New("Rime host deferred maintenance while input is active")
 
+// ErrRimeMaintenanceUnavailable is a closed local failure category for an
+// initial connection failure to the fixed platform input-method host. Unlike
+// ErrRimeMaintenanceBusy, it is a synchronization failure and must use the
+// normal failed-run backoff and health reporting path.
+var ErrRimeMaintenanceUnavailable = errors.New("Rime host maintenance IPC is unavailable")
+
 // RimeBridgePaths are derived from platform-owned YunPin locations. None of
 // these paths may be supplied by a maintenance process or looked up on PATH.
 type RimeBridgePaths struct {

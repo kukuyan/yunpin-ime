@@ -6,18 +6,18 @@ Date: Wed, 12 Aug 2026 00:00:00 +0000
 Subject: [PATCH] Defer userdb sync while a composition is active
 
 Make the idle check and entry into maintenance one serialized server request.
-Any composing or uninspectable session returns a retryable exit status without
-clearing sessions. The desktop agent observes that status on the exact fixed
-child process and retries later.
+Any composing or uninspectable session returns a retryable busy exit status
+without clearing sessions. An initial IPC connection failure returns a distinct
+unavailable status so the desktop agent does not report it as user activity.
 ---
  RimeWithWeasel/RimeWithWeasel.cpp    | 28 ++++++++++++++++++++++++++++
- WeaselDeployer/Configurator.cpp      | 32 +++++++++++++++++++++-----------
+ WeaselDeployer/Configurator.cpp      | 33 ++++++++++++++++++++++-----------
  WeaselIPC/WeaselClientImpl.cpp       | 15 ++++++++++++++-
  WeaselIPC/WeaselClientImpl.h         |  1 +
  WeaselIPCServer/WeaselServerImpl.cpp |  9 ++++++---
  include/RimeWithWeasel.h             |  2 ++
  include/WeaselIPC.h                  | 11 +++++++++++
- 7 files changed, 83 insertions(+), 15 deletions(-)
+ 7 files changed, 84 insertions(+), 15 deletions(-)
 
 diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
 index 1c343b9..12de578 100644
@@ -62,18 +62,19 @@ diff --git a/WeaselDeployer/Configurator.cpp b/WeaselDeployer/Configurator.cpp
 index eaf8157..4c6657e 100644
 --- a/WeaselDeployer/Configurator.cpp
 +++ b/WeaselDeployer/Configurator.cpp
-@@ -196,6 +196,10 @@ int Configurator::DictManagement() {
+@@ -196,6 +196,11 @@ int Configurator::DictManagement() {
  }
  
  int Configurator::SyncUserData() {
-+  // The desktop agent maps this retryable process result to its authenticated
-+  // ErrRimeMaintenanceBusy path. It observes the status of the exact fixed
-+  // child-process handle; no writable side channel or PATH lookup is involved.
++  // The desktop agent reads these stable results from the exact fixed child.
++  // Keep initial IPC unavailability distinct from authenticated state busy
++  // without relying on a writable side channel or PATH lookup.
++  constexpr int kMaintenanceUnavailableExitCode = 69;
 +  constexpr int kMaintenanceBusyExitCode = 75;
    HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
    if (!hMutex) {
      LOG(ERROR) << "Error creating WeaselDeployerMutex.";
-@@ -212,18 +216,24 @@ int Configurator::SyncUserData() {
+@@ -212,18 +217,24 @@ int Configurator::SyncUserData() {
    }
  
    weasel::Client client;
@@ -81,9 +82,9 @@ index eaf8157..4c6657e 100644
 -    LOG(INFO) << "Turning WeaselServer into maintenance mode.";
 -    client.StartMaintenance();
 +  if (!client.Connect()) {
-+    LOG(INFO) << "Deferring user data sync until the idle gate is available.";
++    LOG(ERROR) << "Weasel IPC is unavailable for user data sync.";
 +    CloseHandle(hMutex);
-+    return kMaintenanceBusyExitCode;
++    return kMaintenanceUnavailableExitCode;
 +  }
 +  LOG(INFO) << "Requesting idle-only WeaselServer maintenance mode.";
 +  if (!client.TryStartMaintenance()) {
@@ -108,7 +109,7 @@ index eaf8157..4c6657e 100644
      rime->join_maintenance_thread();
    }
  
-@@ -233,5 +243,5 @@ int Configurator::SyncUserData() {
+@@ -233,5 +244,5 @@ int Configurator::SyncUserData() {
      LOG(INFO) << "Resuming service.";
      client.EndMaintenance();
    }
