@@ -193,9 +193,11 @@ python3 scripts/check_supply_chain.py
 CI performs the real Visual Studio build and uploads the runtime plus
 corresponding-source archive for seven days.
 
-No local language model is implemented. Any future experiment must be an
-optional, default-off sidecar with no network access, bounded IPC and a strict
-timeout; failure leaves only the ordinary exact candidate path. There is no
-NearSearch or model fallback in the shipped disabled configuration.
-Chinese-English mixed input remains a future segmentation/ranking direction and
-must not be treated as a capability of this Windows preview.
+The preview bundles the same digest-locked Wanxiang octagram grammar as macOS
+for offline, in-process whole-sentence ranking. It is opened during schema
+selection and does not use the network; automatic correction and NearSearch
+remain disabled. Any future external model sidecar must be optional and
+default-off, with no network access, bounded IPC and a strict timeout; failure
+leaves only the ordinary exact candidate path. Chinese-English mixed input
+remains a future segmentation/ranking direction and must not be treated as a
+capability of this Windows preview.

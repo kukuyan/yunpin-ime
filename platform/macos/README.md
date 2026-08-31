@@ -48,7 +48,9 @@ candidate until a typed, explicitly armed native channel exists.
 `preview-manifest.json` records those gates separately: merged-librime typo E2E
 is true, while native-host typo E2E, production-dictionary typo E2E, a local
 model sidecar and Chinese-English mixed input remain false. This prevents a
-merged module from being confused with end-to-end acceptance.
+merged module from being confused with end-to-end acceptance. The sidecar flag
+does not describe the bundled Wanxiang octagram grammar, which is an offline
+in-process Rime resource with separate model identity and quality evidence.
 
 ## Identity and privacy boundary
 
@@ -238,12 +240,13 @@ hardware in TextEdit, Safari, Office and Terminal, including native and Rosetta
 hosts, marked text, numbered selection, caret movement, dark/light candidate
 placement, secure text fields, sleep/login, upgrade and uninstall.
 
-The preview has no language model and correction never opens disk or network.
-If a later release experiments with a model, it must remain an optional,
-default-off, offline sidecar with bounded local IPC, a strict timeout and
-fail-closed fallback to exact/deterministic candidates. Chinese-English mixed
-input is likewise a future segmentation/ranking direction, not a current macOS
-capability.
+The preview bundles the digest-locked Wanxiang octagram grammar for offline,
+in-process whole-sentence ranking. It is opened during schema selection and
+does not use the network; automatic correction and NearSearch remain disabled.
+Any future external model sidecar must remain optional and default-off, with no
+network access, bounded local IPC, a strict timeout and fail-closed fallback to
+exact/deterministic candidates. Chinese-English mixed input is likewise a
+future segmentation/ranking direction, not a current macOS capability.
 
 Production distribution additionally requires Developer ID signing,
 notarization and stapling in a protected GitHub Release environment. The

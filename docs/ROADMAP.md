@@ -25,9 +25,12 @@
   dormant Squirrel/Weasel background watchers. Capture activates only after an
   explicit `start`/`resume`; the synthetic host-to-report chain is automated,
   while installed-host real-text acceptance remains manual.
-- Desktop-agent skeleton for non-synchronizing macOS Keychain, current-user
-  Windows DPAPI, local status, one-shot sync and single-instance retry loop;
-  production account creation remains fail-closed.
+- Desktop-agent skeleton for an atomic `0600` credential file below the current
+  user's `0700` macOS state directory, current-user Windows DPAPI, local status,
+  one-shot sync and a single-instance retry loop. Existing default-device
+  credentials may migrate once from the retained login Keychain during an
+  interactive load; background loads never access Keychain. Production account
+  creation remains fail-closed.
 - Weasel/Squirrel configuration overlays and pinned upstream strategy.
 - Source-only and explicitly unsigned development builds.
 
@@ -51,10 +54,13 @@
 - Prototype Chinese-English mixed-input segmentation, English passthrough and
   boundary ranking. This is a direction only; no current preview capability or
   acceptance claim follows from this roadmap item.
-- Consider a local model only as an optional, default-off offline sidecar after
-  the deterministic baseline is measured. It must have no network access, a
-  minimal bounded IPC payload, a strict deadline and fail-closed fallback that
-  preserves exact/deterministic results when the process times out or crashes.
+- Maintain the shipped digest-locked Wanxiang octagram grammar as an offline,
+  in-process desktop resource, with the same bytes on macOS and Windows and a
+  model/no-grammar P95, cold-start, RSS and candidate-quality comparison. Any
+  future external model sidecar remains optional and default-off; it must have
+  no network access, a minimal bounded IPC payload, a strict deadline and
+  fail-closed fallback that preserves exact/deterministic results when the
+  process times out or crashes.
 
 Typing-quality acceptance requires the revised single-bridge suite on both
 desktop runtimes, no correction when a complete exact path exists, no network
@@ -100,9 +106,10 @@ keyboard extension network access.
 - Integrate the engine as a merged librime plugin.
 - Build Weasel x86/x64 TSF components plus x64 service.
 - Build Squirrel Universal arm64/x86_64 InputMethodKit package.
-- Harden and package the Keychain/current-user DPAPI background agent, including
-  rollback-safe account provisioning, authenticated device roster, pairing,
-  recovery, revoke and key rotation.
+- Harden and package the macOS private-file/current-user DPAPI background agent,
+  including the retained-Keychain one-time migration boundary, rollback-safe
+  account provisioning, authenticated device roster, pairing, recovery, revoke
+  and key rotation.
 - Strengthen the existing librime correction bridge with trusted native
   protected-context and host-deletion evidence, then connect its word-level
   aggregates and scores to encrypted local persistence and an explicit local

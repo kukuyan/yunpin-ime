@@ -114,20 +114,26 @@ policy. A revised opt-in real ScriptTranslator/Dictionary/Rime C API suite must
 verify the whole-exact disable rule, the single forward/reverse bridge and the
 32-search budget before performance or ranking claims are restored.
 
-A future local model, if justified by production-corpus measurements, remains
-an optional default-off sidecar. It must be offline, receive bounded data over
-local IPC, obey a strict deadline and fail closed to the ordinary exact path.
-There is no NearSearch or model fallback in the current disabled profile.
+The desktop runtimes bundle one digest-locked Wanxiang octagram grammar for
+offline, in-process whole-sentence ranking. The same model bytes ship on macOS
+and Windows, load at schema selection and remain separate from the disabled
+automatic-correction graph. Any future external model sidecar remains optional
+and default-off; it must be offline, receive bounded data over local IPC, obey
+a strict deadline and fail closed to the ordinary exact path. There is no
+NearSearch or correction-model fallback in the current disabled profile.
 
 ## Local state
 
 The reference local store uses record-level encrypted SQLite and an encrypted
-outbox. The `desktopagent` skeleton serializes a bounded credential bundle into
-non-synchronizing macOS Keychain storage or current-user Windows DPAPI storage.
-Its `status`, `sync-once` and single-instance `run` paths remain outside the IME
-key-event process. Production `init-account` fails closed because the relay
-does not yet support rollback-safe account provisioning. Installer registration
-and signed background services remain incomplete.
+outbox. The packaged macOS `desktopagent` serializes its bounded credential
+bundle into an atomic `0600` file below the current user's `0700` state
+directory; an existing default-device credential may migrate once from the
+retained login Keychain, but only during an interactive load, and background
+loads never access Keychain. Windows uses current-user DPAPI. The `status`,
+`sync-once` and single-instance `run` paths remain outside the IME key-event
+process. Production `init-account` fails closed because the relay does not yet
+support rollback-safe account provisioning. Installer registration and signed
+background services remain incomplete.
 
 Password fields, private mode and one-time inputs bypass correction monitoring
 in the core model and librime option bridge, but native hosts do not yet provide
@@ -188,10 +194,11 @@ only then advances its cursor. The local checkpoint contains ciphertext and
 relay metadata but never the bearer token or private keys.
 
 This headless path does not yet make either native frontend synchronized. The
-desktop agent has current-user DPAPI and macOS Keychain adapters plus a
-single-instance runner skeleton, but authenticated cross-device trust roster,
-pairing/recovery UI, rotation, persistent native learning, encrypted candidate
-snapshot rebuilding and Rime reload remain desktop acceptance gates.
+desktop agent has current-user DPAPI, the macOS private-file store and a
+read-only legacy-Keychain migration adapter plus a single-instance runner
+skeleton, but authenticated cross-device trust roster, pairing/recovery UI,
+rotation, persistent native learning, encrypted candidate snapshot rebuilding
+and Rime reload remain desktop acceptance gates.
 
 ## Clipboard sync (Preview 0.2)
 
