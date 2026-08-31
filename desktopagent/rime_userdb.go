@@ -26,6 +26,8 @@ const (
 
 var rimeUserDBFiniteDecimal = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?$`)
 
+var errRimeUserDBNonPinyinCode = errors.New("Rime userdb code contains non-Pinyin bytes")
+
 func canonicalRimeUserDBCode(value string) (string, error) {
 	if value == "" || len(value) > 256 || !utf8.ValidString(value) || strings.HasPrefix(value, " ") {
 		return "", errors.New("Rime userdb code is invalid")
@@ -45,7 +47,7 @@ func canonicalRimeUserDBCode(value string) (string, error) {
 			}
 			separator = true
 		default:
-			return "", errors.New("Rime userdb code contains non-Pinyin bytes")
+			return "", errRimeUserDBNonPinyinCode
 		}
 	}
 	if separator {
@@ -87,14 +89,16 @@ func parseRimeUserDBMetadata(value string) (uint64, error) {
 	return uint64(commits), nil
 }
 
-func parseRimeUserDBExportBytes(contents []byte, localOnly map[string]struct{}) ([]localstore.RimeUserDBObservation, error) {
+func parseRimeUserDBExportBytes(contents []byte, localOnly map[string]struct{}) ([]localstore.RimeUserDBObservation, int, error) {
 	if len(contents) > maxRimeUserDBExportBytes || !utf8.Valid(contents) || bytes.IndexByte(contents, 0) >= 0 {
-		return nil, errors.New("Rime userdb export is not bounded UTF-8 text")
+		return nil, 0, errors.New("Rime userdb export is not bounded UTF-8 text")
 	}
 	reader := bufio.NewScanner(bytes.NewReader(contents))
 	reader.Buffer(make([]byte, 1024), maxRimeUserDBLineBytes)
 	observations := make([]localstore.RimeUserDBObservation, 0)
 	seen := make(map[string]struct{})
+	ignored := 0
+	parsedRows := 0
 	lineNumber := 0
 	for reader.Scan() {
 		lineNumber++
@@ -104,22 +108,34 @@ func parseRimeUserDBExportBytes(contents []byte, localOnly map[string]struct{}) 
 		}
 		fields := strings.Split(line, "\t")
 		if len(fields) != 3 {
-			return nil, fmt.Errorf("Rime userdb row %d must contain exactly three tab-separated fields", lineNumber)
+			return nil, 0, fmt.Errorf("Rime userdb row %d must contain exactly three tab-separated fields", lineNumber)
 		}
-		pinyin, err := canonicalRimeUserDBCode(fields[0])
-		if err != nil {
-			return nil, fmt.Errorf("Rime userdb row %d: %w", lineNumber, err)
+		parsedRows++
+		if parsedRows > maxRimeUserDBRows {
+			return nil, 0, errors.New("Rime userdb export exceeds the row limit")
+		}
+		pinyin, codeErr := canonicalRimeUserDBCode(fields[0])
+		if codeErr != nil && !errors.Is(codeErr, errRimeUserDBNonPinyinCode) {
+			return nil, 0, fmt.Errorf("Rime userdb row %d: %w", lineNumber, codeErr)
 		}
 		if !validNativePhrase(fields[1]) || protocol.CanonicalPhrase(fields[1]) == "" {
-			return nil, fmt.Errorf("Rime userdb row %d contains an invalid phrase", lineNumber)
+			return nil, 0, fmt.Errorf("Rime userdb row %d contains an invalid phrase", lineNumber)
 		}
 		commits, err := parseRimeUserDBMetadata(fields[2])
 		if err != nil {
-			return nil, fmt.Errorf("Rime userdb row %d: %w", lineNumber, err)
+			return nil, 0, fmt.Errorf("Rime userdb row %d: %w", lineNumber, err)
+		}
+		// Rime userdb exports may contain rows from non-Pinyin translators
+		// (for example an uppercase or symbol code). They are valid local Rime
+		// state but cannot be represented by YunPin's phrase identity. Ignore
+		// only those fully validated rows instead of blocking every Pinyin row.
+		if errors.Is(codeErr, errRimeUserDBNonPinyinCode) {
+			ignored++
+			continue
 		}
 		identity := protocol.CanonicalPhrase(fields[1]) + "\x00" + pinyin
 		if _, duplicate := seen[identity]; duplicate {
-			return nil, fmt.Errorf("Rime userdb row %d duplicates a canonical phrase identity", lineNumber)
+			return nil, 0, fmt.Errorf("Rime userdb row %d duplicates a canonical phrase identity", lineNumber)
 		}
 		seen[identity] = struct{}{}
 		_, private := localOnly[protocol.CanonicalPhrase(fields[1])]
@@ -127,14 +143,11 @@ func parseRimeUserDBExportBytes(contents []byte, localOnly map[string]struct{}) 
 			Phrase:  localstore.Phrase{Text: fields[1], Pinyin: pinyin, Source: "rime_userdb"},
 			Commits: commits, LocalOnly: private,
 		})
-		if len(observations) > maxRimeUserDBRows {
-			return nil, errors.New("Rime userdb export exceeds the row limit")
-		}
 	}
 	if err := reader.Err(); err != nil {
-		return nil, fmt.Errorf("scan Rime userdb export: %w", err)
+		return nil, 0, fmt.Errorf("scan Rime userdb export: %w", err)
 	}
-	return observations, nil
+	return observations, ignored, nil
 }
 
 func ingestRimeUserDBExport(ctx context.Context, path string, store *localstore.Store,
@@ -146,7 +159,7 @@ func ingestRimeUserDBExport(ctx context.Context, path string, store *localstore.
 	if err != nil {
 		return localstore.RimeUserDBImportResult{}, fmt.Errorf("read private Rime userdb export: %w", err)
 	}
-	observations, err := parseRimeUserDBExportBytes(contents, localOnly)
+	observations, ignored, err := parseRimeUserDBExportBytes(contents, localOnly)
 	if err != nil {
 		return localstore.RimeUserDBImportResult{}, err
 	}
@@ -154,5 +167,7 @@ func ingestRimeUserDBExport(ctx context.Context, path string, store *localstore.
 	for phrase := range localOnly {
 		localOnlyPhrases = append(localOnlyPhrases, phrase)
 	}
-	return store.ImportRimeUserDB(ctx, observations, localOnlyPhrases)
+	result, err := store.ImportRimeUserDB(ctx, observations, localOnlyPhrases)
+	result.Ignored += ignored
+	return result, err
 }

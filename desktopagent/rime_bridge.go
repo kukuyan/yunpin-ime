@@ -542,7 +542,7 @@ func refreshRimeUserDB(ctx context.Context, paths RimeBridgePaths, invoker fixed
 	if err != nil {
 		return errors.New("read validated Rime maintenance snapshot")
 	}
-	if _, err := parseRimeUserDBExportBytes(snapshot, nil); err != nil {
+	if _, _, err := parseRimeUserDBExportBytes(snapshot, nil); err != nil {
 		return err
 	}
 	if _, err := writeAtomicPrivateFile(paths.StagingPath, snapshot); err != nil {
