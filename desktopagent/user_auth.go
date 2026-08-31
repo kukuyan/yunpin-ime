@@ -142,7 +142,7 @@ func LogoutUser(ctx context.Context, client *syncclient.Client, secrets SecretSt
 }
 
 // ClaimCurrentAccount binds the local credential's account to the current
-// user session using the device already held in the OS secret store.
+// user session using the device already held in the platform-private store.
 func ClaimCurrentAccount(ctx context.Context, client *syncclient.Client, secrets SecretStore, profile, endpoint string) error {
 	if _, err := LoadUserSession(ctx, secrets, profile, endpoint); err != nil {
 		return err
