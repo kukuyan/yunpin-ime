@@ -59,8 +59,10 @@ func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 			if err == nil {
 				t.Fatal("malformed Rime userdb row was accepted")
 			}
-			if strings.Contains(err.Error(), "数据库") {
-				t.Fatalf("parser error echoed private phrase text: %v", err)
+			for _, privateMarker := range []string{"数据库", "本地行"} {
+				if strings.Contains(err.Error(), privateMarker) {
+					t.Fatalf("parser error echoed private phrase text: %v", err)
+				}
 			}
 		})
 	}
@@ -70,6 +72,11 @@ func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 	}
 	if _, _, err := parseRimeUserDBExportBytes([]byte{0xff}, nil); err == nil {
 		t.Fatal("invalid UTF-8 Rime userdb export was accepted")
+	}
+	ignoredOverflow := strings.Repeat("a Y \t本地行\tc=1 d=1 t=1\n", maxRimeUserDBRows+1)
+	if _, _, err := parseRimeUserDBExportBytes([]byte(ignoredOverflow), nil); err == nil ||
+		!strings.Contains(err.Error(), "row limit") {
+		t.Fatalf("ignored rows bypassed the row limit: %v", err)
 	}
 }
 
@@ -110,6 +117,28 @@ func TestIngestRimeUserDBSnapshotIsPrivateAtomicAndIdempotent(t *testing.T) {
 	result, err = ingestRimeUserDBExport(context.Background(), path, store, localOnly)
 	if err != nil || result.Advanced != 0 || result.LocalOnly != 0 || result.Resets != 0 {
 		t.Fatalf("identical Rime snapshot replay was not idempotent: result=%#v err=%v", result, err)
+	}
+}
+
+func TestIngestRimeUserDBSnapshotReportsValidatedNonPinyinRows(t *testing.T) {
+	store := openBridgeStore(t)
+	directory := filepath.Join(t.TempDir(), "rime-userdb")
+	makePrivateTestDirectory(t, directory)
+	path := filepath.Join(directory, "yunpin.userdb.txt")
+	contents := []byte("a Y \t本地非拼音行\tc=2 d=1 t=8\n" +
+		"a-1 Y \t本地符号编码\tc=3 d=1 t=9\n" +
+		"xue xi ci \t学习词\tc=4 d=2 t=10\n")
+	writePrivateTestFile(t, path, contents)
+	result, err := ingestRimeUserDBExport(context.Background(), path, store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rows != 1 || result.Ignored != 2 || result.Advanced != 1 {
+		t.Fatalf("mixed Rime import summary mismatch: %#v", result)
+	}
+	snapshot, err := store.Snapshot(context.Background())
+	if err != nil || len(snapshot.Phrases) != 1 || snapshot.Phrases[0].Text != "学习词" {
+		t.Fatalf("mixed Rime import materialized an ignored row: snapshot=%#v err=%v", snapshot, err)
 	}
 }
 

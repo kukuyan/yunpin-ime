@@ -179,6 +179,9 @@ func ingestRimeUserDBExport(ctx context.Context, path string, store *localstore.
 		localOnlyPhrases = append(localOnlyPhrases, phrase)
 	}
 	result, err := store.ImportRimeUserDB(ctx, observations, localOnlyPhrases)
+	if err != nil {
+		return localstore.RimeUserDBImportResult{}, err
+	}
 	result.Ignored += ignored
-	return result, err
+	return result, nil
 }
