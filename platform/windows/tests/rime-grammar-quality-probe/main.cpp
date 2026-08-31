@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rime_api.h>
-#include <psapi.h>
 #include <windows.h>
+#include <psapi.h>
 
 #include <algorithm>
 #include <array>
