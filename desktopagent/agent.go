@@ -18,6 +18,8 @@ import (
 	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
+const defaultSyncMaxRounds = 1024
+
 type Agent struct {
 	Secrets              SecretStore
 	Profile              string
@@ -532,7 +534,7 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 	defer zeroSession(&session)
 	maxRounds := agent.MaxRounds
 	if maxRounds == 0 {
-		maxRounds = 32
+		maxRounds = defaultSyncMaxRounds
 	}
 	client := syncclient.New(endpoint)
 	if err := client.SealAccount(ctx, bundle.AccountID[:], string(bundle.DeviceToken)); err != nil {
