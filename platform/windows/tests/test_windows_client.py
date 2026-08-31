@@ -229,6 +229,10 @@ class WindowsClientTests(unittest.TestCase):
                 re.escape(f'"{baseline_first}"'),
             )
         self.assertIn("kP95GateMicroseconds = 20000", probe)
+        self.assertLess(
+            probe.index("#include <windows.h>"),
+            probe.index("#include <psapi.h>"),
+        )
         self.assertIn('"yunpingongcexianhuanqihao"', probe)
         self.assertIn("CandidatePageContains", probe)
         self.assertIn("bool* found", probe)
