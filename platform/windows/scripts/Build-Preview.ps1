@@ -155,6 +155,9 @@ function Assert-OnlineGrammarAssetMetadata {
         Accept = "application/vnd.github+json"
         "X-GitHub-Api-Version" = "2022-11-28"
     }
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
+        $headers.Authorization = "Bearer $($env:GITHUB_TOKEN)"
+    }
     try {
         $releaseJson = Join-Path $metadataRoot "release.json"
         $tagJson = Join-Path $metadataRoot "tag.json"

@@ -22,15 +22,22 @@ trap cleanup_temporary_downloads EXIT
 
 verify_online_grammar_asset_metadata() {
   local metadata_dir
+  local -a github_api_headers=(
+    -H 'Accept: application/vnd.github+json'
+    -H 'X-GitHub-Api-Version: 2022-11-28'
+  )
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    github_api_headers+=(
+      -H "Authorization: Bearer ${GITHUB_TOKEN}"
+    )
+  fi
   metadata_dir="$(mktemp -d "${TMPDIR:-/tmp}/yunpin-grammar-metadata.XXXXXX")"
   /usr/bin/curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "${github_api_headers[@]}" \
     --output "$metadata_dir/release.json" \
     'https://api.github.com/repos/amzxyz/RIME-LMDG/releases/tags/LTS'
   /usr/bin/curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "${github_api_headers[@]}" \
     --output "$metadata_dir/tag.json" \
     'https://api.github.com/repos/amzxyz/RIME-LMDG/git/ref/tags/LTS'
   /usr/bin/python3 "$REPO_ROOT/scripts/verify_grammar_asset_metadata.py" \
