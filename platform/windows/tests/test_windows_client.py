@@ -976,6 +976,7 @@ class WindowsClientTests(unittest.TestCase):
             '"grammar/rear_penalty": -20',
             '"translator/contextual_suggestions": true',
             '"translator/max_homophones": 8',
+            '"translator/max_sentences": 1',
         ):
             self.assertIn(grammar_setting, config)
         self.assertNotIn("max_homographs", config)
