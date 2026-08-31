@@ -40,6 +40,10 @@
       {
         "path": "platform/patches/weasel/0009-yunpin-start-replay-lab-spooler.patch",
         "sha256": "7c9f9975519e99d8676bc121867444a55197bce7c3924fc586863981cc42f391"
+      },
+      {
+        "path": "platform/patches/weasel/0010-yunpin-prune-stale-sessions-before-maintenance.patch",
+        "sha256": "600f37504635235d0b007b5ca902f6681b00f1ec93256966738147a4c0b746c1"
       }
     ]
   },

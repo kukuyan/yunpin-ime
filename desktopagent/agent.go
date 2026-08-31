@@ -79,7 +79,28 @@ func (agent Agent) loadBundle(ctx context.Context) (CredentialBundleV1, error) {
 	if err := validateProfile(agent.Profile); err != nil {
 		return CredentialBundleV1{}, err
 	}
-	encoded, err := agent.Secrets.Load(ctx, agent.Profile)
+	return agent.loadBundleWith(ctx, agent.Secrets.Load)
+}
+
+func (agent Agent) loadResidentBundle(ctx context.Context) (CredentialBundleV1, error) {
+	if agent.Secrets == nil {
+		return CredentialBundleV1{}, errors.New("OS secret store is required")
+	}
+	if err := validateProfile(agent.Profile); err != nil {
+		return CredentialBundleV1{}, err
+	}
+	nonInteractive, ok := agent.Secrets.(nonInteractiveSecretStore)
+	if !ok {
+		return CredentialBundleV1{}, errors.New("non-interactive OS secret access is unavailable")
+	}
+	return agent.loadBundleWith(ctx, nonInteractive.LoadWithoutUserInteraction)
+}
+
+func (agent Agent) loadBundleWith(
+	ctx context.Context,
+	load func(context.Context, string) ([]byte, error),
+) (CredentialBundleV1, error) {
+	encoded, err := load(ctx, agent.Profile)
 	if err != nil {
 		return CredentialBundleV1{}, err
 	}
@@ -247,7 +268,22 @@ func (agent Agent) validateResidentRimeState() error {
 // Status validates local configuration and credential material without making
 // a network request or exposing identifiers, tokens, or key bytes.
 func (agent Agent) Status(ctx context.Context) (Status, error) {
-	bundle, err := agent.loadBundle(ctx)
+	return agent.statusWithBundleLoader(ctx, agent.loadBundle)
+}
+
+// StatusWithoutUserInteraction provides the same redacted local readiness
+// result for monitoring and diagnostics, but it must never become an implicit
+// authorization request or make SecurityAgent appear. Explicit human-facing
+// settings and sync actions retain Status and the normal interactive load.
+func (agent Agent) StatusWithoutUserInteraction(ctx context.Context) (Status, error) {
+	return agent.statusWithBundleLoader(ctx, agent.loadResidentBundle)
+}
+
+func (agent Agent) statusWithBundleLoader(
+	ctx context.Context,
+	load func(context.Context) (CredentialBundleV1, error),
+) (Status, error) {
+	bundle, err := load(ctx)
 	if err != nil {
 		return Status{}, err
 	}
@@ -398,6 +434,19 @@ func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr
 		return SyncSummary{}, err
 	}
 	defer bundle.Zero()
+	return agent.syncOnceWithBundle(ctx, &bundle)
+}
+
+// syncOnceWithBundle performs one round with credential material already held
+// by its caller. Explicit operations use SyncOnce and therefore retain their
+// load-per-command behavior. The resident loads once after login and keeps the
+// decoded bundle only in process memory until termination, so locking the login
+// Keychain cannot strand later background rounds. The resident owner zeros the
+// bundle when its process exits.
+func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBundleV1) (summary SyncSummary, returnErr error) {
+	if bundle == nil {
+		return SyncSummary{}, errors.New("decoded resident credential is required")
+	}
 	endpoint, err := syncclient.LoadEndpointConfig(agent.EndpointConfigPath)
 	if err != nil {
 		return SyncSummary{}, err
@@ -479,7 +528,7 @@ func (agent Agent) SyncOnce(ctx context.Context) (summary SyncSummary, returnErr
 			}
 		}
 	}
-	session := sessionFromBundle(bundle)
+	session := sessionFromBundle(*bundle)
 	defer zeroSession(&session)
 	maxRounds := agent.MaxRounds
 	if maxRounds == 0 {

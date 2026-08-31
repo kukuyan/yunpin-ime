@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kukuyan/yunpin-ime/desktopagent"
@@ -40,6 +41,90 @@ type localSettingsOperations struct {
 	defaults    desktopagent.Paths
 	agent       desktopagent.Agent
 	overlayPath string
+	secrets     *settingsSecretStore
+}
+
+// settingsSecretStore keeps one encoded credential copy for the bounded local
+// settings process. A page render asks for status and vocabulary separately;
+// without this cache those reads can present the same Keychain authorization
+// twice. The cache is process-local, invalidated by mutations, and wiped when
+// the settings server exits.
+type settingsSecretStore struct {
+	mu         sync.Mutex
+	underlying desktopagent.SecretStore
+	cached     []byte
+	profile    string
+	closed     bool
+}
+
+func zeroSettingsBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
+}
+
+func (store *settingsSecretStore) load(ctx context.Context, profile string, noUI bool) ([]byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return nil, errors.New("settings credential session is closed")
+	}
+	if store.cached != nil && store.profile == profile {
+		return append([]byte(nil), store.cached...), nil
+	}
+	store.invalidateLocked()
+	loader := store.underlying.Load
+	if noUI {
+		background, ok := store.underlying.(interface {
+			LoadWithoutUserInteraction(context.Context, string) ([]byte, error)
+		})
+		if !ok {
+			return nil, errors.New("non-interactive credential access is unavailable")
+		}
+		loader = background.LoadWithoutUserInteraction
+	}
+	value, err := loader(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	store.cached = append([]byte(nil), value...)
+	store.profile = profile
+	return value, nil
+}
+
+func (store *settingsSecretStore) Load(ctx context.Context, profile string) ([]byte, error) {
+	return store.load(ctx, profile, false)
+}
+
+func (store *settingsSecretStore) LoadWithoutUserInteraction(ctx context.Context, profile string) ([]byte, error) {
+	return store.load(ctx, profile, true)
+}
+
+func (store *settingsSecretStore) invalidateLocked() {
+	zeroSettingsBytes(store.cached)
+	store.cached = nil
+	store.profile = ""
+}
+
+func (store *settingsSecretStore) Save(ctx context.Context, profile string, value []byte) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.invalidateLocked()
+	return store.underlying.Save(ctx, profile, value)
+}
+
+func (store *settingsSecretStore) Delete(ctx context.Context, profile string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.invalidateLocked()
+	return store.underlying.Delete(ctx, profile)
+}
+
+func (store *settingsSecretStore) Close() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.invalidateLocked()
+	store.closed = true
 }
 
 func newLocalSettingsOperations(defaults desktopagent.Paths) (*localSettingsOperations, error) {
@@ -54,11 +139,14 @@ func newLocalSettingsOperations(defaults desktopagent.Paths) (*localSettingsOper
 	if err != nil {
 		return nil, err
 	}
+	secrets := &settingsSecretStore{underlying: agent.Secrets}
+	agent.Secrets = secrets
 	overlayPath, err := desktopagent.RimeSettingsPath(defaults)
 	if err != nil {
+		secrets.Close()
 		return nil, err
 	}
-	return &localSettingsOperations{defaults: defaults, agent: agent, overlayPath: overlayPath}, nil
+	return &localSettingsOperations{defaults: defaults, agent: agent, overlayPath: overlayPath, secrets: secrets}, nil
 }
 
 func (operations *localSettingsOperations) LoadGuards(context.Context) (desktopagent.GuardSettings, error) {
@@ -250,7 +338,11 @@ func (handler *settingsHandler) render(response http.ResponseWriter, request *ht
 	guards, guardErr := handler.operations.LoadGuards(request.Context())
 	status, statusErr := handler.operations.Status(request.Context())
 	healthAvailable, summary, lastSuccess, pending, logAvailable := healthSummary(status, statusErr)
-	vocabulary, vocabularyErr := handler.operations.ListVocabulary(request.Context())
+	var vocabulary desktopagent.VocabularySummary
+	vocabularyErr := statusErr
+	if statusErr == nil {
+		vocabulary, vocabularyErr = handler.operations.ListVocabulary(request.Context())
+	}
 	data := settingsPageData{
 		Base: handler.base, Notice: settingsNotice(request.URL.Query().Get("notice")),
 		Problem: settingsProblem(request.URL.Query().Get("error")), Guards: guards,
@@ -428,6 +520,7 @@ func commandSettings(ctx context.Context, defaults desktopagent.Paths, arguments
 	if err != nil {
 		return err
 	}
+	defer operations.secrets.Close()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return errors.New("could not start the local settings page")

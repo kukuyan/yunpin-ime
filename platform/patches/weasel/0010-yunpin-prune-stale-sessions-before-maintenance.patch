@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+From 3333333333333333333333333333333333333333 Mon Sep 17 00:00:00 2001
+From: YunPin Maintainers <yunpin@example.invalid>
+Date: Sun, 30 Aug 2026 19:00:00 -0700
+Subject: [PATCH] Prune stale sessions before idle maintenance
+
+After maintenance clears the server's session map, an older TSF client can
+still echo its former IPC identifier.  The old lookup used operator[] and
+silently recreated that identifier with a zero Rime session.  The idle-only
+maintenance gate then treated the ghost as perpetually busy, preventing every
+later userdb sync.
+
+Use non-inserting lookup for ordinary session resolution.  Erase zero or
+already-destroyed Rime sessions because they cannot contain a composition, but
+continue to fail closed for a live session whose status cannot be inspected or
+whose composition is active.
+---
+ RimeWithWeasel/RimeWithWeasel.cpp | 38 ++++++++++++++++++++++++++-----------
+ include/RimeWithWeasel.h          |  9 +++++----
+ 2 files changed, 32 insertions(+), 15 deletions(-)
+
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index bc49c84..9bcb7de 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -233,13 +233,23 @@ void RimeWithWeaselHandler::Finalize() {
+   rime_api->finalize();
+ }
+ 
+-DWORD RimeWithWeaselHandler::FindSession(WeaselSessionId ipc_id) {
+-  if (m_disabled)
+-    return 0;
+-  Bool found = rime_api->find_session(to_session_id(ipc_id));
+-  DLOG(INFO) << "Find session: session_id = " << to_session_id(ipc_id)
+-             << ", found = " << found;
+-  return found ? (ipc_id) : 0;
++DWORD RimeWithWeaselHandler::FindSession(WeaselSessionId ipc_id) {
++  if (m_disabled)
++    return 0;
++  const auto found = m_session_status_map.find(ipc_id);
++  if (found == m_session_status_map.end())
++    return 0;
++  const RimeSessionId session_id = found->second.session_id;
++  const Bool available = session_id && rime_api->find_session(session_id);
++  DLOG(INFO) << "Find session: session_id = " << session_id
++             << ", found = " << available;
++  if (!available) {
++    if (m_active_session == ipc_id)
++      m_active_session = 0;
++    m_session_status_map.erase(found);
++    return 0;
++  }
++  return ipc_id;
+ }
+ 
+ DWORD RimeWithWeaselHandler::AddSession(LPWSTR buffer, EatLine eat) {
+@@ -577,10 +587,15 @@ void RimeWithWeaselHandler::StartMaintenance() {
+ bool RimeWithWeaselHandler::_SessionsAreIdle() {
+   if (m_disabled)
+     return true;
+-  for (const auto& pair : m_session_status_map) {
+-    const RimeSessionId session_id = pair.second.session_id;
+-    if (!session_id || !rime_api->find_session(session_id))
+-      return false;
++  for (auto entry = m_session_status_map.begin();
++       entry != m_session_status_map.end();) {
++    const RimeSessionId session_id = entry->second.session_id;
++    if (!session_id || !rime_api->find_session(session_id)) {
++      if (m_active_session == entry->first)
++        m_active_session = 0;
++      entry = m_session_status_map.erase(entry);
++      continue;
++    }
+     RIME_STRUCT(RimeStatus, status);
+     if (!rime_api->get_status(session_id, &status))
+       return false;
+@@ -588,6 +603,7 @@ bool RimeWithWeaselHandler::_SessionsAreIdle() {
+     rime_api->free_status(&status);
+     if (!idle)
+       return false;
++    ++entry;
+   }
+   return true;
+ }
+diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
+index 669dc69..ff220a3 100644
+--- a/include/RimeWithWeasel.h
++++ b/include/RimeWithWeasel.h
+@@ -86,10 +86,11 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   bool _IsSessionTSF(RimeSessionId session_id);
+   void _UpdateInlinePreeditStatus(WeaselSessionId ipc_id);
+   bool _SessionsAreIdle();
+-
+-  RimeSessionId to_session_id(WeaselSessionId ipc_id) {
+-    return m_session_status_map[ipc_id].session_id;
+-  }
++
++  RimeSessionId to_session_id(WeaselSessionId ipc_id) {
++    const auto found = m_session_status_map.find(ipc_id);
++    return found == m_session_status_map.end() ? 0 : found->second.session_id;
++  }
+   SessionStatus& get_session_status(WeaselSessionId ipc_id) {
+     return m_session_status_map[ipc_id];
+   }
+-- 
+2.50.1

@@ -19,6 +19,16 @@ type SecretStore interface {
 	Delete(context.Context, string) error
 }
 
+// nonInteractiveSecretStore is implemented by platform stores that can
+// explicitly forbid authentication UI. Background residents use this path so
+// a locked store or a changed executable identity fails closed instead of
+// creating a repeating password-dialog loop. Interactive commands continue to
+// use SecretStore.Load and may therefore present the platform's normal,
+// user-controlled authorization UI.
+type nonInteractiveSecretStore interface {
+	LoadWithoutUserInteraction(context.Context, string) ([]byte, error)
+}
+
 type PlatformSecretStoreOptions struct {
 	Service   string
 	Directory string

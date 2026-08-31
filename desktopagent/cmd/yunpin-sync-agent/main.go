@@ -294,7 +294,7 @@ func commandStatus(ctx context.Context, defaults desktopagent.Paths, arguments [
 	if err != nil {
 		return err
 	}
-	status, err := agent.Status(ctx)
+	status, err := agent.StatusWithoutUserInteraction(ctx)
 	if err != nil {
 		return err
 	}
