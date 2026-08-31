@@ -158,6 +158,8 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn("verify_grammar_asset_metadata.py", build)
         self.assertIn("releases/tags/LTS", build)
         self.assertIn("git/ref/tags/LTS", build)
+        self.assertIn("$env:GITHUB_TOKEN", build)
+        self.assertIn("$headers.Authorization", build)
         self.assertIn("-DependencyLock $lockPath -ScratchRoot $scratchRoot", build)
         self.assertIn("[switch]$Offline", build)
         self.assertIn("$script:YunPinOfflineBuild", build)

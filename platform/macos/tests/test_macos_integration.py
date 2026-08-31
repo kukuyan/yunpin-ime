@@ -133,6 +133,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("verify_grammar_asset_metadata.py", fetch)
         self.assertIn("releases/tags/LTS", fetch)
         self.assertIn("git/ref/tags/LTS", fetch)
+        self.assertIn('[[ -n "${GITHUB_TOKEN:-}" ]]', fetch)
+        self.assertIn('"Authorization: Bearer ${GITHUB_TOKEN}"', fetch)
         self.assertIn('mktemp "$cache_dir/.${filename}.part.XXXXXX"', fetch)
         self.assertIn('/bin/ln "$partial" "$destination"', fetch)
         self.assertIn("trap cleanup_temporary_downloads EXIT", fetch)

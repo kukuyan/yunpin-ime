@@ -718,6 +718,21 @@ class ReleaseWorkflowStateMachineTests(unittest.TestCase):
 
 
 class ReleaseWorkflowStaticTests(unittest.TestCase):
+    def test_mutable_grammar_metadata_builds_receive_read_only_token(self) -> None:
+        ci = workflow.CI_WORKFLOW.read_text(encoding="utf-8")
+        for start, end in (
+            (
+                "      - name: Build and package merged Weasel preview",
+                "      - name: Rebuild extracted Windows source archive offline",
+            ),
+            (
+                "      - name: Build and package macOS preview",
+                "      - name: Verify final macOS installer grammar resources",
+            ),
+        ):
+            step = ci[ci.index(start) : ci.index(end, ci.index(start))]
+            self.assertIn("GITHUB_TOKEN: ${{ github.token }}", step)
+
     def test_go_license_packager_decodes_go_output_as_strict_utf8(self) -> None:
         source = (ROOT / "scripts" / "package_go_licenses.py").read_text(
             encoding="utf-8"
