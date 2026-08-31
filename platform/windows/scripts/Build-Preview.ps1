@@ -624,11 +624,11 @@ Export-GitTree -Checkout $weaselCheckout -Destination $weaselSource -ScratchRoot
 
 $previousGitCeilingDirectories = $env:GIT_CEILING_DIRECTORIES
 try {
-    # The generated tree normally lives below the repository in an ignored
-    # build directory.  Without a ceiling, git apply discovers the parent
-    # repository and can return success while silently ignoring these files.
-    # Force standalone patch mode so the generated Weasel tree is the target.
-    $env:GIT_CEILING_DIRECTORIES = $repoRoot
+    # The generated trees live below OutputRoot, which may be a sibling of an
+    # extracted offline source root.  Without this ceiling, git apply can find
+    # an unrelated parent repository and return success without touching the
+    # generated tree.  Keep patch application standalone in both layouts.
+    $env:GIT_CEILING_DIRECTORIES = $OutputRoot
     foreach ($patchEntry in $lock.weasel.patches) {
         $patchPath = Join-Path $repoRoot $patchEntry.path
         Push-Location $weaselSource
@@ -689,7 +689,7 @@ foreach ($dependency in $lock.librime.dependencies.PSObject.Properties) {
 
 $previousGitCeilingDirectories = $env:GIT_CEILING_DIRECTORIES
 try {
-    $env:GIT_CEILING_DIRECTORIES = $repoRoot
+    $env:GIT_CEILING_DIRECTORIES = $OutputRoot
     foreach ($patchEntry in $lock.librime.patches) {
         $patchPath = Join-Path $repoRoot $patchEntry.path
         Push-Location $stagedLibrime
