@@ -4,6 +4,7 @@ package desktopagent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -575,6 +576,102 @@ func TestSyncOnceRecordsNetworkFailureWithoutOverwritingLastSuccess(t *testing.T
 	status, err := agent.Status(context.Background())
 	if err != nil || !status.HealthAvailable || status.Health.LastFailureClass != localstore.SyncFailureNetwork {
 		t.Fatalf("status did not expose classified health: status=%+v err=%v", status, err)
+	}
+}
+
+func TestSyncOnceDefaultRoundsDrainCurrentRimeImportScale(t *testing.T) {
+	const pendingEvents = 641
+	var syncRequests int
+	relay := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/seal"):
+			response.WriteHeader(http.StatusNoContent)
+		case request.URL.Path == "/v1/sync":
+			var input syncclient.SyncRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Errorf("decode sync request: %v", err)
+				http.Error(response, "invalid request", http.StatusBadRequest)
+				return
+			}
+			syncRequests++
+			accepted := make([]uint64, 0, len(input.Envelopes))
+			for _, envelope := range input.Envelopes {
+				accepted = append(accepted, envelope.DeviceSeq)
+			}
+			response.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(response).Encode(syncclient.SyncResponse{
+				AcceptedSequences: accepted,
+				Envelopes:         []protocol.WireEnvelope{},
+				NextCursor:        input.Cursor,
+				CurrentKeyEpoch:   2,
+			}); err != nil {
+				t.Errorf("encode sync response: %v", err)
+			}
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer relay.Close()
+
+	root := privateTestPath(t, "state")
+	makePrivateTestDirectory(t, root)
+	endpoint := filepath.Join(root, "sync.json")
+	if err := ConfigureEndpoint(endpoint, relay.URL, true); err != nil {
+		t.Fatal(err)
+	}
+	bundle := testCredentials()
+	defer bundle.Zero()
+	database := filepath.Join(root, "private.db")
+	if err := ensureEncryptedStore(context.Background(), database, bundle, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := localstore.OpenForDevice(
+		context.Background(), database, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < pendingEvents; index++ {
+		if err := store.SaveExplicit(context.Background(), localstore.Phrase{
+			Text: "合成批量词条" + string(rune(0x4e00+index)), Pinyin: "he cheng pi liang ci tiao", Pinned: true,
+		}); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeCredentialBundle(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := newMemorySecretStore()
+	if err := secrets.Save(context.Background(), "default", encoded); err != nil {
+		zeroBytes(encoded)
+		t.Fatal(err)
+	}
+	zeroBytes(encoded)
+
+	summary, err := (Agent{
+		Secrets: secrets, Profile: "default", StateDirectory: root,
+		EndpointConfigPath: endpoint, DatabasePath: database,
+	}).SyncOnce(context.Background())
+	if err != nil {
+		t.Fatalf("default round budget did not drain %d events: %v", pendingEvents, err)
+	}
+	if summary.Uploaded != pendingEvents || summary.Rounds != pendingEvents || syncRequests != pendingEvents {
+		t.Fatalf("summary=%+v requests=%d, want uploaded=rounds=requests=%d", summary, syncRequests, pendingEvents)
+	}
+	store, err = localstore.OpenForDevice(
+		context.Background(), database, bundle.LocalDataKey[:], bundle.ObjectIDKey[:], bundle.DeviceIDHex(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if pending, err := store.PendingEventCount(context.Background()); err != nil || pending != 0 {
+		t.Fatalf("pending events=%d err=%v, want 0", pending, err)
 	}
 }
 
