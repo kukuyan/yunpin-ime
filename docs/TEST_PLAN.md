@@ -56,10 +56,13 @@
   processing, enumerate candidates, report P50/P95/P99 and enforce P95 no more
   than 20 ms. Historical double-error and reviewed-confusion timings are not
   evidence for the current graph policy.
-- No correction test may open the network or read a model. A future optional
-  local-model sidecar needs separate deadline, crash, malformed-output and
-  offline tests proving timeout fails closed to the ordinary exact path without
-  delaying the key path. There is no NearSearch/model fallback today.
+- No correction test may open the network or read a model. The separately
+  packaged octagram grammar suite must compare model/no-grammar fresh processes,
+  record schema-load, cold-first-input and RSS stages, and retain the 20 ms warm
+  final-key P95 gate. A future optional external model sidecar needs separate
+  deadline, crash, malformed-output and offline tests proving timeout fails
+  closed to the ordinary exact path without delaying the key path. There is no
+  NearSearch/correction-model fallback today.
 
 ## Private snapshot capacity and R0W migration
 

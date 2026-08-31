@@ -2,6 +2,11 @@
 
 > 本文按评审时可见的代码与合成测试证据描述当前状态，不固定最终提交 SHA、CI 结论或产物哈希。请从实际 HEAD 开始复核。能编译的 development preview 不等于桌面端同步已经接通，也不等于可签名发布。评审记录、夹具和日志不得包含真实个人词库、恢复密钥、设备令牌或服务器秘密。
 
+> 后续凭据状态（`2f99464`）：macOS 已安装后台进程使用当前用户
+> `0700` 状态目录中的原子 `0600` 私有文件。旧 login Keychain 项保留，
+> 只允许在一次交互迁移中读取；后台加载不再访问 Keychain。下方状态矩阵和
+> 第 8 节的 Keychain 描述是评审时的历史记录，不代表当前实现。
+
 ## 1. 当前状态矩阵
 
 | 范围 | 当前已有 | 当前不能宣称 |
@@ -101,6 +106,10 @@ Windows 与 macOS 发行 overlay 均设置：
 opt-in 配置重写并重跑“无完整 exact path + 单 bridge”真实 librime E2E。
 在此之前，manifest 中历史的 typo-correction librime-E2E 标记也不能被解释为
 新策略已经通过。
+
+> 后续状态（T7）：下段关于“本地模型仍只是未来方向”的描述已被 T7 取代。
+> 当前桌面包已内置离线、进程内的 Wanxiang octagram grammar；下段约束仅继续
+> 适用于未来外部 sidecar。拼写纠错、NearSearch 和纠错模型 fallback 仍未开启。
 
 本地模型仍只是未来可选方向。若试验，必须默认关闭、无网络、严格 IPC 超时，
 并在失败时回到普通精确路径；当前没有 NearSearch 或模型 fallback。
