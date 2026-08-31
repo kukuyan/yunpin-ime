@@ -181,6 +181,44 @@ def validate_document(document: dict[str, Any], tag: str, commit: str) -> None:
         boost = _package(packages, "Boost", boost_version)
         if boost.get("licenseDeclared") != "BSL-1.0":
             raise CheckError(f"Boost@{boost_version} lacks its locked BSL-1.0 license")
+    if windows.get("grammarModel") != macos.get("grammarModel"):
+        raise CheckError("platform grammar model locks disagree")
+    locked_model = windows["grammarModel"]
+    grammar_model = _package(
+        packages, str(locked_model["name"]), str(locked_model["release"])
+    )
+    if grammar_model.get("primaryPackagePurpose") != "DATA":
+        raise CheckError("grammar model SBOM package is not DATA")
+    if grammar_model.get("licenseDeclared") != locked_model["license"]:
+        raise CheckError("grammar model SBOM license differs from the lock")
+    if grammar_model.get("downloadLocation") != locked_model["url"]:
+        raise CheckError("grammar model SBOM URL differs from the lock")
+    if grammar_model.get("packageFileName") != locked_model["filename"]:
+        raise CheckError("grammar model SBOM filename differs from the lock")
+    if grammar_model.get("checksums") != [
+        {"algorithm": "SHA256", "checksumValue": locked_model["sha256"]}
+    ]:
+        raise CheckError("grammar model SBOM checksum differs from the lock")
+    vcs_locator = (
+        f"git+{locked_model['repository']}@"
+        f"{locked_model['sourceSnapshotAtAssetUpdate']}"
+    )
+    if not any(
+        reference.get("referenceType") == "vcs"
+        and reference.get("referenceLocator") == vcs_locator
+        for reference in grammar_model.get("externalRefs", [])
+        if isinstance(reference, dict)
+    ):
+        raise CheckError("grammar model SBOM lacks its observed source snapshot VCS reference")
+    source_info = str(grammar_model.get("sourceInfo", ""))
+    for evidence in (
+        locked_model["tagRef"],
+        locked_model["assetUpdatedAt"],
+        str(locked_model["assetId"]),
+        locked_model["licenseSha256"],
+    ):
+        if evidence not in source_info:
+            raise CheckError("grammar model SBOM omits mutable-asset provenance")
     for name in (
         "weasel",
         "squirrel",

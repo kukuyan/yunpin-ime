@@ -52,6 +52,18 @@ Terra Pinyin data packages are LGPL-3.0. The macOS lock records an exact source
 commit and archive hash for each package, and the development source archive
 retains their complete extracted sources and license texts.
 
+Both desktop previews bundle the full `wanxiang-lts-zh-hans` grammar model
+selected by Rime Ice's grammar recipe, from
+[RIME-LMDG](https://github.com/amzxyz/RIME-LMDG), under CC-BY-4.0. Upstream's
+`LTS` release is mutable, so the identical platform locks say `immutable:
+false` and bind the observed tag ref, source snapshot, GitHub asset ID/update
+time, exact filename, byte size and SHA-256. They also bind the snapshot-scoped
+license URL, size and SHA-256. The source snapshot is an independently observed
+snapshot near the asset update, not a GitHub API assertion that the asset was
+built from that commit. The model is downloaded only by that exact
+filename and is never committed to this repository; runtime and
+corresponding-source artifacts retain the verified model and complete license.
+
 Fetching or packaging an upstream requires retaining its exact LICENSE/NOTICE files and recording modifications. No Sogou proprietary dictionary is included or redistributed.
 
 The Go components also compile direct dependencies including

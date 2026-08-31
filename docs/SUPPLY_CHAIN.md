@@ -93,6 +93,22 @@ version and license alongside its immutable URL and SHA-256.
 Legacy `nested_submodules` values remain the build-time commit map; SBOM
 generation fails if the structured component records disagree with it.
 
+Both desktop dependency locks also contain a byte-identical `grammarModel`
+object for the full `wanxiang-lts-zh-hans` asset selected by Rime Ice's grammar
+recipe. The upstream `LTS` release is explicitly recorded as mutable. The lock
+therefore binds its observed tag ref, source snapshot at the asset update,
+GitHub asset ID and update time, exact filename, byte size, SHA-256, and the
+snapshot-scoped CC-BY-4.0 license URL, size and SHA-256. Build scripts may use
+only the exact cache/source-bundle filename and reject links, partial files,
+wrong sizes, and digest drift. A later object at the same LTS URL is not accepted
+until all evidence is deliberately relocked. The model itself is ignored by Git
+and appears once in each runtime and corresponding-source payload. The release
+SBOM records one DATA package for the shared model rather than one package per
+platform. GitHub's release API does not bind the model asset to a source commit;
+`sourceSnapshotAtAssetUpdate` is an independently observed, contemporaneous
+source snapshot used to pin the reviewed license bytes, not a claim that the
+asset was built from that commit.
+
 Run `python3 scripts/check_release_sbom.py` for the offline deterministic
 self-test. Passing `--tag`, `--commit` and an SPDX JSON path instead validates a
 release document against current locks. Neither command enumerates repository

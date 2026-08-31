@@ -20,16 +20,6 @@ patch:
   # regression; enabling only the component name does not activate it.
   "translator/enable_correction": false
   "translator/corrector_component": yunpin_corrector
-  # The bundled full octagram model provides local whole-sentence ranking.
-  "grammar/language": wanxiang-lts-zh-hans
-  "grammar/collocation_max_length": 6
-  "grammar/collocation_min_length": 3
-  "grammar/collocation_penalty": -14
-  "grammar/non_collocation_penalty": -6
-  "grammar/weak_collocation_penalty": -100
-  "grammar/rear_penalty": -20
-  "translator/contextual_suggestions": true
-  "translator/max_homophones": 8
   "yunpin/tag": abc
   "yunpin/snapshot": yunpin/private.tsv
   "yunpin/max_candidates": 2

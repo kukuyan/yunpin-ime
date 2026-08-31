@@ -324,6 +324,84 @@ def _load_windows_packages(
     ]
 
 
+def _load_grammar_model_package(
+    windows_lock: dict[str, Any], macos_lock: dict[str, Any]
+) -> dict[str, Any]:
+    windows_model = _object(
+        windows_lock.get("grammarModel"), "Windows grammar model lock"
+    )
+    macos_model = _object(macos_lock.get("grammarModel"), "macOS grammar model lock")
+    if windows_model != macos_model:
+        raise SBOMError("macOS and Windows grammar model locks disagree")
+    model = windows_model
+    name = _string(model.get("name"), "grammar model name")
+    filename = _string(model.get("filename"), "grammar model filename")
+    if filename != f"{name}.gram" or Path(filename).name != filename:
+        raise SBOMError("grammar model filename does not match its locked name")
+    repository = _https_url(model.get("repository"), "grammar model repository")
+    release = _string(model.get("release"), "grammar model release")
+    if model.get("immutable") is not False:
+        raise SBOMError("grammar model LTS release must be explicitly marked mutable")
+    tag_ref = _commit(model.get("tagRef"), "grammar model observed tag ref")
+    source_snapshot = _commit(
+        model.get("sourceSnapshotAtAssetUpdate"),
+        "grammar model source snapshot at asset update",
+    )
+    asset_updated_at = _string(
+        model.get("assetUpdatedAt"), "grammar model asset update time"
+    )
+    if not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+        asset_updated_at,
+    ):
+        raise SBOMError("grammar model asset update time must be UTC")
+    model_url = _https_url(model.get("url"), "grammar model URL")
+    expected_url = f"{repository}/releases/download/{release}/{filename}"
+    if model_url != expected_url:
+        raise SBOMError("grammar model URL disagrees with repository/release/filename")
+    asset_id = model.get("assetId")
+    size = model.get("size")
+    license_size = model.get("licenseSize")
+    if not isinstance(asset_id, int) or asset_id <= 0:
+        raise SBOMError("grammar model asset ID must be a positive integer")
+    if not isinstance(size, int) or size <= 0:
+        raise SBOMError("grammar model size must be a positive integer")
+    if not isinstance(license_size, int) or license_size <= 0:
+        raise SBOMError("grammar model license size must be a positive integer")
+    license_url = _https_url(model.get("licenseUrl"), "grammar model license URL")
+    expected_license_url = (
+        f"https://raw.githubusercontent.com/amzxyz/RIME-LMDG/"
+        f"{source_snapshot}/LICENSE"
+    )
+    if license_url != expected_license_url:
+        raise SBOMError(
+            "grammar model license URL does not bind its reviewed observed snapshot"
+        )
+    license_sha256 = _sha256(
+        model.get("licenseSha256"), "grammar model license SHA-256"
+    )
+    return make_package(
+        identity=f"grammar-model:{name}:{release}:{model.get('sha256')}",
+        name=name,
+        version=release,
+        download_location=model_url,
+        declared_license=_license(model.get("license"), "grammar model license"),
+        source_info=(
+            "Identical platform grammarModel locks; mutable release URL; "
+            f"observed tag ref {tag_ref}, independently observed source snapshot "
+            f"{source_snapshot} (the GitHub API does not bind the asset to this commit), "
+            f"GitHub asset {asset_id} updated {asset_updated_at}, {size} bytes; "
+            f"license {license_url}, "
+            f"{license_size} bytes, SHA-256 {license_sha256}"
+        ),
+        purpose="DATA",
+        repository=repository,
+        commit=source_snapshot,
+        sha256=_sha256(model.get("sha256"), "grammar model SHA-256"),
+        archive_name=filename,
+    )
+
+
 def _load_macos_packages(lock: dict[str, Any]) -> list[dict[str, Any]]:
     if lock.get("format") != 1:
         raise SBOMError("unsupported macOS dependency lock format")
@@ -477,6 +555,7 @@ def build_document(tag: str, commit: str) -> dict[str, Any]:
     packages.extend(upstream_packages)
     packages.extend(_load_windows_packages(windows_lock, upstream_lock))
     packages.extend(_load_macos_packages(macos_lock))
+    packages.append(_load_grammar_model_package(windows_lock, macos_lock))
     go_packages, local_go_ids = _load_go_packages(go_lock, commit)
     packages.extend(go_packages)
     packages.sort(

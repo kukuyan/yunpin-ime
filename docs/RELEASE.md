@@ -54,7 +54,7 @@ one canonical `SHA256SUMS`, `RELEASE-METADATA.json` and SPDX 2.3 SBOM. It then:
    six attempts with `1, 2, 4, 8, 8` second backoff. Non-numeric IDs, malformed
    responses, marker mismatches and ambiguous matches fail immediately rather
    than querying the draft-invisible `/releases/tags/{tag}` endpoint;
-5. uploads the exact seven-asset allowlist directly by the verified numeric
+5. uploads the exact eight-asset allowlist directly by the verified numeric
    Release ID and compares every remote asset's `uploaded` state, byte size and
    SHA-256 digest with the local file;
 6. removes the private run marker and makes the draft public in one transition
@@ -77,6 +77,8 @@ The public preview assets are:
 - Windows runtime and matching corresponding-source ZIP archives;
 - macOS Universal DMG and matching corresponding-source tar archive;
 - SPDX 2.3 JSON SBOM;
+- `grammar-quality-metrics.json`, binding the public 20-case A/B, cold-start,
+  P95 and RSS evidence to the exact macOS runtime and tag commit;
 - canonical `SHA256SUMS`;
 - `RELEASE-METADATA.json` binding every payload asset to the tag commit.
 
