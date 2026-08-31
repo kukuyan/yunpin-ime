@@ -648,6 +648,10 @@ class WindowsClientTests(unittest.TestCase):
             '"/p:Platform=Win32"',
         ):
             self.assertIn(required, build)
+        self.assertEqual(
+            2, build.count("$env:GIT_CEILING_DIRECTORIES = $OutputRoot")
+        )
+        self.assertNotIn("$env:GIT_CEILING_DIRECTORIES = $repoRoot", build)
         self.assertNotIn('"weasel.sln", "/m",', build)
         self.assertNotIn("exit code $LASTEXITCODE:", build)
         filter_source = (
