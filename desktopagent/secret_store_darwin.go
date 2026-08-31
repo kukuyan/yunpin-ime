@@ -8,9 +8,16 @@ package desktopagent
 #cgo LDFLAGS: -framework Security -framework CoreFoundation
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+// SecKeychainSetUserInteractionAllowed changes process-wide legacy Keychain
+// state. Serialize every YunPin Keychain operation so a non-interactive load
+// cannot temporarily change the interaction policy underneath an interactive
+// load, save, or delete in another goroutine.
+static pthread_mutex_t yp_keychain_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Use volatile stores so the compiler cannot discard the wipe before free.
 // This clears only YunPin's malloc copy. Security.framework owns its internal
@@ -76,11 +83,13 @@ static int32_t yp_keychain_save(const char *service, size_t service_len,
     return errSecAllocate;
   }
   CFDictionarySetValue(changes, kSecValueData, data);
+  pthread_mutex_lock(&yp_keychain_mutex);
   OSStatus status = SecItemUpdate(query, changes);
   if (status == errSecItemNotFound) {
     CFDictionarySetValue(query, kSecValueData, data);
     status = SecItemAdd(query, NULL);
   }
+  pthread_mutex_unlock(&yp_keychain_mutex);
   CFRelease(changes);
   CFRelease(data);
   CFRelease(query);
@@ -104,8 +113,34 @@ static int32_t yp_keychain_load(const char *service, size_t service_len,
                          kSecUseAuthenticationUIFail);
   }
   CFTypeRef result = NULL;
-  OSStatus status = SecItemCopyMatching(query, &result);
+  pthread_mutex_lock(&yp_keychain_mutex);
+  OSStatus status = errSecSuccess;
+  Boolean interaction_was_allowed = false;
+  Boolean changed_legacy_interaction = false;
+  if (!allow_authentication_ui) {
+    // kSecUseAuthenticationUIFail is sufficient for Data Protection Keychain
+    // items, but Apple's headers explicitly exclude legacy file-based login
+    // Keychain items from that guarantee. YunPin preview builds intentionally
+    // use the login Keychain, so also disable the legacy process-wide UI gate.
+    status = SecKeychainGetUserInteractionAllowed(&interaction_was_allowed);
+    if (status == errSecSuccess && interaction_was_allowed) {
+      status = SecKeychainSetUserInteractionAllowed(false);
+      changed_legacy_interaction = status == errSecSuccess;
+    }
+  }
+  if (status == errSecSuccess) {
+    status = SecItemCopyMatching(query, &result);
+  }
+  OSStatus restore_status = errSecSuccess;
+  if (changed_legacy_interaction) {
+    restore_status = SecKeychainSetUserInteractionAllowed(true);
+  }
+  pthread_mutex_unlock(&yp_keychain_mutex);
   CFRelease(query);
+  if (restore_status != errSecSuccess) {
+    if (result != NULL) CFRelease(result);
+    return restore_status;
+  }
   if (status != errSecSuccess) return status;
   if (result == NULL || CFGetTypeID(result) != CFDataGetTypeID()) {
     if (result != NULL) CFRelease(result);
@@ -134,7 +169,9 @@ static int32_t yp_keychain_delete(const char *service, size_t service_len,
                                   const char *account, size_t account_len) {
   CFMutableDictionaryRef query = yp_query(service, service_len, account, account_len);
   if (query == NULL) return errSecAllocate;
+  pthread_mutex_lock(&yp_keychain_mutex);
   OSStatus status = SecItemDelete(query);
+  pthread_mutex_unlock(&yp_keychain_mutex);
   CFRelease(query);
   return status;
 }
