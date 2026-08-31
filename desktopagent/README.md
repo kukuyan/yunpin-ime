@@ -237,6 +237,16 @@ exactly one resident while allowing the settings page or CLI `sync-once` to run
 during the interval between rounds. A collision with an active round remains a
 bounded busy/deferred result rather than a second concurrent database writer.
 
+After a successful round uploads and downloads nothing, the resident doubles
+its successful-round interval from the configured base until it reaches five
+minutes. Any successful upload or download resets the next interval to the
+base immediately. Positive jitter is capped so a healthy, non-failing loop
+starts its next relay poll within five minutes; this is a poll-start SLA, not a
+completion guarantee while the machine sleeps, the network is unavailable or a
+round is failing. SQLite `generation` and native spool files are durable state,
+not cross-process wake notifications: neither local nor remote changes wake a
+waiting resident, so an explicit `sync-once` is the only immediate trigger.
+
 ## Background installation
 
 `install/` contains reviewed per-user resident-service install, rollback, and

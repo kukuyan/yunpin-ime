@@ -58,6 +58,12 @@ type RunOptions struct {
 	OnEvent          func(RunEvent)
 }
 
+// maxIdleSyncInterval is also the healthy resident's remote-change poll-start
+// SLA. The local SQLite generation and native-event spool are durable state,
+// not cross-process wake sources, so extending this bound would delay discovery
+// of changes made on another device.
+const maxIdleSyncInterval = 5 * time.Minute
+
 func (options *RunOptions) defaults() error {
 	if options.LockPath == "" || !filepath.IsAbs(options.LockPath) {
 		return errors.New("agent operation lock path must be absolute")
@@ -78,7 +84,8 @@ func (options *RunOptions) defaults() error {
 	if options.MaxBackoff == 0 {
 		options.MaxBackoff = 15 * time.Minute
 	}
-	if options.Interval < time.Second || options.MinBackoff < time.Second || options.MaxBackoff < options.MinBackoff {
+	if options.Interval < time.Second || options.Interval > maxIdleSyncInterval ||
+		options.MinBackoff < time.Second || options.MaxBackoff < options.MinBackoff {
 		return errors.New("agent timing configuration is invalid")
 	}
 	return nil
@@ -112,6 +119,31 @@ func classifyRunResult(summary SyncSummary, syncErr error, options RunOptions, b
 		return RunEvent{Code: "sync_failed", FailureClass: classifySyncFailure(syncErr)}, backoff, nextBackoff
 	}
 	return RunEvent{Code: "sync_complete", FailureClass: localstore.SyncFailureNone, Successful: true, Summary: summary}, options.Interval, options.MinBackoff
+}
+
+func nextSuccessfulInterval(summary SyncSummary, baseInterval, idleInterval time.Duration) (time.Duration, time.Duration) {
+	if summary.Uploaded != 0 || summary.Downloaded != 0 {
+		return baseInterval, baseInterval
+	}
+	if idleInterval < baseInterval {
+		idleInterval = baseInterval
+	}
+	next := maxIdleSyncInterval
+	if idleInterval < maxIdleSyncInterval/2 {
+		next = idleInterval * 2
+	}
+	return next, next
+}
+
+func jitterRunDelay(event RunEvent, delay time.Duration) time.Duration {
+	wait := jitter(delay)
+	// Positive jitter must not stretch a healthy or deferred resident beyond
+	// the five-minute polling SLA. Failure backoff remains independently
+	// bounded by MaxBackoff.
+	if event.Code != "sync_failed" && wait > maxIdleSyncInterval {
+		return maxIdleSyncInterval
+	}
+	return wait
 }
 
 // classifySyncFailure maps errors to a closed, redacted boundary. It never
@@ -163,6 +195,7 @@ func runLoop(ctx context.Context, syncNow func(context.Context) (SyncSummary, er
 
 func runLoopWithResidentLock(ctx context.Context, syncNow func(context.Context) (SyncSummary, error), options RunOptions) error {
 	backoff := options.MinBackoff
+	idleInterval := options.Interval
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -175,10 +208,16 @@ func runLoopWithResidentLock(ctx context.Context, syncNow func(context.Context) 
 		})
 		event, delay, nextBackoff := classifyRunResult(summary, syncErr, options, backoff)
 		backoff = nextBackoff
+		if event.Successful {
+			delay, idleInterval = nextSuccessfulInterval(summary, options.Interval, idleInterval)
+		} else {
+			// Only consecutive successful no-change rounds form an idle streak.
+			idleInterval = options.Interval
+		}
 		if options.OnEvent != nil {
 			options.OnEvent(event)
 		}
-		timer := time.NewTimer(jitter(delay))
+		timer := time.NewTimer(jitterRunDelay(event, delay))
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {

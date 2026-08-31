@@ -303,6 +303,62 @@ func TestRunLoopDoesNotSyncAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestSuccessfulIdleIntervalsIncreaseAndCapAtFiveMinutes(t *testing.T) {
+	base := time.Minute
+	idle := base
+	want := []time.Duration{2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute}
+	for index, expected := range want {
+		delay, next := nextSuccessfulInterval(SyncSummary{}, base, idle)
+		if delay != expected || next != expected {
+			t.Fatalf("idle round %d delay=%v next=%v, want %v", index+1, delay, next, expected)
+		}
+		idle = next
+	}
+}
+
+func TestSuccessfulTransferImmediatelyResetsIdleInterval(t *testing.T) {
+	base := time.Minute
+	for name, summary := range map[string]SyncSummary{
+		"upload":   {Uploaded: 1},
+		"download": {Downloaded: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			delay, next := nextSuccessfulInterval(summary, base, maxIdleSyncInterval)
+			if delay != base || next != base {
+				t.Fatalf("changed success delay=%v next=%v, want base %v", delay, next, base)
+			}
+			delay, next = nextSuccessfulInterval(SyncSummary{}, base, next)
+			if delay != 2*base || next != 2*base {
+				t.Fatalf("first idle round after reset delay=%v next=%v, want %v", delay, next, 2*base)
+			}
+		})
+	}
+}
+
+func TestNonFailureJitterCannotExceedIdlePollingSLA(t *testing.T) {
+	events := []RunEvent{
+		{Code: "sync_complete", FailureClass: localstore.SyncFailureNone, Successful: true},
+		{Code: "sync_deferred_busy", FailureClass: localstore.SyncFailureNone},
+	}
+	for _, event := range events {
+		for sample := 0; sample < 100; sample++ {
+			if delay := jitterRunDelay(event, maxIdleSyncInterval); delay > maxIdleSyncInterval {
+				t.Fatalf("event %q jittered past polling SLA: %v", event.Code, delay)
+			}
+		}
+	}
+}
+
+func TestRunOptionsRejectsBaseIntervalBeyondIdlePollingSLA(t *testing.T) {
+	options := RunOptions{
+		LockPath: privateTestPath(t, "agent.lock"),
+		Interval: maxIdleSyncInterval + time.Second,
+	}
+	if err := options.defaults(); err == nil {
+		t.Fatal("runner accepted a base interval beyond the five-minute polling SLA")
+	}
+}
+
 func TestRimeMaintenanceBusyIsDeferredWithoutGrowingFailureBackoff(t *testing.T) {
 	options := RunOptions{Interval: time.Minute, MinBackoff: time.Second, MaxBackoff: 16 * time.Second}
 	event, delay, nextBackoff := classifyRunResult(SyncSummary{},
