@@ -118,10 +118,10 @@ static int32_t yp_keychain_load(const char *service, size_t service_len,
   Boolean interaction_was_allowed = false;
   Boolean changed_legacy_interaction = false;
   if (!allow_authentication_ui) {
-    // kSecUseAuthenticationUIFail is sufficient for Data Protection Keychain
-    // items, but Apple's headers explicitly exclude legacy file-based login
-    // Keychain items from that guarantee. YunPin preview builds intentionally
-    // use the login Keychain, so also disable the legacy process-wide UI gate.
+    // Keep the modern per-query fail-closed flag above and add the legacy
+    // process-wide interaction gate as defense in depth. YunPin preview builds
+    // intentionally use the file-based login Keychain, whose authorization
+    // path previously displayed SecurityAgent despite the query flag.
     status = SecKeychainGetUserInteractionAllowed(&interaction_was_allowed);
     if (status == errSecSuccess && interaction_was_allowed) {
       status = SecKeychainSetUserInteractionAllowed(false);
@@ -141,7 +141,10 @@ static int32_t yp_keychain_load(const char *service, size_t service_len,
     if (result != NULL) CFRelease(result);
     return restore_status;
   }
-  if (status != errSecSuccess) return status;
+  if (status != errSecSuccess) {
+    if (result != NULL) CFRelease(result);
+    return status;
+  }
   if (result == NULL || CFGetTypeID(result) != CFDataGetTypeID()) {
     if (result != NULL) CFRelease(result);
     return errSecDecode;
