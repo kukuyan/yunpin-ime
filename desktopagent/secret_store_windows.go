@@ -256,6 +256,12 @@ func (store *dpapiSecretStore) Load(ctx context.Context, profile string) ([]byte
 	return plain, nil
 }
 
+func (store *dpapiSecretStore) LoadWithoutUserInteraction(ctx context.Context, profile string) ([]byte, error) {
+	// CryptUnprotectData already uses CRYPTPROTECT_UI_FORBIDDEN, so the normal
+	// Windows load path is suitable for a background resident.
+	return store.Load(ctx, profile)
+}
+
 func (store *dpapiSecretStore) Delete(ctx context.Context, profile string) error {
 	if err := ctx.Err(); err != nil {
 		return err

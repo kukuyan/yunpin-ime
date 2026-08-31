@@ -21,9 +21,11 @@ type fakeSettingsOperations struct {
 	guards       desktopagent.GuardSettings
 	applied      desktopagent.GuardSettings
 	status       desktopagent.Status
+	statusErr    error
 	vocabulary   desktopagent.VocabularySummary
 	operationErr error
 	syncCalls    int
+	listCalls    int
 	addCalls     int
 	pinCalls     int
 	removeCalls  int
@@ -42,7 +44,7 @@ func (operations *fakeSettingsOperations) ApplyGuards(_ context.Context, setting
 }
 
 func (operations *fakeSettingsOperations) Status(context.Context) (desktopagent.Status, error) {
-	return operations.status, nil
+	return operations.status, operations.statusErr
 }
 
 func (operations *fakeSettingsOperations) SyncNow(context.Context) (desktopagent.SyncSummary, error) {
@@ -51,6 +53,7 @@ func (operations *fakeSettingsOperations) SyncNow(context.Context) (desktopagent
 }
 
 func (operations *fakeSettingsOperations) ListVocabulary(context.Context) (desktopagent.VocabularySummary, error) {
+	operations.listCalls++
 	return operations.vocabulary, nil
 }
 
@@ -131,6 +134,94 @@ func TestSettingsPageShowsFourFunctionsWithoutSensitiveFields(t *testing.T) {
 		if recorder.Header().Get(header) == "" {
 			t.Fatalf("settings page omitted %s", header)
 		}
+	}
+}
+
+func TestSettingsPageSkipsSecondCredentialReadWhenStatusFails(t *testing.T) {
+	operations := &fakeSettingsOperations{statusErr: errors.New("synthetic credential unavailable")}
+	recorder := httptest.NewRecorder()
+	testSettingsHandler(t, operations).ServeHTTP(recorder,
+		settingsRequest(http.MethodGet, "/fixed-token/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if operations.listCalls != 0 {
+		t.Fatalf("status failure triggered %d extra vocabulary reads", operations.listCalls)
+	}
+}
+
+type fakeSettingsSecretStore struct {
+	value     []byte
+	loads     int
+	noUILoads int
+	saves     int
+	deletes   int
+}
+
+func (store *fakeSettingsSecretStore) Save(_ context.Context, _ string, value []byte) error {
+	store.saves++
+	store.value = append(store.value[:0], value...)
+	return nil
+}
+
+func (store *fakeSettingsSecretStore) Load(context.Context, string) ([]byte, error) {
+	store.loads++
+	return append([]byte(nil), store.value...), nil
+}
+
+func (store *fakeSettingsSecretStore) LoadWithoutUserInteraction(context.Context, string) ([]byte, error) {
+	store.noUILoads++
+	return append([]byte(nil), store.value...), nil
+}
+
+func (store *fakeSettingsSecretStore) Delete(context.Context, string) error {
+	store.deletes++
+	store.value = nil
+	return nil
+}
+
+func TestSettingsCredentialCacheReadsOnceInvalidatesAndWipes(t *testing.T) {
+	underlying := &fakeSettingsSecretStore{value: []byte("encoded-private-credential")}
+	store := &settingsSecretStore{underlying: underlying}
+	first, err := store.Load(context.Background(), desktopagent.DefaultProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Load(context.Background(), desktopagent.DefaultProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if underlying.loads != 1 || underlying.noUILoads != 0 {
+		t.Fatalf("underlying loads=%d no-ui=%d, want 1/0", underlying.loads, underlying.noUILoads)
+	}
+	first[0] = 'X'
+	if second[0] == 'X' || store.cached[0] == 'X' {
+		t.Fatal("settings credential callers share mutable storage")
+	}
+	oldCache := store.cached
+	if err := store.Save(context.Background(), desktopagent.DefaultProfile, []byte("replacement")); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range oldCache {
+		if value != 0 {
+			t.Fatal("settings credential cache was not wiped before mutation")
+		}
+	}
+	if _, err := store.LoadWithoutUserInteraction(context.Background(), desktopagent.DefaultProfile); err != nil {
+		t.Fatal(err)
+	}
+	if underlying.noUILoads != 1 || underlying.saves != 1 {
+		t.Fatalf("no-ui loads=%d saves=%d, want 1/1", underlying.noUILoads, underlying.saves)
+	}
+	finalCache := store.cached
+	store.Close()
+	for _, value := range finalCache {
+		if value != 0 {
+			t.Fatal("settings credential cache was not wiped on close")
+		}
+	}
+	if _, err := store.Load(context.Background(), desktopagent.DefaultProfile); err == nil {
+		t.Fatal("closed settings credential cache accepted another load")
 	}
 }
 

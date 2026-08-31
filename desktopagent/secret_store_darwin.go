@@ -87,15 +87,22 @@ static int32_t yp_keychain_save(const char *service, size_t service_len,
   return status;
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 static int32_t yp_keychain_load(const char *service, size_t service_len,
                                 const char *account, size_t account_len,
-                                unsigned char **value, size_t *value_len) {
+                                unsigned char **value, size_t *value_len,
+                                int32_t allow_authentication_ui) {
   *value = NULL;
   *value_len = 0;
   CFMutableDictionaryRef query = yp_query(service, service_len, account, account_len);
   if (query == NULL) return errSecAllocate;
   CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
   CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
+  if (!allow_authentication_ui) {
+    CFDictionarySetValue(query, kSecUseAuthenticationUI,
+                         kSecUseAuthenticationUIFail);
+  }
   CFTypeRef result = NULL;
   OSStatus status = SecItemCopyMatching(query, &result);
   CFRelease(query);
@@ -121,6 +128,7 @@ static int32_t yp_keychain_load(const char *service, size_t service_len,
   CFRelease(result);
   return errSecSuccess;
 }
+#pragma clang diagnostic pop
 
 static int32_t yp_keychain_delete(const char *service, size_t service_len,
                                   const char *account, size_t account_len) {
@@ -195,7 +203,7 @@ func (store *keychainSecretStore) Save(ctx context.Context, profile string, valu
 	return nil
 }
 
-func (store *keychainSecretStore) Load(ctx context.Context, profile string) ([]byte, error) {
+func (store *keychainSecretStore) load(ctx context.Context, profile string, allowAuthenticationUI bool) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -207,8 +215,12 @@ func (store *keychainSecretStore) Load(ctx context.Context, profile string) ([]b
 	defer C.free(unsafe.Pointer(account))
 	var value *C.uchar
 	var length C.size_t
+	allowUI := C.int32_t(0)
+	if allowAuthenticationUI {
+		allowUI = 1
+	}
 	status := C.yp_keychain_load(
-		service, C.size_t(len(store.service)), account, C.size_t(len(profile)), &value, &length,
+		service, C.size_t(len(store.service)), account, C.size_t(len(profile)), &value, &length, allowUI,
 	)
 	if int32(status) == keychainItemNotFound {
 		return nil, ErrSecretNotFound
@@ -226,6 +238,14 @@ func (store *keychainSecretStore) Load(ctx context.Context, profile string) ([]b
 		return nil, err
 	}
 	return result, nil
+}
+
+func (store *keychainSecretStore) Load(ctx context.Context, profile string) ([]byte, error) {
+	return store.load(ctx, profile, true)
+}
+
+func (store *keychainSecretStore) LoadWithoutUserInteraction(ctx context.Context, profile string) ([]byte, error) {
+	return store.load(ctx, profile, false)
 }
 
 func (store *keychainSecretStore) Delete(ctx context.Context, profile string) error {

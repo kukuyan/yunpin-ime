@@ -453,8 +453,9 @@ func TestStatusIsLocalOnlyAndReturnsNoIdentifiers(t *testing.T) {
 		t.Fatal(err)
 	}
 	zeroBytes(encoded)
+	countingSecrets := &countingSecretStore{SecretStore: secrets}
 	status, err := (Agent{
-		Secrets: secrets, Profile: "default", EndpointConfigPath: endpoint, DatabasePath: database,
+		Secrets: countingSecrets, Profile: "default", EndpointConfigPath: endpoint, DatabasePath: database,
 	}).Status(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -464,6 +465,24 @@ func TestStatusIsLocalOnlyAndReturnsNoIdentifiers(t *testing.T) {
 	}
 	if status.HealthAvailable {
 		t.Fatal("an unreadable health database was presented as an available zero-value record")
+	}
+	if countingSecrets.backgroundLoads.Load() != 0 || countingSecrets.interactiveLoads.Load() != 1 {
+		t.Fatalf(
+			"interactive status loads: background=%d interactive=%d, want background=0 interactive=1",
+			countingSecrets.backgroundLoads.Load(), countingSecrets.interactiveLoads.Load(),
+		)
+	}
+	backgroundStatus, err := (Agent{
+		Secrets: countingSecrets, Profile: "default", EndpointConfigPath: endpoint, DatabasePath: database,
+	}).StatusWithoutUserInteraction(context.Background())
+	if err != nil || !backgroundStatus.Ready {
+		t.Fatalf("background status=%#v err=%v", backgroundStatus, err)
+	}
+	if countingSecrets.backgroundLoads.Load() != 1 || countingSecrets.interactiveLoads.Load() != 1 {
+		t.Fatalf(
+			"background status loads: background=%d interactive=%d, want background=1 interactive=1",
+			countingSecrets.backgroundLoads.Load(), countingSecrets.interactiveLoads.Load(),
+		)
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(database, 0644); err != nil {

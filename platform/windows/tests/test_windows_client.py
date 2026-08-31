@@ -213,6 +213,31 @@ class WindowsClientTests(unittest.TestCase):
             self.assertIn("!status.is_composing", rime_with_weasel)
             self.assertIn("if (!session_id || !rime_api->find_session(session_id))", rime_with_weasel)
             self.assertIn("if (!rime_api->get_status(session_id, &status))", rime_with_weasel)
+            find_session = rime_with_weasel[
+                rime_with_weasel.index("DWORD RimeWithWeaselHandler::FindSession") :
+                rime_with_weasel.index("DWORD RimeWithWeaselHandler::AddSession")
+            ]
+            self.assertIn("m_session_status_map.find(ipc_id)", find_session)
+            self.assertIn("m_session_status_map.erase(found)", find_session)
+            self.assertNotIn("to_session_id(ipc_id)", find_session)
+            idle_sessions = rime_with_weasel[
+                rime_with_weasel.index("bool RimeWithWeaselHandler::_SessionsAreIdle()") :
+                rime_with_weasel.index("bool RimeWithWeaselHandler::TryStartMaintenance()")
+            ]
+            self.assertIn("entry = m_session_status_map.erase(entry)", idle_sessions)
+            self.assertIn("continue;", idle_sessions)
+            uninspectable = idle_sessions[
+                idle_sessions.index("if (!rime_api->get_status(session_id, &status))") :
+                idle_sessions.index("const bool idle = !status.is_composing")
+            ]
+            self.assertIn("return false", uninspectable)
+            self.assertNotIn("erase", uninspectable)
+            resolver = rime_with_weasel_header[
+                rime_with_weasel_header.index("RimeSessionId to_session_id") :
+                rime_with_weasel_header.index("SessionStatus& get_session_status")
+            ]
+            self.assertIn("m_session_status_map.find(ipc_id)", resolver)
+            self.assertNotIn("m_session_status_map[ipc_id]", resolver)
             idle_gate = rime_with_weasel.index("bool RimeWithWeaselHandler::TryStartMaintenance()")
             self.assertLess(
                 rime_with_weasel.index("if (!_SessionsAreIdle())", idle_gate),

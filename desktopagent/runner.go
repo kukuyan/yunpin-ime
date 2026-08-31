@@ -95,7 +95,13 @@ func jitter(duration time.Duration) time.Duration {
 }
 
 func classifyRunResult(summary SyncSummary, syncErr error, options RunOptions, backoff time.Duration) (RunEvent, time.Duration, time.Duration) {
-	if errors.Is(syncErr, ErrRimeMaintenanceBusy) || errors.Is(syncErr, ErrAlreadyRunning) {
+	if errors.Is(syncErr, ErrRimeMaintenanceBusy) {
+		// A real composition is ordinary foreground activity, not a failure that
+		// merits rapid polling. Resume on the configured synchronization cadence;
+		// lock collisions remain short-lived and retry at MinBackoff below.
+		return RunEvent{Code: "sync_deferred_busy", FailureClass: localstore.SyncFailureNone}, options.Interval, options.MinBackoff
+	}
+	if errors.Is(syncErr, ErrAlreadyRunning) {
 		return RunEvent{Code: "sync_deferred_busy", FailureClass: localstore.SyncFailureNone}, options.MinBackoff, options.MinBackoff
 	}
 	if syncErr != nil {
@@ -152,6 +158,10 @@ func runLoop(ctx context.Context, syncNow func(context.Context) (SyncSummary, er
 		return err
 	}
 	defer residentLock.Release()
+	return runLoopWithResidentLock(ctx, syncNow, options)
+}
+
+func runLoopWithResidentLock(ctx context.Context, syncNow func(context.Context) (SyncSummary, error), options RunOptions) error {
 	backoff := options.MinBackoff
 	for {
 		if ctx.Err() != nil {
@@ -184,7 +194,69 @@ func (agent Agent) Run(ctx context.Context, options RunOptions) error {
 	if agent.RimeUserDBExportPath != "" && agent.RimeUserDBRefresh == nil {
 		return errors.New("resident Rime userdb ingestion requires the fixed platform maintenance refresher")
 	}
-	return runLoop(ctx, agent.SyncOnce, options)
+	if err := options.defaults(); err != nil {
+		return err
+	}
+	// Claim the single-resident lock before touching the platform credential
+	// store. A duplicate launch must be rejected without asking Keychain for the
+	// same item or presenting a second authorization request.
+	residentLock, err := acquireProcessLock(options.ResidentLockPath)
+	if err != nil {
+		return err
+	}
+	defer residentLock.Release()
+	return agent.withResidentBundle(ctx, options, func(bundle *CredentialBundleV1) error {
+		return runLoopWithResidentLock(ctx, func(roundContext context.Context) (SyncSummary, error) {
+			return agent.syncOnceWithBundle(roundContext, bundle)
+		}, options)
+	})
+}
+
+func (agent Agent) withResidentBundle(
+	ctx context.Context, options RunOptions, use func(*CredentialBundleV1) error,
+) error {
+	if use == nil {
+		return errors.New("resident credential consumer is required")
+	}
+	// The macOS preview uses the local login Keychain. That Keychain can lock
+	// again after the user session starts, while a resident must continue to
+	// synchronize without displaying an authorization dialog every minute.
+	// Load the existing credential once at resident startup, retain it only in
+	// this process, and wipe it when the resident terminates. If startup happens
+	// while the Keychain is unavailable, retry without UI in this same process;
+	// do not exit into a launchd restart loop. No credential is created or
+	// replaced.
+	backoff := options.MinBackoff
+	var bundle CredentialBundleV1
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		loaded, err := agent.loadResidentBundle(ctx)
+		if err == nil {
+			bundle = loaded
+			break
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		event, delay, nextBackoff := classifyRunResult(SyncSummary{}, err, options, backoff)
+		backoff = nextBackoff
+		if options.OnEvent != nil {
+			options.OnEvent(event)
+		}
+		timer := time.NewTimer(jitter(delay))
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+	defer bundle.Zero()
+	return use(&bundle)
 }
 
 // recordSyncHealth stores a round's outcome through the same open Store used
