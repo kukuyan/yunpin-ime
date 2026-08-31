@@ -23,6 +23,8 @@ plutil -lint "$plist" >/dev/null
 [[ "$(plutil -extract CFBundleIdentifier raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected bundle identifier"
 [[ "$(plutil -extract TISInputSourceID raw -o - "$plist")" == "$YUNPIN_BUNDLE_ID" ]] || die "unexpected input-source identifier"
 [[ "$(plutil -extract InputMethodConnectionName raw -o - "$plist")" == "YunPin_Connection" ]] || die "unexpected IMK connection name"
+[[ "$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$plist")" == "$YUNPIN_LOCAL_NETWORK_USAGE_DESCRIPTION" ]] ||
+  die "local-network usage description is missing or unexpected"
 for update_key in SUEnableAutomaticChecks SUFeedURL SUPublicEDKey SUEnableInstallerLauncherService; do
   if plutil -extract "$update_key" raw -o - "$plist" >/dev/null 2>&1; then
     die "YunPin must not retain Sparkle metadata: $update_key"
@@ -79,6 +81,13 @@ codesign --verify --strict "$sync_agent" >/dev/null 2>&1 ||
   die "public sync agent does not have a valid signature"
 codesign --verify --strict "$replay_lab" >/dev/null 2>&1 ||
   die "Replay Lab CLI does not have a valid signature"
+code_identifier() {
+  codesign -d --verbose=4 "$1" 2>&1 | awk -F= '$1 == "Identifier" { print substr($0, index($0, "=") + 1); exit }'
+}
+[[ "$(code_identifier "$sync_agent")" == "$YUNPIN_SYNC_AGENT_ID" ]] ||
+  die "public sync agent has an unstable or unexpected code identifier"
+[[ "$(code_identifier "$replay_lab")" == "$YUNPIN_REPLAY_LAB_ID" ]] ||
+  die "Replay Lab CLI has an unstable or unexpected code identifier"
 "$sync_agent" install-probe >/dev/null || die "public sync agent install-probe failed"
 set +e
 private_command_output="$("$sync_agent" pairing-invite 2>&1)"

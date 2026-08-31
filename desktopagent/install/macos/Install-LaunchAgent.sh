@@ -31,6 +31,16 @@ if [ "$source_owner" -ne "$(id -u)" ] && [ "$source_owner" -ne 0 ]; then
 fi
 
 label=io.github.kukuyan.inputmethod.YunPin.sync-agent
+responsible_bundle=io.github.kukuyan.inputmethod.YunPin
+if ! codesign --verify --strict "$source_agent" >/dev/null 2>&1; then
+  echo "agent source must have a valid strict code signature" >&2
+  exit 1
+fi
+source_identifier=$(codesign -d --verbose=2 "$source_agent" 2>&1 | sed -n 's/^Identifier=//p')
+if [ "$source_identifier" != "$label" ]; then
+  echo "agent source has an unexpected code identifier" >&2
+  exit 1
+fi
 state_dir="$HOME/Library/Application Support/YunPin/Sync"
 bin_dir="$state_dir/bin"
 installed_agent="$bin_dir/yunpin-sync-agent"
@@ -99,6 +109,8 @@ plutil -insert ProgramArguments.0 -string "$installed_agent" "$temporary_plist"
 plutil -insert ProgramArguments.1 -string run "$temporary_plist"
 plutil -insert ProgramArguments.2 -string --interval "$temporary_plist"
 plutil -insert ProgramArguments.3 -string 1m "$temporary_plist"
+plutil -insert AssociatedBundleIdentifiers -xml '<array/>' "$temporary_plist"
+plutil -insert AssociatedBundleIdentifiers.0 -string "$responsible_bundle" "$temporary_plist"
 plutil -insert RunAtLoad -bool NO "$temporary_plist"
 plutil -insert KeepAlive -bool YES "$temporary_plist"
 plutil -insert ProcessType -string Background "$temporary_plist"

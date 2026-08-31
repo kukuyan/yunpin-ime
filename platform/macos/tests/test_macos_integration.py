@@ -342,6 +342,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         source_archive = (MACOS_DIR / "scripts" / "make-source-archive.sh").read_text(
             encoding="utf-8"
         )
+        common = (MACOS_DIR / "scripts" / "common.sh").read_text(encoding="utf-8")
 
         self.assertIn('"${MACOS_DIR}/scripts/build-sync-agents.sh"', build)
         self.assertIn('sync-agent/public/yunpin-sync-agent', build)
@@ -350,6 +351,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn('Contents/MacOS/yunpin-replay-lab', build)
         self.assertIn('YunPin-Replay-Lab-Go', build)
         self.assertIn('sync_support="$shared_support/SyncAgent"', build)
+        self.assertIn("NSLocalNetworkUsageDescription", build)
+        self.assertIn("encrypted personal vocabulary", common)
         self.assertNotIn("e2e-private", build)
         self.assertIn("-tags=yunpin_pairing_private", agent_build)
         self.assertIn('private_root="$build_root/e2e-private/macos"', agent_build)
@@ -414,8 +417,14 @@ class MacOSIntegrationTests(unittest.TestCase):
             '      -tags=yunpin_pairing_private',
             agent_build,
         )
-        self.assertIn('sign_adhoc "$sync_agent"', sign)
-        self.assertIn('sign_adhoc "$replay_lab"', sign)
+        self.assertIn('sign_adhoc "$sync_agent" "$YUNPIN_SYNC_AGENT_ID"', sign)
+        self.assertIn('sign_adhoc "$replay_lab" "$YUNPIN_REPLAY_LAB_ID"', sign)
+        self.assertIn(
+            '--identifier "$YUNPIN_SYNC_AGENT_ID" "$private_binary"', agent_build
+        )
+        self.assertIn(
+            '"$private_identifier" == "$YUNPIN_SYNC_AGENT_ID"', agent_build
+        )
         self.assertLess(sign.index('sign_adhoc "$sync_agent"'), sign.index('sign_adhoc "$app"'))
         self.assertLess(sign.index('sign_adhoc "$replay_lab"'), sign.index('sign_adhoc "$app"'))
         for required in (
@@ -425,6 +434,9 @@ class MacOSIntegrationTests(unittest.TestCase):
             'lipo -archs "$sync_agent"',
             'lipo -archs "$replay_lab"',
             'codesign --verify --strict "$replay_lab"',
+            'NSLocalNetworkUsageDescription',
+            '"$YUNPIN_SYNC_AGENT_ID"',
+            '"$YUNPIN_REPLAY_LAB_ID"',
             'YunPinStartReplaySpoolerV1',
             '"artifact": "yunpin-replay-lab"',
         ):
@@ -1242,7 +1254,17 @@ class MacOSIntegrationTests(unittest.TestCase):
                 "  printf 'VERIFY:%s\\n' \"$target\" >> \"$YUNPIN_TEST_CODESIGN_LOG\"\n"
                 "  exit 0\n"
                 "fi\n"
-                "printf '%s\\n' \"$target\" >> \"$YUNPIN_TEST_CODESIGN_LOG\"\n"
+                "identifier=\"\"\n"
+                "previous=\"\"\n"
+                "for argument in \"$@\"; do\n"
+                "  if [[ \"$previous\" == --identifier ]]; then identifier=\"$argument\"; fi\n"
+                "  previous=\"$argument\"\n"
+                "done\n"
+                "if [[ -n \"$identifier\" ]]; then\n"
+                "  printf '%s|IDENTIFIER:%s\\n' \"$target\" \"$identifier\" >> \"$YUNPIN_TEST_CODESIGN_LOG\"\n"
+                "else\n"
+                "  printf '%s\\n' \"$target\" >> \"$YUNPIN_TEST_CODESIGN_LOG\"\n"
+                "fi\n"
                 "if [[ -n \"${YUNPIN_TEST_FAIL_TARGET:-}\" && \"$target\" == *\"$YUNPIN_TEST_FAIL_TARGET\"* ]]; then\n"
                 "  exit 9\n"
                 "fi\n",
@@ -1259,8 +1281,8 @@ class MacOSIntegrationTests(unittest.TestCase):
                 str(targets[0]),
                 str(targets[1]),
                 str(targets[2]),
-                str(targets[3]),
-                str(targets[4]),
+                f"{targets[3]}|IDENTIFIER:io.github.kukuyan.inputmethod.YunPin.sync-agent",
+                f"{targets[4]}|IDENTIFIER:io.github.kukuyan.inputmethod.YunPin.replay-lab",
                 str(app),
                 f"VERIFY:{app}",
             ]

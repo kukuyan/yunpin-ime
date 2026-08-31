@@ -124,6 +124,42 @@ func TestResidentEnableIsExplicitAndFailClosedOnRedactedSetupGate(t *testing.T) 
 	}
 }
 
+func TestMacLaunchAgentDeclaresAndVerifiesOneResponsibleBundle(t *testing.T) {
+	for _, path := range []string{
+		"install/macos/Install-LaunchAgent.sh",
+		"install/macos/Verify-LaunchAgent.sh",
+		"install/macos/Enable-LaunchAgent.sh",
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(contents)
+		for _, required := range []string{
+			"responsible_bundle=io.github.kukuyan.inputmethod.YunPin",
+			"AssociatedBundleIdentifiers.0",
+			"codesign --verify --strict",
+			"Identifier=",
+		} {
+			if !strings.Contains(text, required) {
+				t.Fatalf("macOS LaunchAgent script %s lacks %q", path, required)
+			}
+		}
+		if path != "install/macos/Install-LaunchAgent.sh" &&
+			!strings.Contains(text, "AssociatedBundleIdentifiers.1") {
+			t.Fatalf("macOS LaunchAgent verifier %s does not reject additional responsible bundles", path)
+		}
+	}
+
+	install, err := os.ReadFile("install/macos/Install-LaunchAgent.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(install), "plutil -insert AssociatedBundleIdentifiers -xml '<array/>'") {
+		t.Fatal("macOS LaunchAgent installer does not create a responsible-bundle array")
+	}
+}
+
 func TestResidentInstallersUseOnlyLocalRedactedReadinessChecks(t *testing.T) {
 	for _, path := range []string{
 		"install/macos/Install-LaunchAgent.sh", "install/macos/Verify-LaunchAgent.sh",
