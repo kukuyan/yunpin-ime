@@ -223,6 +223,24 @@ func TestOversizedInputLineFailsGenerically(t *testing.T) {
 	}
 }
 
+func TestInputLineAtExactLimitIsAccepted(t *testing.T) {
+	want := `{"schema_version":1,"window_start_utc":"2026-08-31T09:00:00Z","window_end_utc":"2026-08-31T10:00:00Z","total":0,"2xx":0,"4xx":0,"5xx":0,"other":0,"routes":[]}` + "\n"
+	for name, input := range map[string]string{
+		"without delimiter": strings.Repeat("X", maxInputLineBytes),
+		"with delimiter":    strings.Repeat("X", maxInputLineBytes) + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			output, err := runForHour(t, "2026-08-31T09:00:00Z", input)
+			if err != nil {
+				t.Fatalf("exactly %d-byte non-access line failed: %v", maxInputLineBytes, err)
+			}
+			if output != want {
+				t.Fatalf("exact-limit output differs: got %s want %s", output, want)
+			}
+		})
+	}
+}
+
 func TestHourMustBeCanonicalRFC3339UTCStart(t *testing.T) {
 	invalid := []string{
 		"", "2026-08-31T09:00:01Z", "2026-08-31T09:01:00Z",
