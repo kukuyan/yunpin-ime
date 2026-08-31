@@ -17,9 +17,12 @@ func TestParseRimeUserDBSnapshotStrictFormat(t *testing.T) {
 		"si ren ci \t个人静态词\tc=12 d=1 t=10\n" +
 		"shan chu \t删除标记\tc=-3 d=0 t=11\n")
 	localOnly := map[string]struct{}{protocol.CanonicalPhrase("个人静态词"): {}}
-	observations, err := parseRimeUserDBExportBytes(contents, localOnly)
+	observations, ignored, err := parseRimeUserDBExportBytes(contents, localOnly)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if ignored != 0 {
+		t.Fatalf("strict Pinyin snapshot unexpectedly ignored %d rows", ignored)
 	}
 	if len(observations) != 3 || observations[0].Phrase.Pinyin != "shu ju ku" ||
 		observations[0].Commits != 7 || observations[0].LocalOnly ||
@@ -31,23 +34,24 @@ func TestParseRimeUserDBSnapshotStrictFormat(t *testing.T) {
 
 func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 	tests := map[string]string{
-		"ordinary table export": "数据库\tshu ju ku\t7\n",
-		"extra field":           "shu ju ku \t数据库\tc=7 d=1 t=9\textra\n",
-		"metadata order":        "shu ju ku \t数据库\td=1 c=7 t=9\n",
-		"metadata spacing":      "shu ju ku \t数据库\tc=7  d=1 t=9\n",
-		"noncanonical commits":  "shu ju ku \t数据库\tc=01 d=1 t=9\n",
-		"invalid dynamic score": "shu ju ku \t数据库\tc=7 d=NaN t=9\n",
-		"noncanonical tick":     "shu ju ku \t数据库\tc=7 d=1 t=09\n",
-		"uppercase code":        "Shu ju ku \t数据库\tc=7 d=1 t=9\n",
-		"leading apostrophe":    "'shu ju ku \t数据库\tc=7 d=1 t=9\n",
-		"repeated separator":    "shu  ju ku \t数据库\tc=7 d=1 t=9\n",
-		"control phrase":        "shu ju ku \t数据库\u0001\tc=7 d=1 t=9\n",
+		"ordinary table export":       "数据库\tshu ju ku\t7\n",
+		"extra field":                 "shu ju ku \t数据库\tc=7 d=1 t=9\textra\n",
+		"metadata order":              "shu ju ku \t数据库\td=1 c=7 t=9\n",
+		"metadata spacing":            "shu ju ku \t数据库\tc=7  d=1 t=9\n",
+		"noncanonical commits":        "shu ju ku \t数据库\tc=01 d=1 t=9\n",
+		"invalid dynamic score":       "shu ju ku \t数据库\tc=7 d=NaN t=9\n",
+		"noncanonical tick":           "shu ju ku \t数据库\tc=7 d=1 t=09\n",
+		"leading apostrophe":          "'shu ju ku \t数据库\tc=7 d=1 t=9\n",
+		"repeated separator":          "shu  ju ku \t数据库\tc=7 d=1 t=9\n",
+		"control phrase":              "shu ju ku \t数据库\u0001\tc=7 d=1 t=9\n",
+		"non-Pinyin invalid phrase":   "a Y \t本地行\u0001\tc=2 d=1 t=8\n",
+		"non-Pinyin invalid metadata": "a Y \t本地行\tc=02 d=1 t=8\n",
 		"duplicate identity": "shu ju ku \t数据库\tc=7 d=1 t=9\n" +
 			"shu'ju'ku \t 数据 库 \tc=8 d=1 t=10\n",
 	}
 	for name, contents := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := parseRimeUserDBExportBytes([]byte(contents), nil)
+			_, _, err := parseRimeUserDBExportBytes([]byte(contents), nil)
 			if err == nil {
 				t.Fatal("malformed Rime userdb row was accepted")
 			}
@@ -57,11 +61,23 @@ func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 		})
 	}
 	tooLong := "a \t词\tc=1 d=1 t=1" + strings.Repeat("x", maxRimeUserDBLineBytes) + "\n"
-	if _, err := parseRimeUserDBExportBytes([]byte(tooLong), nil); err == nil {
+	if _, _, err := parseRimeUserDBExportBytes([]byte(tooLong), nil); err == nil {
 		t.Fatal("oversized Rime userdb row was accepted")
 	}
-	if _, err := parseRimeUserDBExportBytes([]byte{0xff}, nil); err == nil {
+	if _, _, err := parseRimeUserDBExportBytes([]byte{0xff}, nil); err == nil {
 		t.Fatal("invalid UTF-8 Rime userdb export was accepted")
+	}
+}
+
+func TestParseRimeUserDBSnapshotIgnoresValidatedNonPinyinRows(t *testing.T) {
+	contents := []byte("a Y \t本地非拼音行\tc=2 d=1 t=8\n" +
+		"shu ju ku \t数据库\tc=7 d=1 t=9\n")
+	observations, ignored, err := parseRimeUserDBExportBytes(contents, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ignored != 1 || len(observations) != 1 || observations[0].Phrase.Pinyin != "shu ju ku" {
+		t.Fatalf("non-Pinyin filtering mismatch: ignored=%d observations=%#v", ignored, observations)
 	}
 }
 
