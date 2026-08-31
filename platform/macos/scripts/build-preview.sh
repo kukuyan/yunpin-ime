@@ -52,6 +52,11 @@ xcrun swift "${MACOS_DIR}/scripts/render-input-icon.swift" "$source_dir/resource
 
 app="$derived_data/Build/Products/Release/YunPin.app"
 [[ -d "$app" ]] || die "xcodebuild did not produce $app"
+if plutil -extract NSLocalNetworkUsageDescription raw -o - "$app/Contents/Info.plist" >/dev/null 2>&1; then
+  plutil -replace NSLocalNetworkUsageDescription -string "$YUNPIN_LOCAL_NETWORK_USAGE_DESCRIPTION" "$app/Contents/Info.plist"
+else
+  plutil -insert NSLocalNetworkUsageDescription -string "$YUNPIN_LOCAL_NETWORK_USAGE_DESCRIPTION" "$app/Contents/Info.plist"
+fi
 shared_support="$app/Contents/SharedSupport"
 mkdir -p "$shared_support" "$shared_support/licenses"
 

@@ -164,8 +164,11 @@ set -e
 [[ "$replay_usage_status" -ne 0 && "$replay_usage_output" == "error: usage: yunpin-replay-lab"* ]] ||
   die "Replay Lab CLI usage probe failed"
 
-codesign --force --sign - --timestamp=none "$private_binary"
+codesign --force --sign - --timestamp=none --identifier "$YUNPIN_SYNC_AGENT_ID" "$private_binary"
 codesign --verify --strict "$private_binary"
+private_identifier="$(codesign -d --verbose=4 "$private_binary" 2>&1 | awk -F= '$1 == "Identifier" { print substr($0, index($0, "=") + 1); exit }')"
+[[ "$private_identifier" == "$YUNPIN_SYNC_AGENT_ID" ]] ||
+  die "private E2E sync agent has an unstable or unexpected code identifier"
 "$private_binary" install-probe >/dev/null
 set +e
 private_gate_output="$("$private_binary" pairing-invite 2>&1)"

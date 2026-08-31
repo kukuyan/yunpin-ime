@@ -15,7 +15,12 @@ xattr -cr "$app"
 
 sign_adhoc() {
   local target="$1"
-  codesign --force --sign - --timestamp=none "$target"
+  local identifier="${2:-}"
+  if [[ -n "$identifier" ]]; then
+    codesign --force --sign - --timestamp=none --identifier "$identifier" "$target"
+  else
+    codesign --force --sign - --timestamp=none "$target"
+  fi
 }
 
 frameworks="$app/Contents/Frameworks"
@@ -38,8 +43,8 @@ sync_agent="$app/Contents/MacOS/yunpin-sync-agent"
 replay_lab="$app/Contents/MacOS/yunpin-replay-lab"
 [[ -x "$sync_agent" ]] || die "bundled public sync agent is missing"
 [[ -x "$replay_lab" ]] || die "bundled Replay Lab CLI is missing"
-sign_adhoc "$sync_agent"
-sign_adhoc "$replay_lab"
+sign_adhoc "$sync_agent" "$YUNPIN_SYNC_AGENT_ID"
+sign_adhoc "$replay_lab" "$YUNPIN_REPLAY_LAB_ID"
 
 sign_adhoc "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
