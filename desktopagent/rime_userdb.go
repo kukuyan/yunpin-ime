@@ -26,7 +26,7 @@ const (
 
 var rimeUserDBFiniteDecimal = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?$`)
 
-var errRimeUserDBNonPinyinCode = errors.New("Rime userdb code contains non-Pinyin bytes")
+var errRimeUserDBUnsupportedCode = errors.New("Rime userdb code uses a supported non-Pinyin syntax")
 
 func canonicalRimeUserDBCode(value string) (string, error) {
 	if value == "" || len(value) > 256 || !utf8.ValidString(value) || strings.HasPrefix(value, " ") {
@@ -37,21 +37,32 @@ func canonicalRimeUserDBCode(value string) (string, error) {
 		return "", errors.New("Rime userdb code has invalid trailing separators")
 	}
 	separator := false
+	unsupported := false
 	for index, character := range []byte(code) {
 		switch {
 		case character >= 'a' && character <= 'z':
 			separator = false
+		case character >= 0x21 && character <= 0x7e && character != '\'':
+			// Rime may export rows owned by another translator, including
+			// uppercase, digits, or visible ASCII symbols. Scan the entire code
+			// before classifying it as unsupported: controls, non-ASCII bytes,
+			// and malformed separators must still fail the complete snapshot.
+			separator = false
+			unsupported = true
 		case character == ' ' || character == '\'':
 			if index == 0 || separator {
 				return "", errors.New("Rime userdb code has repeated separators")
 			}
 			separator = true
 		default:
-			return "", errRimeUserDBNonPinyinCode
+			return "", errors.New("Rime userdb code contains unsafe bytes")
 		}
 	}
 	if separator {
 		return "", errors.New("Rime userdb code ends with an invalid separator")
+	}
+	if unsupported {
+		return "", errRimeUserDBUnsupportedCode
 	}
 	canonical := protocol.CanonicalPinyin(code)
 	if !validNativePinyin(canonical) {
@@ -115,7 +126,7 @@ func parseRimeUserDBExportBytes(contents []byte, localOnly map[string]struct{}) 
 			return nil, 0, errors.New("Rime userdb export exceeds the row limit")
 		}
 		pinyin, codeErr := canonicalRimeUserDBCode(fields[0])
-		if codeErr != nil && !errors.Is(codeErr, errRimeUserDBNonPinyinCode) {
+		if codeErr != nil && !errors.Is(codeErr, errRimeUserDBUnsupportedCode) {
 			return nil, 0, fmt.Errorf("Rime userdb row %d: %w", lineNumber, codeErr)
 		}
 		if !validNativePhrase(fields[1]) || protocol.CanonicalPhrase(fields[1]) == "" {
@@ -129,7 +140,7 @@ func parseRimeUserDBExportBytes(contents []byte, localOnly map[string]struct{}) 
 		// (for example an uppercase or symbol code). They are valid local Rime
 		// state but cannot be represented by YunPin's phrase identity. Ignore
 		// only those fully validated rows instead of blocking every Pinyin row.
-		if errors.Is(codeErr, errRimeUserDBNonPinyinCode) {
+		if errors.Is(codeErr, errRimeUserDBUnsupportedCode) {
 			ignored++
 			continue
 		}

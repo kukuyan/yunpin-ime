@@ -34,18 +34,22 @@ func TestParseRimeUserDBSnapshotStrictFormat(t *testing.T) {
 
 func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 	tests := map[string]string{
-		"ordinary table export":       "数据库\tshu ju ku\t7\n",
-		"extra field":                 "shu ju ku \t数据库\tc=7 d=1 t=9\textra\n",
-		"metadata order":              "shu ju ku \t数据库\td=1 c=7 t=9\n",
-		"metadata spacing":            "shu ju ku \t数据库\tc=7  d=1 t=9\n",
-		"noncanonical commits":        "shu ju ku \t数据库\tc=01 d=1 t=9\n",
-		"invalid dynamic score":       "shu ju ku \t数据库\tc=7 d=NaN t=9\n",
-		"noncanonical tick":           "shu ju ku \t数据库\tc=7 d=1 t=09\n",
-		"leading apostrophe":          "'shu ju ku \t数据库\tc=7 d=1 t=9\n",
-		"repeated separator":          "shu  ju ku \t数据库\tc=7 d=1 t=9\n",
-		"control phrase":              "shu ju ku \t数据库\u0001\tc=7 d=1 t=9\n",
-		"non-Pinyin invalid phrase":   "a Y \t本地行\u0001\tc=2 d=1 t=8\n",
-		"non-Pinyin invalid metadata": "a Y \t本地行\tc=02 d=1 t=8\n",
+		"ordinary table export":         "数据库\tshu ju ku\t7\n",
+		"extra field":                   "shu ju ku \t数据库\tc=7 d=1 t=9\textra\n",
+		"metadata order":                "shu ju ku \t数据库\td=1 c=7 t=9\n",
+		"metadata spacing":              "shu ju ku \t数据库\tc=7  d=1 t=9\n",
+		"noncanonical commits":          "shu ju ku \t数据库\tc=01 d=1 t=9\n",
+		"invalid dynamic score":         "shu ju ku \t数据库\tc=7 d=NaN t=9\n",
+		"noncanonical tick":             "shu ju ku \t数据库\tc=7 d=1 t=09\n",
+		"leading apostrophe":            "'shu ju ku \t数据库\tc=7 d=1 t=9\n",
+		"repeated separator":            "shu  ju ku \t数据库\tc=7 d=1 t=9\n",
+		"control phrase":                "shu ju ku \t数据库\u0001\tc=7 d=1 t=9\n",
+		"non-Pinyin invalid phrase":     "a Y \t本地行\u0001\tc=2 d=1 t=8\n",
+		"non-Pinyin invalid metadata":   "a Y \t本地行\tc=02 d=1 t=8\n",
+		"non-Pinyin control suffix":     "a Y\u0001 \t本地行\tc=2 d=1 t=8\n",
+		"non-Pinyin trailing separator": "Y' \t本地行\tc=2 d=1 t=8\n",
+		"non-Pinyin repeated separator": "a  Y \t本地行\tc=2 d=1 t=8\n",
+		"non-Pinyin non-ASCII code":     "a 码 \t本地行\tc=2 d=1 t=8\n",
 		"duplicate identity": "shu ju ku \t数据库\tc=7 d=1 t=9\n" +
 			"shu'ju'ku \t 数据 库 \tc=8 d=1 t=10\n",
 	}
@@ -71,12 +75,13 @@ func TestParseRimeUserDBSnapshotRejectsMalformedRowsWithoutEcho(t *testing.T) {
 
 func TestParseRimeUserDBSnapshotIgnoresValidatedNonPinyinRows(t *testing.T) {
 	contents := []byte("a Y \t本地非拼音行\tc=2 d=1 t=8\n" +
+		"a-1 Y \t本地符号编码\tc=3 d=1 t=9\n" +
 		"shu ju ku \t数据库\tc=7 d=1 t=9\n")
 	observations, ignored, err := parseRimeUserDBExportBytes(contents, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ignored != 1 || len(observations) != 1 || observations[0].Phrase.Pinyin != "shu ju ku" {
+	if ignored != 2 || len(observations) != 1 || observations[0].Phrase.Pinyin != "shu ju ku" {
 		t.Fatalf("non-Pinyin filtering mismatch: ignored=%d observations=%#v", ignored, observations)
 	}
 }
