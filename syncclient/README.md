@@ -38,11 +38,18 @@ network. A native adapter will load
 this endpoint-only file from `%LOCALAPPDATA%\\YunPinIME\\sync.json` on Windows
 or `~/Library/Application Support/YunPin/sync.json` on macOS.
 
-Still required before desktop sync can be called complete:
+`desktopagent` now supplies the platform storage boundary (current-user Windows
+DPAPI or the macOS atomic private-file store, including one-time interactive
+legacy-Keychain migration), authenticated pairing/keyring persistence, the
+single-instance resident with retry/backoff, native learning-event ingestion,
+and atomic private snapshot rebuilding and reload.
 
-- Windows DPAPI/Credential Manager and macOS Keychain session adapters;
-- authenticated pairing/keyring persistence and rotation UI;
-- a single-instance scheduled background runner with retry/backoff;
-- native learning-event ingestion plus atomic private snapshot rebuilding and
-  Rime reload after a successful merge;
-- password/private-mode host integration and signed release acceptance.
+The following installed-host acceptance gates remain before desktop sync can
+be called complete:
+
+- real Weasel `0010` lifecycle evidence on Windows, including exactly one
+  windowless resident and no foreground agent;
+- live two-device pairing/finalization, encrypted transfer, snapshot reload,
+  and candidate visibility with rollback evidence on both installed hosts;
+- trustworthy password/private-mode host integration; and
+- exact signed release/installer acceptance on each supported platform.

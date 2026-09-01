@@ -96,8 +96,12 @@ its explicit private-HTTP policy. `register --username <name>` and
 `login --username <name>` read the password privately from the terminal; the
 password is never accepted as a command argument or stored on either desktop.
 The relay stores a salted PBKDF2-SHA-256 verifier and hashes every opaque
-30-day session. The session itself is held only in macOS Keychain or
-current-user Windows DPAPI.
+30-day session. The session itself is held only in the desktop agent's
+platform-private store: an atomic `0600` file below the current user's `0700`
+YunPin state directory on macOS, or current-user DPAPI on Windows. The retained
+macOS login Keychain is only a one-time interactive migration source for an
+existing default device credential; it is not the active session store and the
+background resident never accesses it.
 
 Daily synchronization authenticates with the per-device bearer and signed
 roster; it does not require a long-lived user-password session. Existing
@@ -106,7 +110,7 @@ pre-login accounts are adopted once with
 active device proves the claim while the logged-in user session selects the
 owner. No recovery key, password, or extra terminal input is requested.
 
-Device display names are supplied and returned as client-encrypted `device_name_ciphertext`, never plaintext. Relay device listings are operational metadata and are never a trust root. Each credential persists the creator-signed, versioned roster delivered inside the encrypted pairing package; private keys never leave DPAPI/Credential Manager or Apple Keychain.
+Device display names are supplied and returned as client-encrypted `device_name_ciphertext`, never plaintext. Relay device listings are operational metadata and are never a trust root. Each credential persists the creator-signed, versioned roster delivered inside the encrypted pairing package; private keys never leave the desktop platform-private store: current-user DPAPI on Windows or the atomic private-file store on macOS.
 
 This preview is intentionally fixed to exactly the Mac and R0W peers. Recovery
 device creation, a third pairing, and general device revocation fail closed;
