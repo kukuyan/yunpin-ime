@@ -113,14 +113,19 @@ tagged executables are rejected from the public payload.
 
 Uninstalling only the resident executable and autostart registration is
 recoverable: each uninstaller retires them under the private sync state. It
-deliberately retains endpoint configuration, encrypted SQLite, Keychain/DPAPI
-items, snapshots, and dictionaries.
+deliberately retains endpoint configuration, encrypted SQLite, platform-private
+credential and session state, snapshots, and dictionaries. On macOS it also
+leaves the legacy login Keychain item untouched as a rollback source.
 
 The installers copy the agent into the current user's private YunPin state,
 register a disabled resident job, and verify it remains stopped. The separate
 enable script starts it only after local setup succeeds. The agent itself
-uses the current user's local, non-synchronizable login Keychain on macOS and
-current-user DPAPI on Windows. The endpoint must already have been written
-with `yunpin-sync-agent configure` before the enabler succeeds. Account
-preparation and device pairing are separate, interactive operations and are
-never performed by the resident job.
+stores credentials and sessions in atomic `0600` files below the current
+user's `0700` YunPin state directory on macOS and uses current-user DPAPI on
+Windows. An existing default macOS device credential may migrate once from the
+retained, non-synchronizable login Keychain during an interactive load;
+background loads never access Keychain and migration does not delete the old
+item. The endpoint must already have been written with
+`yunpin-sync-agent configure` before the enabler succeeds. Account preparation
+and device pairing are separate, interactive operations and are never
+performed by the resident job.

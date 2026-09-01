@@ -2,11 +2,13 @@
 
 This Go reference implements the background persistence boundary shared by desktop designs. Phrase text, Pinyin, counts, pin state and tombstones are individually protected with XChaCha20-Poly1305 in SQLite WAL; only a stable opaque object ID, nonce, ciphertext and update time are visible in the database.
 
-The native clients reuse this record-level encrypted store and keep its opaque
-paired-device credential in Android Keystore or Apple Keychain. This slice does
-not claim SQLCipher whole-file encryption. The input key-event path never calls
-this package. The containing app reads/decrypts the database, builds a validated
-immutable snapshot, and atomically swaps a new generation into the engine.
+The containing platform adapter owns the opaque paired-device credential;
+`localstore` never persists it. Desktop adapters use current-user Windows DPAPI
+or the macOS atomic private-file store, while mobile containing apps use
+Android Keystore or Apple Keychain. This slice does not claim SQLCipher
+whole-file encryption. The input key-event path never calls this package. The
+containing app reads/decrypts the database, builds a validated immutable
+snapshot, and atomically swaps a new generation into the engine.
 
 `RecordSelection` suppresses password, private-mode and one-time contexts. The first committed selection creates a coalesced encrypted outbox event in the same SQLite transaction; later selections update that record. Explicit saves and tombstones also enter the outbox immediately. Versioned acknowledgement cannot delete a newer coalesced count.
 
