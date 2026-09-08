@@ -88,7 +88,12 @@ func TestResidentInstallAndVerifyRemainDisabledAndStopped(t *testing.T) {
 		t.Fatal("Windows installer does not persist the disabled registration")
 	}
 	if !strings.Contains(strings.ToLower(string(windowsInstall)), "if ($previoustaskwasrunning)") {
-		t.Fatal("Windows installer does not scope task restart to rollback restoration")
+		t.Fatal("Windows installer rollback does not preserve the previous running state")
+	}
+	for _, marker := range []string{"[switch]$LeaveDisabled", "if (-not $WasEnabled -or $LeaveDisabled) { return }", "Restore-YunPinExistingTaskState"} {
+		if !strings.Contains(string(windowsInstall), marker) {
+			t.Fatalf("Windows installer lacks the explicit fresh/upgrade staging boundary %q", marker)
+		}
 	}
 }
 

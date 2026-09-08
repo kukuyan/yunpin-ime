@@ -101,3 +101,8 @@ patch:
 } finally {
     Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# Keep the executable installer-state regressions in the existing native CI
+# entry point; string-presence assertions are not a substitute for these.
+& (Join-Path $PSScriptRoot 'Test-Install-Preview-State.ps1') -InstallerPath $InstallerPath
+& (Join-Path $PSScriptRoot '../../../desktopagent/install/windows/Test-Install-State.ps1')

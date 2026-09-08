@@ -145,7 +145,7 @@ function Copy-OverlayWithBackup {
         [Parameter(Mandatory = $true)][string]$DestinationRoot,
         [Parameter(Mandatory = $true)][string]$BackupRoot
     )
-    $sourcePrefix = [IO.Path]::GetFullPath($SourceRoot).TrimEnd("\") + "\"
+    $sourcePrefix = [IO.Path]::GetFullPath($SourceRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     foreach ($source in Get-ChildItem -LiteralPath $SourceRoot -File -Recurse) {
         $relative = $source.FullName.Substring($sourcePrefix.Length)
         $destination = Join-Path $DestinationRoot $relative
@@ -157,10 +157,33 @@ function Copy-OverlayWithBackup {
                 New-Item -ItemType Directory -Path (Split-Path $backup -Parent) -Force | Out-Null
                 Copy-Item -LiteralPath $destination -Destination $backup -Force
             }
+            # A custom overlay is user-owned, including unknown YAML and
+            # explicit false choices. Never reconstruct it from a few booleans.
+            # Retain new defaults outside Rime's active config for review.
+            if ($source.Name.EndsWith('.custom.yaml', [StringComparison]::OrdinalIgnoreCase)) {
+                [void](Read-YunPinStrictUtf8File -Path $destination)
+                if ($oldHash -ne $newHash) {
+                    $proposed = Join-Path (Join-Path $BackupRoot 'incoming-defaults') $relative
+                    New-Item -ItemType Directory -Path (Split-Path $proposed -Parent) -Force | Out-Null
+                    Copy-Item -LiteralPath $source.FullName -Destination $proposed -Force
+                    Write-Host "Preserved user overlay; packaged defaults saved for review: $relative"
+                }
+                continue
+            }
         }
         New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
         Copy-Item -LiteralPath $source.FullName -Destination $destination -Force
     }
+}
+
+function Restore-YunPinServerStartup {
+    param([bool]$WasInstalled, [bool]$WasRunning, [string]$RunKey, [string]$Server)
+    if (-not $WasInstalled) {
+        New-Item -Path $RunKey -Force | Out-Null
+        New-ItemProperty -Path $RunKey -Name 'YunPinIMEPreview' -PropertyType String -Value ('"' + $Server + '"') -Force | Out-Null
+    }
+    # Existing Run value, including its absence, remains byte-for-byte intact.
+    if (-not $WasInstalled -or $WasRunning) { Start-Process -FilePath $Server | Out-Null }
 }
 
 function Read-YunPinStrictUtf8File {
@@ -207,11 +230,15 @@ function Preserve-YunPinBooleanOptIns {
         return
     }
     $content = Read-YunPinStrictUtf8File -Path $Path
+    $originalContent = $content
     foreach ($choice in @(
         @{ Name = 'yunpin/enabled'; Preserve = $PrivateCandidates },
         @{ Name = 'yunpin/session_learning'; Preserve = $SessionLearning }
     )) {
         if (-not $choice.Preserve) {
+            continue
+        }
+        if (Get-YunPinBooleanOptIn -Path $Path -Name $choice.Name) {
             continue
         }
         $key = [regex]::Escape([string]$choice.Name)
@@ -221,6 +248,9 @@ function Preserve-YunPinBooleanOptIns {
         }
         $content = [regex]::Replace($content, $falsePattern, '${prefix}true${suffix}')
     }
+    # A retained overlay already expresses its choices. Do not normalize its
+    # encoding/BOM or rewrite it merely because preservation was requested.
+    if ($content -ceq $originalContent) { return }
 
     $attempt = [guid]::NewGuid().ToString('N')
     $temporary = $Path + '.preserve-' + $attempt + '.tmp'
@@ -286,6 +316,13 @@ New-Item -ItemType Directory -Path $InstallRoot, $backupRoot, $UserDataRoot -For
 $existingRimeOverlay = Join-Path $UserDataRoot "rime_ice.custom.yaml"
 $preservePrivateCandidates = Get-YunPinBooleanOptIn -Path $existingRimeOverlay -Name 'yunpin/enabled'
 $preserveSessionLearning = Get-YunPinBooleanOptIn -Path $existingRimeOverlay -Name 'yunpin/session_learning'
+$previousSyncTask = Get-ScheduledTask -TaskName 'YunPinSyncAgent' -ErrorAction SilentlyContinue
+$restoreSyncEnabled = $null -ne $previousSyncTask -and $previousSyncTask.State.ToString() -cne 'Disabled'
+$restoreSyncRunning = $null -ne $previousSyncTask -and $previousSyncTask.State.ToString() -ceq 'Running'
+$hadCurrentRuntime = Test-Path -LiteralPath $current -PathType Container
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$serverWasRunning = @(Get-CimInstance Win32_Process -Filter "Name = 'YunPinServer.exe'" -ErrorAction Stop |
+    Where-Object { $_.ExecutablePath -eq (Join-Path $current 'YunPinServer.exe') }).Count -gt 0
 
 try {
     $supportRoot = Join-Path $InstallRoot "support"
@@ -329,10 +366,7 @@ try {
     Set-YunPinMachineRegistry64 -RuntimeRoot $current
     Invoke-CheckedExecutable -FilePath $deployer -Arguments @('/deploy')
 
-    $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-    New-Item -Path $runKey -Force | Out-Null
-    New-ItemProperty -Path $runKey -Name "YunPinIMEPreview" -PropertyType String -Value ('"' + $server + '"') -Force | Out-Null
-    Start-Process -FilePath $server | Out-Null
+    Restore-YunPinServerStartup -WasInstalled $hadCurrentRuntime -WasRunning $serverWasRunning -RunKey $runKey -Server $server
 
     $syncInstaller = Join-Path $syncSupportRoot "Install-SyncAgent.ps1"
     $syncVerifier = Join-Path $syncSupportRoot "Verify-SyncAgent.ps1"
@@ -359,7 +393,7 @@ try {
         throw "Replay Lab CLI is absent from the verified bundle."
     }
     & $syncInstaller -AgentPath $syncAgent -ExpectedSha256 $bundleManifest[$syncManifestPath] `
-        -ResidentPath $syncResident -ResidentExpectedSha256 $bundleManifest[$syncResidentManifestPath]
+        -ResidentPath $syncResident -ResidentExpectedSha256 $bundleManifest[$syncResidentManifestPath] -LeaveDisabled
     & $syncVerifier
 
     $state = [ordered]@{
@@ -371,9 +405,13 @@ try {
         previousRuntime = $(if (Test-Path $previous) { $previous } else { $null })
         registry64Runtime = $current
         unsignedDevelopmentBuild = $true
-        syncAgentRegistration = "disabled"
+        syncAgentRegistration = $(if ($restoreSyncEnabled) { 'enabled' } else { 'disabled' })
     }
     $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $InstallRoot "install-state.json") -Encoding UTF8
+    if ($restoreSyncEnabled) {
+        Enable-ScheduledTask -TaskName 'YunPinSyncAgent' | Out-Null
+        if ($restoreSyncRunning) { Start-ScheduledTask -TaskName 'YunPinSyncAgent' }
+    }
 } catch {
     if (Test-Path $incoming -PathType Container) {
         Move-Item -LiteralPath $incoming -Destination (Join-Path $InstallRoot ("failed-" + [guid]::NewGuid().ToString("N")))
@@ -384,5 +422,5 @@ try {
 Write-Host "YunPin Windows development preview installed."
 Write-Host "Runtime: $current"
 Write-Host "User data: $UserDataRoot"
-Write-Host "Private YunPin candidates remain disabled pending the secure-input and IPC gates."
-Write-Host "YunPinSyncAgent is installed but its scheduled task remains disabled pending private E2E setup."
+Write-Host 'Existing custom overlays were retained; fresh-install private candidates remain disabled.'
+Write-Host ('YunPinSyncAgent registration: ' + $state.syncAgentRegistration + '; no new account or pairing was performed.')

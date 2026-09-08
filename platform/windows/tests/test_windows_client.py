@@ -779,7 +779,8 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"Install-SyncAgent.ps1"', installer)
         self.assertIn('"Verify-SyncAgent.ps1"', installer)
         self.assertIn("-ExpectedSha256 $bundleManifest[$syncManifestPath]", installer)
-        self.assertIn('syncAgentRegistration = "disabled"', installer)
+        self.assertIn("syncAgentRegistration = $(if ($restoreSyncEnabled) { 'enabled' } else { 'disabled' })", installer)
+        self.assertIn('-LeaveDisabled', installer)
         for marker in (
             "function Read-YunPinStrictUtf8File",
             "function Get-YunPinBooleanOptIn",
