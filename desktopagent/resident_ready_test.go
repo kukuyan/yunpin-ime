@@ -109,7 +109,7 @@ func TestResidentReadyRejectsFirstDeviceBootstrapCredential(t *testing.T) {
 	defer bundle.Zero()
 	_, agent := residentReadyFixture(t, bundle)
 	if _, err := agent.ResidentReady(context.Background()); err == nil ||
-		!strings.Contains(err.Error(), "two-device") {
+		!strings.Contains(err.Error(), "finalized signed device trust") {
 		t.Fatalf("bootstrap credential crossed resident gate: %v", err)
 	}
 }
@@ -121,6 +121,24 @@ func TestResidentReadyAllowsFinalizedTwoDeviceStateWithoutJournals(t *testing.T)
 	ready, err := agent.ResidentReady(context.Background())
 	if err != nil || !ready.Ready {
 		t.Fatalf("finalized resident state was rejected: ready=%#v err=%v", ready, err)
+	}
+}
+
+func TestResidentReadyAllowsFinalizedChainedTrustButNotPendingJoin(t *testing.T) {
+	bundle, next, _ := rosterRefreshFixture(t)
+	defer bundle.Zero()
+	if err := applyTrustedRoster(&bundle, next); err != nil {
+		t.Fatal(err)
+	}
+	secrets, agent := residentReadyFixture(t, bundle)
+	if ready, err := agent.ResidentReady(context.Background()); err != nil || !ready.Ready {
+		t.Fatalf("finalized three-device credential was rejected: %v", err)
+	}
+	if err := secrets.Save(context.Background(), agent.Profile+joiningPairingSuffix, []byte("synthetic-pending")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.ResidentReady(context.Background()); err == nil {
+		t.Fatal("three-device credential bypassed unfinished pairing gate")
 	}
 }
 

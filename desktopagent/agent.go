@@ -313,7 +313,7 @@ func (agent Agent) statusWithBundleLoader(
 }
 
 // ResidentReady is a local, redacted, fail-closed activation gate. Unlike
-// Status, it requires finalized two-device trust and proves that no protected
+// Status, it requires finalized signed trust and proves that no protected
 // provisioning or pairing journal is present. No network request is made.
 func (agent Agent) ResidentReady(ctx context.Context) (ResidentReadiness, error) {
 	bundle, err := agent.loadBundle(ctx)
@@ -321,9 +321,9 @@ func (agent Agent) ResidentReady(ctx context.Context) (ResidentReadiness, error)
 		return ResidentReadiness{}, errors.New("resident activation credential is unavailable or invalid")
 	}
 	defer bundle.Zero()
-	if bundle.Version != CredentialBundleVersion || rosterIsEmpty(bundle.TrustedRoster) ||
-		len(bundle.TrustedRoster.Devices) != 2 {
-		return ResidentReadiness{}, errors.New("resident activation requires finalized two-device trust")
+	if (bundle.Version != CredentialBundleVersion && bundle.Version != ChainedCredentialBundleVersion) ||
+		rosterIsEmpty(bundle.TrustedRoster) || len(bundle.TrustedRoster.Devices) < 2 {
+		return ResidentReadiness{}, errors.New("resident activation requires finalized signed device trust")
 	}
 	verification, x25519, err := trustFromRoster(bundle.TrustedRoster)
 	if err != nil || !equalVerificationTrust(bundle.VerificationKeys, verification) ||
@@ -487,6 +487,12 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 	if err := protectPrivateDatabaseFiles(agent.DatabasePath); err != nil {
 		return SyncSummary{}, fmt.Errorf("protect opened encrypted local database and sidecars: %w", err)
 	}
+	client := syncclient.New(endpoint)
+	// Advance from our protected checkpoint before ingestion or constructing
+	// the worker's verification-key map. Unchanged cycles do not reload secrets.
+	if _, err := RefreshTrustedRoster(ctx, client, agent.Secrets, agent.Profile, bundle); err != nil {
+		return SyncSummary{}, fmt.Errorf("refresh signed device trust: %w", err)
+	}
 	if agent.RimeUserDBRefresh != nil {
 		if err := agent.RimeUserDBRefresh(ctx); err != nil {
 			return SyncSummary{}, fmt.Errorf("refresh Rime userdb snapshot: %w", err)
@@ -536,7 +542,6 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 	if maxRounds == 0 {
 		maxRounds = defaultSyncMaxRounds
 	}
-	client := syncclient.New(endpoint)
 	if err := client.SealAccount(ctx, bundle.AccountID[:], string(bundle.DeviceToken)); err != nil {
 		return SyncSummary{}, fmt.Errorf("ensure sync account is sealed: %w", err)
 	}
