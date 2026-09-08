@@ -511,6 +511,8 @@ class MacOSIntegrationTests(unittest.TestCase):
         for required in (
             '"$sync_agent" install-probe',
             '"$sync_agent" pairing-invite',
+            'yunpin-sync-agent: pairing-invite requires --confirm-display-invitation',
+            '"$sync_agent" e2e-init-empty-baseline',
             'yunpin-sync-agent: unknown command',
             'lipo -archs "$sync_agent"',
             'lipo -archs "$replay_lab"',
