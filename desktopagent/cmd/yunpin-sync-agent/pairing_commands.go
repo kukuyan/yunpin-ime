@@ -74,6 +74,8 @@ func runPairingCommand(ctx context.Context, defaults desktopagent.Paths, argumen
 		return false, nil
 	}
 	switch arguments[0] {
+	case "initialize-learning":
+		return true, commandInitializeLearning(defaults, arguments[1:])
 	case "pairing-invite":
 		return true, commandPairingInvite(ctx, defaults, arguments[1:])
 	case "pairing-approve":
@@ -91,4 +93,20 @@ func runPairingCommand(ctx context.Context, defaults desktopagent.Paths, argumen
 	default:
 		return false, nil
 	}
+}
+
+func commandInitializeLearning(defaults desktopagent.Paths, arguments []string) error {
+	set := flag.NewFlagSet("initialize-learning", flag.ContinueOnError)
+	confirm := set.Bool("confirm-empty-baseline", false, "explicitly initialize a new device with no static private vocabulary; never replaces an existing baseline or snapshot")
+	if err := parse(set, arguments); err != nil {
+		return err
+	}
+	if !*confirm {
+		return errors.New("initialize-learning requires --confirm-empty-baseline")
+	}
+	result, err := desktopagent.InitializeEmptyBaseline(defaults)
+	if err != nil {
+		return err
+	}
+	return writeJSON(result)
 }

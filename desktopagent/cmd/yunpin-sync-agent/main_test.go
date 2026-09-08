@@ -177,6 +177,7 @@ func TestPairingCommandsArePublicWithoutAccessingPlatformState(t *testing.T) {
 func TestPairingCommandsKeepLocalConfirmationGates(t *testing.T) {
 	for command, gate := range map[string]string{
 		"pairing-invite": "--confirm-display-invitation", "pairing-cancel": "--confirm", "pairing-abort": "--confirm",
+		"initialize-learning": "--confirm-empty-baseline",
 	} {
 		for _, suffix := range [][]string{nil, {gate + "=false"}} {
 			arguments := append([]string{command}, suffix...)

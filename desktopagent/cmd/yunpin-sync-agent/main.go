@@ -693,7 +693,7 @@ func commandRun(ctx context.Context, defaults desktopagent.Paths, arguments []st
 
 func run(ctx context.Context, arguments []string) error {
 	if len(arguments) < 1 {
-		return errors.New("usage: yunpin-sync-agent <install-probe|settings|configure|configure-server|configure-rime-bridge|register|login|logout|claim-account|prepare-account|init-account|abort-account|sync-once|run|status|resident-ready|phrase|pairing-invite|pairing-join|pairing-approve|pairing-claim|pairing-finalize|pairing-cancel|pairing-abort> [options]\n  phrase <" + phraseCommandNames() + ">")
+		return errors.New("usage: yunpin-sync-agent <install-probe|settings|configure|configure-server|configure-rime-bridge|initialize-learning|register|login|logout|claim-account|prepare-account|init-account|abort-account|sync-once|run|status|resident-ready|phrase|pairing-invite|pairing-join|pairing-approve|pairing-claim|pairing-finalize|pairing-cancel|pairing-abort> [options]\n  phrase <" + phraseCommandNames() + ">")
 	}
 	// Keep the package/install health probe ahead of DefaultPaths: even a broken
 	// or unavailable user state root must not make binary installation look like
