@@ -9,11 +9,29 @@ param(
     # task therefore runs this GUI-subsystem binary instead; the interactive one
     # is still installed for status, configuration and pairing.
     [Parameter(Mandatory = $true)][string]$ResidentPath,
-    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ResidentExpectedSha256
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ResidentExpectedSha256,
+    # Package transactions stage first, verify all components, then restore the
+    # previously enabled task themselves. Fresh installations always stay off.
+    [switch]$LeaveDisabled
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Restore-YunPinExistingTaskState {
+    param(
+        [Parameter(Mandatory = $true)][string]$TaskName,
+        [Parameter(Mandatory = $true)][bool]$WasEnabled,
+        [Parameter(Mandatory = $true)][bool]$WasRunning,
+        [switch]$LeaveDisabled
+    )
+    if (-not $WasEnabled -or $LeaveDisabled) { return }
+    Enable-ScheduledTask -TaskName $TaskName | Out-Null
+    if ($WasRunning) { Start-ScheduledTask -TaskName $TaskName }
+    if ((Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop).State.ToString() -ceq 'Disabled') {
+        throw 'The previously enabled sync task did not retain its enabled state.'
+    }
+}
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "Install-SyncAgent.ps1 must run as the signed-in Windows user."
@@ -74,6 +92,7 @@ if ($null -ne $previousRunItem -and $previousRunItem.PSObject.Properties.Name -c
 $previousTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 $previousTaskXml = $null
 $previousTaskWasRunning = $false
+$previousTaskWasEnabled = $false
 if ($null -ne $previousTask) {
     # Only a task this installer created may be replaced; anything else is
     # someone else's registration and stays untouched. Two shapes qualify:
@@ -100,6 +119,7 @@ if ($null -ne $previousTask) {
     }
     $previousTaskXml = Export-ScheduledTask -TaskName $taskName
     $previousTaskWasRunning = $previousTask.State.ToString() -ceq "Running"
+    $previousTaskWasEnabled = $previousTask.State.ToString() -cne "Disabled"
 }
 $hadBinary = Test-Path -LiteralPath $destination -PathType Leaf
 if ($hadBinary) {
@@ -119,6 +139,10 @@ function Stop-InstalledAgent {
 }
 
 try {
+    if ($null -ne $previousTask) {
+        Disable-ScheduledTask -TaskName $taskName | Out-Null
+        Stop-ScheduledTask -TaskName $taskName
+    }
     Stop-InstalledAgent
     Copy-Item -LiteralPath $source -Destination $temporary
     if (Test-Path -LiteralPath $destination -PathType Leaf) {
@@ -176,6 +200,8 @@ try {
     if ($null -ne $unexpected) {
         throw "Disabled YunPin sync agent unexpectedly remained running."
     }
+    Restore-YunPinExistingTaskState -TaskName $taskName -WasEnabled $previousTaskWasEnabled `
+        -WasRunning $previousTaskWasRunning -LeaveDisabled:$LeaveDisabled
 } catch {
     Stop-InstalledAgent
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -206,4 +232,8 @@ try {
     Remove-Item -LiteralPath $temporary, $backup, $replaceBackup,
         $residentTemporary, $residentBackup, $residentReplaceBackup -Force -ErrorAction SilentlyContinue
 }
-Write-Host "Installed and locally verified YunPinSyncAgent; its scheduled task remains disabled until Enable-SyncAgent.ps1 is run after setup."
+if ($previousTaskWasEnabled -and -not $LeaveDisabled) {
+    Write-Host 'Installed and locally verified YunPinSyncAgent; the previous enabled task state was restored.'
+} else {
+    Write-Host "Installed and locally verified YunPinSyncAgent; its scheduled task remains disabled until Enable-SyncAgent.ps1 is run after setup."
+}
