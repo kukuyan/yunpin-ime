@@ -164,15 +164,25 @@ func TestUnknownCommandFailsWithoutPlatformAccess(t *testing.T) {
 	}
 }
 
-func TestPairingCommandsRemainOutsidePublicSwitch(t *testing.T) {
-	if privatePairingCommandsEnabled {
-		t.Skip("private E2E build intentionally registers pairing commands")
-	}
+func TestPairingCommandsArePublicWithoutAccessingPlatformState(t *testing.T) {
 	for _, command := range []string{
-		"pairing-invite", "pairing-approve", "pairing-finalize", "pairing-join", "pairing-claim",
+		"pairing-invite", "pairing-approve", "pairing-finalize", "pairing-join", "pairing-claim", "pairing-cancel", "pairing-abort",
 	} {
-		if err := run(context.Background(), []string{command}); err == nil || err.Error() != "unknown command" {
-			t.Fatalf("preview pairing command %q became public: %v", command, err)
+		if err := run(context.Background(), []string{command, "--unknown-flag"}); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("pairing command %q was not parsed before platform access: %v", command, err)
+		}
+	}
+}
+
+func TestPairingCommandsKeepLocalConfirmationGates(t *testing.T) {
+	for command, gate := range map[string]string{
+		"pairing-invite": "--confirm-display-invitation", "pairing-cancel": "--confirm", "pairing-abort": "--confirm",
+	} {
+		for _, suffix := range [][]string{nil, {gate + "=false"}} {
+			arguments := append([]string{command}, suffix...)
+			if err := run(context.Background(), arguments); err == nil || !strings.Contains(err.Error(), command+" requires "+gate) {
+				t.Fatalf("pairing confirmation gate was bypassed: %v", err)
+			}
 		}
 	}
 }

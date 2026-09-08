@@ -34,7 +34,7 @@ func TestPrivatePairingCommandDispatcherDoesNotCaptureUnknownCommands(t *testing
 	}
 }
 
-func TestPrivatePairingCommandsAreRegisteredOnlyByThePrivateBuild(t *testing.T) {
+func TestPrivateBuildPreservesPairingGatesAndAddsSyntheticBaselineHelper(t *testing.T) {
 	for command, expectedGate := range map[string]string{
 		"pairing-invite":          "--confirm-display-invitation",
 		"pairing-cancel":          "--confirm",

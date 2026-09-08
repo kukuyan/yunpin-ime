@@ -9,8 +9,6 @@ import (
 	"github.com/kukuyan/yunpin-ime/desktopagent"
 )
 
-const privatePairingCommandsEnabled = false
-
 func runPrivatePairingCommand(context.Context, desktopagent.Paths, []string) (bool, error) {
 	return false, nil
 }
