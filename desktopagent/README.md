@@ -55,23 +55,24 @@ never asks for recovery material or any additional terminal input. Normal
 `sync-once` and resident `run` continue to use the independent device
 credential, so password-session expiry cannot stop background sync.
 
-## Two-device pairing preview
+## Trusted-device pairing
 
 The v2 pairing state machine keeps creator and joining journals only in the
 platform-private store. The invitation carries a high-entropy out-of-band
 secret; the relay receives only a domain-separated verifier. Join and claim proofs bind
 both client-generated device identities, bearer/rollback capabilities, and
 Ed25519/X25519 keys to the complete transcript. The transferred account keys
-and exact two-device roster are encrypted with PSK+X25519 and the roster is
+and complete signed device roster are encrypted with PSK+X25519 and the roster is
 signed by the already trusted creator. The joining credential derives all
 verification trust only from that signed roster, never relay `ListDevices`.
-Approval does not yet modify the creator's active self-only trust. A separate
+Approval does not yet modify the creator's active trust checkpoint. A separate
 resumable finalize step first observes the joining device's durable `ready`
 state, re-verifies the full
 PSK-authenticated joining transcript against the protected signed roster, and
 only then atomically promotes the creator credential. If the joining device
-rolls back or the invitation terminates, finalize restores canonical self-only
-trust and removes the protected journal, including the crash window after the
+rolls back or the invitation terminates before finalization intent, cancellation
+preserves the exact previous credential, not a reconstructed self-only roster.
+Finalization is resumable, including the crash window after the
 credential CAS but before journal deletion.
 The joining device keeps its journal after `ready`; it deletes that journal
 only when an idempotent readiness replay observes `finalized`. A creator cancel
@@ -79,7 +80,7 @@ before readiness moves the joiner into durable `rollback_pending` before any
 device deletion, so a lost DELETE response resumes from the rollback tombstone
 without issuing Claim again.
 
-Private pairing builds also expose `pairing-abort --confirm`. The command takes
+Default builds expose `pairing-abort --confirm`. The command takes
 its account, device, pairing, and one-purpose rollback identity only from the
 protected joining journal. It validates any pending active credential and
 encrypted database against that exact journal, persists `rollback_pending`,
@@ -89,12 +90,35 @@ replay. A transport error, generic 401, wrong identity, or stable 409 keeps the
 journal and all local material. If the first Join never reached the relay, an
 exact Join replay may remove a journal only for the narrowly authenticated
 `pairing_not_found` or expired invitation codes; it never treats HTTP status
-alone as successful cleanup. Public builds keep this command unregistered.
+alone as successful cleanup.
 
-This preview is deliberately limited to exactly the Mac and R0W devices. Once
-a signed two-device roster exists, further invitation, recovery, or third
-device enrollment is rejected. General N-device roster-chain propagation and
-same-version fork resolution are outside this release boundary.
+An existing signed two-device roster remains the unchanged trust anchor. Each
+additional device requires an existing member's signature over the next version,
+the exact previous checkpoint digest, and all unchanged prior members and keys.
+The tested resource bound is 128 devices. Background rounds fetch and verify the
+bounded chain before creating the worker session; protected-store CAS must
+succeed before memory or the sync cursor can advance. An unchanged round never
+reloads credentials. See [the protocol and rollback contract](../protocol/ROSTER_CHAIN.md).
+
+Default builds include `pairing-invite`, `pairing-join`, `pairing-approve`,
+`pairing-claim`, `pairing-finalize`, `pairing-cancel` and `pairing-abort`.
+Transfer the one-time invitation through a private channel: invite requires
+`--confirm-display-invitation`; join accepts `--invitation-file` (or `-` for
+stdin), never invitation text in command-line arguments. Keep invitation output
+out of logs. Claim runs again after creator finalize to clear the joining journal.
+Once finalization intent is durable, resume that same transaction; never cancel,
+delete the journal, or downgrade trust in response to a timeout or conflict.
+Revocation, epoch rotation and recovery after losing all trusted devices remain
+unsupported and fail closed.
+
+For a new device with neither a static baseline nor a generated snapshot,
+`initialize-learning --confirm-empty-baseline` creates only the fixed empty
+five-column baseline using a private, durable no-replace publication under the
+process lock. It rejects existing baseline/snapshot files, links and unsafe
+directories; it does not reset Rime's separate learned vocabulary. Existing
+devices must retain their current baseline. Configure the endpoint and fixed
+Rime bridge, finish pairing, run an explicit sync and verify actual candidates
+before enabling the resident.
 
 Endpoint configuration contains no secret. Plain HTTP is opt-in and limited
 to loopback or private IP literals; HTTPS remains preferred.
@@ -261,11 +285,11 @@ dictionary, learned phrase, or replay data. Public input-method packages carry
 only the default-tag executable and these scripts. Windows stages its scheduled
 task as disabled and stopped; the macOS root package only installs the files,
 leaving per-user LaunchAgent staging to an explicit non-root command. Private
-pairing-tag executables remain separate CI-only E2E artifacts.
+diagnostic-tag executables remain separate CI-only E2E artifacts.
 
 The ordinary `status` command remains a general local diagnostic. Autostart
 activation uses only the stricter, identifier-free `resident-ready` command.
-That local gate requires the finalized creator-signed exact two-device roster
+That local gate requires a finalized signed device roster
 containing the current device, trust maps reconstructed from that roster, no
 protected provisioning/creator/joining journal, endpoint and private SQLite
 state, and fixed private Rime bridge metadata. Its Rime check never invokes
@@ -303,13 +327,16 @@ default/public binary reports `unknown command` for this E2E-only operation.
 
 ## Honest completion boundary
 
-The first-device provisioning, two-device pairing primitives/journals, native
+The first-device provisioning, add-only pairing/roster journals, native
 event and strict Rime-userdb staging ingestion, encrypted sync worker, baseline
 merge, atomic snapshot, reload retry, and resident-service contracts are
-implemented and unit tested. Pairing commands remain absent from the public
-binary and exist only in checksum-bound, short-lived private E2E artifacts until
-the exact two-device flow, rollback response-loss, platform integration, signed
-packaging, and real Mac↔R0W runtime acceptance are all green. The Rime userdb
+implemented and tested with synthetic data. Default binaries expose protected
+pairing and clean-device learning initialization; the synthetic E2E helper stays
+private-tag only. Real HTTP relay tests cover four synthetic device state
+machines, response loss, learning and deletion convergence; they do not establish
+real device or public-network acceptance. Release CI, exact packaging, controlled
+deployment, real bidirectional candidate visibility, cleanup convergence and
+background authorization must be verified separately. The Rime userdb
 path additionally requires the fixed platform host maintenance and fresh
-acknowledgement boundary described above. This is therefore not yet a deployable
+acknowledgement boundary described above. Source tests do not certify a deployed
 multi-device release.

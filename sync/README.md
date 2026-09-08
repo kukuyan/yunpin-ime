@@ -89,10 +89,12 @@ the relay process, image, database and stdout logging remain unchanged.
 | `POST` | `/v1/auth/login` | none | Create a bounded opaque session for a selected server |
 | `POST` | `/v1/auth/logout` | user session | Revoke the current opaque session |
 | `POST` | `/v1/accounts` | user session | Create an account and its first device |
-| `POST` | `/v1/accounts/{id}/claim` | user session + recovery authentication | Bind a pre-login encrypted account to its owner |
+| `POST` | `/v1/accounts/{id}/claim` | user session + existing active device proof | Bind a pre-login encrypted account to its owner |
 | `DELETE` | `/v1/accounts/{id}` | short-lived rollback capability | Roll back an otherwise-unused, unsealed new account |
 | `POST` | `/v1/accounts/{id}/seal` | provisioning device token | Seal the first device after durable local commit |
-| `POST` | `/v1/accounts/{id}/recover` | recovery authentication | Reserved; fail-closed in the fixed two-device preview |
+| `POST` | `/v1/accounts/{id}/recover` | recovery authentication | Reserved; general device recovery remains fail-closed |
+| `PUT` | `/v1/roster/anchor` | bearer device token + existing signed anchor | Publish the unchanged two-device trust anchor |
+| `GET` | `/v1/roster` | bearer device token | Fetch bounded finalized signed additions after an exact checkpoint |
 | `POST` | `/v1/pairings` | bearer device token | Create a 10-minute one-time pairing |
 | `GET` | `/v1/pairings/{id}` | creating device token | Read state and pending public keys |
 | `PUT` | `/v1/pairings/{id}` | PSK-derived relay verifier | Submit a client-generated device ID, public keys, and join proof |
@@ -133,12 +135,14 @@ owner. No recovery key, password, or extra terminal input is requested.
 
 Device display names are supplied and returned as client-encrypted `device_name_ciphertext`, never plaintext. Relay device listings are operational metadata and are never a trust root. Each credential persists the creator-signed, versioned roster delivered inside the encrypted pairing package; private keys never leave the desktop platform-private store: current-user DPAPI on Windows or the atomic private-file store on macOS.
 
-This preview is intentionally fixed to exactly the Mac and R0W peers. Recovery
-device creation, a third pairing, and general device revocation fail closed;
-only rollback of an unfinalized second-device joining tuple (`joined`,
-`approved`, or pre-ready `claimed`) is available. Expanding or replacing the
-roster requires a future signed roster-chain protocol rather than trusting
-relay device listings.
+Trusted additions use the [signed roster-chain protocol](../protocol/ROSTER_CHAIN.md),
+with a tested limit of 128 devices. Existing members and keys cannot be removed
+or replaced by an addition. The relay reserves the exact head and publishes the
+next signed checkpoint atomically with finalization; a pending grant is never
+visible to existing peers. Recovery device creation and general revocation
+remain fail-closed. Rollback is only for an unfinalized joining tuple (`joined`,
+`approved`, or pre-ready `claimed`); after finalization intent clients resume
+the exact journal instead of assuming a failed response permits trust rollback.
 
 Pairing v2 begins with a client-generated 16-byte pairing ID and 32-byte PSK. The QR/private handoff carries the PSK plus the creator account/device IDs and Ed25519/X25519 public keys; the raw PSK is never sent to the relay. The relay stores only a domain-separated HMAC verifier. The joining client generates its device ID, token, keys, and an HMAC proof over the complete transcript. The creator verifies that proof, signs a monotonically versioned trust roster, and encrypts the roster plus epoch/object keys using `HKDF(PSK || X25519, transcript_hash)` with the complete transcript as AEAD AAD. Claim additionally requires the joining Ed25519 private key to sign the transcript and device-token hash. Relay key substitution, database-verifier theft, and response loss therefore fail closed or replay idempotently without revealing the package.
 
