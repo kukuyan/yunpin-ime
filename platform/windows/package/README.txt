@@ -21,8 +21,9 @@ Weasel. Automatic and manual WinSparkle update calls are disabled.
 
 Security gates:
 
-* The package is unsigned. Windows will request administrative permission when
-  the TSF registration helper copies the components into the system directory.
+* The package is unsigned. Run the transaction in elevated 64-bit PowerShell
+  as the intended signed-in user. Locked TSF DLLs require a controlled
+  sign-out/reboot window; the installer refuses before replacing them.
 * Named-pipe access is restricted to SYSTEM, the current user, and the minimum
   app-container read/write compatibility boundary. This is not cryptographic
   client authentication.
@@ -32,13 +33,14 @@ Security gates:
   short_input_guard remains enabled; it only filters Rime's in-memory upstream
   candidates and does not load a personal snapshot. session_learning remains
   false until the Windows secure-input and IPC gates pass.
-* No cloud synchronization, Sogou migration, or private phrase import is run by
-  these scripts. R0W is not contacted.
+* A fresh install does not configure cloud synchronization, migrate Sogou, or
+  import private phrases. An upgrade restores previously opted-in startup;
+  that existing resident may resume its normal configured sync afterward.
 * The package carries the public default-tag `yunpin-sync-agent.exe`. Its
-  private pairing subcommands are not registered and return exactly `unknown
-  command`. Installation copies it into the current user's protected sync
-  state and registers `YunPinSyncAgent` as a disabled, stopped scheduled task.
-  It does not read credentials, databases, dictionaries, or the network.
+  protected pairing commands support approved device additions. The diagnostic
+  `e2e-init-empty-baseline` alias stays private-tag only. Installation stages
+  `YunPinSyncAgent` disabled/stopped, then restores only a previous enabled
+  choice. It does not read or copy credentials or private word databases.
 * The tray's Settings item uses the separate GUI-subsystem
   `support\sync-agent\yunpin-settings.exe`, so it opens the temporary local-only
   guard/sync/vocabulary page without leaving a console or PowerShell window.
@@ -46,16 +48,26 @@ Security gates:
 * Private-tag pairing binaries are separate short-lived CI E2E artifacts. They
   are not copied into this archive or any GitHub Release asset.
 
-The installer verifies every bundle file against MANIFEST.sha256, backs up
-overwritten Rime configuration files, and keeps existing user database files.
-When upgrading, it also preserves an existing explicit `yunpin/enabled: true`
-or `yunpin/session_learning: true` choice while taking all other settings from
-the newly verified overlay; a clean installation keeps both package defaults
-disabled.
-After an authorized private E2E procedure has completed endpoint, account,
-two-device pairing and Rime bridge setup, run
+The installer verifies MANIFEST.sha256 and journals each replacement stage in
+the current user's private installation transactions directory. It freezes
+known writers, retains runtime/support, targeted configuration/task/registry
+state and both system DLLs, and restores them on failure. User databases and
+credentials are not transaction backup targets. Existing custom overlays and
+startup choices are retained; a fresh installation keeps private candidates
+and session learning disabled. A rollback that cannot finish leaves writers
+stopped with RECOVERY_REQUIRED and blocks any fresh attempt. After resolving
+the recorded cause, use the retained transaction's Install-Preview.ps1 with
+-RecoverTransaction (and the same -InstallRoot if customized). Do not delete
+the journal, force a new installation, or overwrite learning/credential data.
+
+After endpoint, approved device pairing and Rime bridge setup, run an explicit
+sync and verify real candidate visibility before using
 `support\sync-agent\Enable-SyncAgent.ps1`; its redacted `resident-ready` gate
 keeps the task disabled if setup is incomplete. `Verify-SyncAgent.ps1` checks
-the initial disabled state without contacting R0W.
+the initial disabled state. Clean devices without any baseline/snapshot can
+use initialize-learning --confirm-empty-baseline; existing devices retain
+their current baseline. Adding devices requires the signed-roster-capable
+relay and clients; an old client binary must not be restored over a v3 trust
+checkpoint after enrollment.
 The source archive next to this package contains the exact pinned upstreams,
 patches, YunPin sources, build scripts, licenses, and verified Boost source.
