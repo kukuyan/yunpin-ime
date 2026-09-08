@@ -14,8 +14,29 @@ Environment variables:
 
 - `YUNPIN_LISTEN` defaults to `:8080`.
 - `YUNPIN_DATABASE` defaults to `/data/yunpin-sync.db`.
+- `YUNPIN_TRUSTED_PROXY_IPS` defaults to empty (direct TCP peers only).
 
-The production image runs as a non-root distroless user. Put TLS and coarse network rate limiting at a reverse proxy; the application additionally enforces a 1 MiB JSON limit, per-envelope/keyring limits, a per-IP fixed-window limit, strict JSON fields, and HTTP timeouts. The in-process limiter trusts only the TCP peer in `RemoteAddr` and deliberately ignores `X-Forwarded-For` and similar spoofable headers. Behind a reverse proxy it therefore sees the proxy address: configure real-source handling at a trusted network layer and enforce client-aware limits at the proxy before forwarding. Expired application limiter entries are swept so inactive source addresses do not accumulate indefinitely.
+The production image runs as a non-root distroless user. Put TLS and coarse network rate limiting at a reverse proxy; the application additionally enforces a 1 MiB JSON limit, per-envelope/keyring limits, a per-IP fixed-window limit, strict JSON fields, and HTTP timeouts. By default the in-process limiter uses only the TCP peer in `RemoteAddr` and ignores forwarding headers. Expired limiter entries are swept so inactive source addresses do not accumulate indefinitely.
+
+When a reverse proxy is used, set `YUNPIN_TRUSTED_PROXY_IPS` to its verified exact
+TCP peer address (or at most 16 comma-separated exact IPs). Do not trust an entire
+LAN/Docker CIDR: broad ranges and hostnames are rejected at startup. The proxy
+must **overwrite**, not append, `X-Forwarded-For` with one client IP. Only this
+header from an explicitly trusted peer affects rate-limit attribution;
+untrusted peers, multiple values, address chains, ports and malformed addresses
+remain in the actual TCP peer bucket. `X-Real-IP` and `Forwarded` are ignored.
+No header replaces device or user authentication. Recheck the proxy address
+when recreating containers; an empty list restores the direct-only behavior.
+
+For a personal existing-account public ingress, keep the relay's HTTP listener
+private, reuse a valid HTTPS certificate, and block public signup at the edge
+without adding a second login prompt. An Nginx prefix location for
+`/v1/auth/register` also blocks the trailing slash accepted by the relay and
+decoded URI variants; an exact-only location is insufficient. Keep the relay's
+fixed-route stdout logs; do not add edge access logs with raw URIs, queries or
+authentication material. Verify external TLS, unauthenticated API rejection,
+signup rejection and existing-service regression separately from real device
+pairing and bidirectional candidate/deletion acceptance.
 
 `./scripts/smoke-container.sh` builds the image, starts it with its default non-root user and anonymous `/data` volume, checks `/healthz`, and removes the test container.
 
