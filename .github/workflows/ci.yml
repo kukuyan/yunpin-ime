@@ -115,6 +115,9 @@ jobs:
       - name: Verify installer UTF-8 opt-in preservation
         shell: pwsh
         run: .\platform\windows\tests\Test-Install-Preview-Utf8.ps1
+      - name: Verify package transaction rollback with isolated fixtures
+        shell: pwsh
+        run: .\platform\windows\tests\Test-Install-Preview-Transaction.ps1
       - name: Verify private snapshot E2E gate recovery fixtures
         shell: pwsh
         run: .\platform\windows\e2e\Test-Private-Snapshot-E2E.ps1
