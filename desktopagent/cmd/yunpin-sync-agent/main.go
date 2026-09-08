@@ -47,7 +47,7 @@ func addCommonFlags(set *flag.FlagSet, defaults desktopagent.Paths) *commonFlags
 	set.StringVar(&flags.lock, "lock", defaults.LockPath, "single-instance lock file")
 	set.StringVar(&flags.service, "credential-service", defaults.CredentialService, "OS credential service identifier")
 	set.StringVar(&flags.nativeEvents, "native-events", defaults.NativeEventsPath, "native selection event spool")
-	set.StringVar(&flags.rimeUserDB, "rime-userdb-export", "", "private Rime userdb snapshot produced by the fixed platform helper")
+	set.StringVar(&flags.rimeUserDB, "rime-userdb-export", "", "explicit private Rime snapshot (default sync-once refreshes the fixed platform bridge)")
 	set.StringVar(&flags.baseline, "baseline", defaults.BaselinePath, "static private vocabulary baseline")
 	set.StringVar(&flags.snapshot, "snapshot", defaults.SnapshotPath, "generated immutable private snapshot")
 	set.StringVar(&flags.snapshotState, "snapshot-state", defaults.SnapshotStatePath, "last successfully reloaded snapshot marker")
@@ -364,6 +364,9 @@ func commandSyncOnce(ctx context.Context, defaults desktopagent.Paths, arguments
 	if err != nil {
 		return err
 	}
+	if err := configureSyncOnceLearning(&agent, defaults, common.rimeUserDB); err != nil {
+		return err
+	}
 	var summary desktopagent.SyncSummary
 	err = desktopagent.WithProcessLock(common.lock, func() error {
 		var syncErr error
@@ -374,6 +377,17 @@ func commandSyncOnce(ctx context.Context, defaults desktopagent.Paths, arguments
 		return err
 	}
 	return writeJSON(summary)
+}
+
+func configureSyncOnceLearning(agent *desktopagent.Agent, defaults desktopagent.Paths, explicitExport string) error {
+	if explicitExport != "" {
+		// Explicit snapshots remain available to isolated tools/tests. They are
+		// not refreshed by invoking the user's production input-method host.
+		agent.RimeUserDBExportPath = explicitExport
+		agent.RimeUserDBRefresh = nil
+		return nil
+	}
+	return desktopagent.ConfigureDefaultLearningSource(agent, defaults)
 }
 
 func commandPrepareAccount(ctx context.Context, defaults desktopagent.Paths, arguments []string) error {
