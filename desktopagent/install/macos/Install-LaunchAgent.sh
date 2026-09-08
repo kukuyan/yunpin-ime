@@ -54,6 +54,10 @@ rollback_plist="$launch_dir/.$label.rollback.$$.plist"
 had_agent=0
 had_plist=0
 committed=0
+replaced_agent=0
+replaced_plist=0
+changed_disabled=0
+was_disabled=0
 
 launchagent_is_disabled() {
   launchctl print-disabled "$domain" 2>/dev/null | awk -v target="\"$label\"" '
@@ -66,31 +70,58 @@ rollback_install() {
   status=$?
   set +e
   if [ "$committed" -eq 0 ]; then
-    if [ "$had_agent" -eq 1 ]; then
-      mv -f "$rollback_agent" "$installed_agent"
-    else
-      rm -f "$installed_agent"
+    if [ "$replaced_agent" -eq 1 ]; then
+      if [ "$had_agent" -eq 1 ]; then
+        mv -f "$rollback_agent" "$installed_agent" || exit "$status"
+      else
+        rm -f "$installed_agent"
+      fi
     fi
-    if [ "$had_plist" -eq 1 ]; then
-      mv -f "$rollback_plist" "$plist"
-    else
-      rm -f "$plist"
+    if [ "$replaced_plist" -eq 1 ]; then
+      if [ "$had_plist" -eq 1 ]; then
+        mv -f "$rollback_plist" "$plist" || exit "$status"
+      else
+        rm -f "$plist"
+      fi
     fi
-    launchctl disable "$domain/$label" >/dev/null 2>&1
+    if [ "$changed_disabled" -eq 1 ]; then
+      if [ "$was_disabled" -eq 1 ]; then
+        launchctl disable "$domain/$label" >/dev/null 2>&1
+      else
+        launchctl enable "$domain/$label" >/dev/null 2>&1
+      fi
+    fi
   fi
   rm -f "$temporary_agent" "$temporary_plist" "$rollback_agent" "$rollback_plist"
   exit "$status"
 }
+# Refusal is read-only. In particular, no EXIT trap may infer ownership of
+# pre-existing files before backups have been made and replacements attempted.
+if launchctl print "$domain/$label" >/dev/null 2>&1; then
+  echo "Refusing to replace a loaded LaunchAgent; stop or uninstall it before staging." >&2
+  exit 1
+fi
+for directory in "$state_dir" "$bin_dir" "$launch_dir"; do
+  if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+    echo "Refusing an unsafe installation directory." >&2
+    exit 1
+  fi
+done
+for target in "$installed_agent" "$plist"; do
+  if [ -L "$target" ] || { [ -e "$target" ] && [ ! -f "$target" ]; }; then
+    echo "Refusing an unsafe installation target." >&2
+    exit 1
+  fi
+done
+# Read failure is not evidence of an enabled job. Capture before any mutation.
+launchctl print-disabled "$domain" >/dev/null
+if launchagent_is_disabled; then was_disabled=1; fi
 trap rollback_install EXIT
 trap 'exit 1' HUP INT TERM
 
 umask 077
 mkdir -p "$state_dir" "$bin_dir" "$launch_dir"
 chmod 700 "$state_dir" "$bin_dir"
-if launchctl print "$domain/$label" >/dev/null 2>&1; then
-  echo "Refusing to replace a loaded LaunchAgent; stop or uninstall it before staging." >&2
-  exit 1
-fi
 if [ -f "$installed_agent" ] && [ ! -L "$installed_agent" ]; then
   cp -p "$installed_agent" "$rollback_agent"
   had_agent=1
@@ -100,6 +131,7 @@ if [ -f "$plist" ] && [ ! -L "$plist" ]; then
   had_plist=1
 fi
 install -m 700 "$source_agent" "$temporary_agent"
+replaced_agent=1
 mv -f "$temporary_agent" "$installed_agent"
 
 plutil -create xml1 "$temporary_plist"
@@ -119,8 +151,10 @@ plutil -insert StandardOutPath -string /dev/null "$temporary_plist"
 plutil -insert StandardErrorPath -string /dev/null "$temporary_plist"
 chmod 600 "$temporary_plist"
 plutil -lint "$temporary_plist" >/dev/null
+replaced_plist=1
 mv -f "$temporary_plist" "$plist"
 
+changed_disabled=1
 launchctl disable "$domain/$label"
 if ! launchagent_is_disabled; then
   echo "LaunchAgent could not be registered in the disabled state." >&2
