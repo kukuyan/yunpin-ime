@@ -218,8 +218,8 @@ if ($probe.ExitCode -ne 0) {
     throw "Public sync agent install-probe failed"
 }
 $privateCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")
-if ($privateCommand.ExitCode -eq 0 -or $privateCommand.Output -cne "yunpin-sync-agent: unknown command") {
-    throw "Public Windows package exposes a private pairing command"
+if ($privateCommand.ExitCode -eq 0 -or $privateCommand.Output -cne "yunpin-sync-agent: pairing-invite requires --confirm-display-invitation") {
+    throw "Public Windows package lacks the confirmation-gated pairing command"
 }
 $privateBaselineCommand = Invoke-AgentCapture -Executable $syncAgent -Arguments @("e2e-init-empty-baseline")
 if ($privateBaselineCommand.ExitCode -eq 0 -or

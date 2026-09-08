@@ -113,8 +113,14 @@ set +e
 private_command_output="$("$sync_agent" pairing-invite 2>&1)"
 private_command_status=$?
 set -e
-[[ "$private_command_status" -ne 0 && "$private_command_output" == "yunpin-sync-agent: unknown command" ]] ||
-  die "public app bundle exposes a private pairing command"
+[[ "$private_command_status" -ne 0 && "$private_command_output" == "yunpin-sync-agent: pairing-invite requires --confirm-display-invitation" ]] ||
+  die "public app bundle lacks the confirmation-gated pairing command"
+set +e
+private_baseline_output="$("$sync_agent" e2e-init-empty-baseline 2>&1)"
+private_baseline_status=$?
+set -e
+[[ "$private_baseline_status" -ne 0 && "$private_baseline_output" == "yunpin-sync-agent: unknown command" ]] ||
+  die "public app bundle exposes the private empty-baseline command"
 set +e
 replay_usage_output="$("$replay_lab" 2>&1)"
 replay_usage_status=$?

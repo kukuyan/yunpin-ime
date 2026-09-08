@@ -149,8 +149,8 @@ set +e
 public_private_output="$("$public_binary" pairing-invite 2>&1)"
 public_private_status=$?
 set -e
-[[ "$public_private_status" -ne 0 && "$public_private_output" == "yunpin-sync-agent: unknown command" ]] ||
-  die "public sync agent exposes a private pairing command"
+[[ "$public_private_status" -ne 0 && "$public_private_output" == "yunpin-sync-agent: pairing-invite requires --confirm-display-invitation" ]] ||
+  die "public sync agent lacks the confirmation-gated pairing command"
 set +e
 public_baseline_output="$("$public_binary" e2e-init-empty-baseline 2>&1)"
 public_baseline_status=$?

@@ -771,6 +771,7 @@ class WindowsClientTests(unittest.TestCase):
             'Get-PeMachine -Path $syncAgent',
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("install-probe")',
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("pairing-invite")',
+            'yunpin-sync-agent: pairing-invite requires --confirm-display-invitation',
             'Invoke-AgentCapture -Executable $syncAgent -Arguments @("e2e-init-empty-baseline")',
             'yunpin-sync-agent: unknown command',
             'Invoke-AgentCapture -Executable $replayLab -Arguments @("help")',
