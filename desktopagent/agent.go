@@ -514,11 +514,11 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 		for _, row := range baselineRows {
 			localOnly[protocol.CanonicalPhrase(row.Phrase)] = struct{}{}
 		}
-		// A cumulative Rime userdb snapshot and per-selection native events
-		// represent the same user actions. Selecting the Rime bridge therefore
-		// disables native spool consumption for this run to prevent double count.
-		if agent.nativeEventIngestionEnabled() {
-			nativeSummary, err = consumeNativeEvents(ctx, agent.NativeEventsPath, store, localOnly, maxNativeBatch)
+		// Rime owns cumulative phrase counts. Native selection/correction events
+		// remain useful local evidence, but must not increment the same action
+		// again, including across resident and explicit sync-once rounds.
+		if agent.NativeEventsPath != "" {
+			nativeSummary, err = consumeNativeEventsWithSelectionCounts(ctx, agent.NativeEventsPath, store, localOnly, maxNativeBatch, agent.nativeEventIngestionEnabled())
 			if err != nil {
 				return SyncSummary{}, err
 			}

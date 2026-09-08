@@ -168,6 +168,13 @@ func validNativeEventID(value string) bool {
 }
 
 func consumeNativeEvents(ctx context.Context, directory string, store *localstore.Store, localOnly map[string]struct{}, limit int) (NativeEventSummary, error) {
+	return consumeNativeEventsWithSelectionCounts(ctx, directory, store, localOnly, limit, true)
+}
+
+// countSelections is false when the Rime cumulative userdb owns phrase counts.
+// Native events still supply local habit/correction evidence and crash receipts;
+// their consumption must not add a second CRDT increment for the same action.
+func consumeNativeEventsWithSelectionCounts(ctx context.Context, directory string, store *localstore.Store, localOnly map[string]struct{}, limit int, countSelections bool) (NativeEventSummary, error) {
 	if directory == "" || !filepath.IsAbs(directory) || store == nil || limit < 1 || limit > maxNativeBatch {
 		return NativeEventSummary{}, errors.New("native event consumer configuration is invalid")
 	}
@@ -286,7 +293,7 @@ func consumeNativeEvents(ctx context.Context, directory string, store *localstor
 				EventID: event.EventID, DateBucket: event.DateBucket,
 				Phrase: localstore.Phrase{Text: event.Phrase, Pinyin: event.Pinyin, Source: "native_selection"},
 			}
-			if isLocalOnly {
+			if isLocalOnly || !countSelections {
 				result, err = store.RecordNativeLocalSelection(ctx, selection)
 			} else {
 				result, err = store.RecordNativeSelection(ctx, selection)

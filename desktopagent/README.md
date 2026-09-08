@@ -130,10 +130,15 @@ after reload succeeds, so a crash between replacement and reload is retried.
 
 ## Rime userdb learning bridge
 
-`sync-once --rime-userdb-export /absolute/private/path` can ingest a staged
-snapshot of Rime's own cumulative userdb learning without enabling YunPin's
-host-sensitive `session_learning` producer. The accepted format is deliberately
-the strict uniform userdb snapshot row used by librime:
+Default `sync-once` and resident `run` share the same fixed Rime maintenance
+bridge and cumulative phrase-count source. A manual round therefore cannot
+increment a native selection already counted by an earlier resident round.
+`sync-once --rime-userdb-export /absolute/private/path` remains an explicit
+staged-snapshot path for isolated tools; it does not invoke production host
+maintenance. Custom state overrides require this explicit snapshot instead of
+silently falling back to native-only counting or touching another state root.
+The bridge works without enabling the host-sensitive `session_learning`
+producer. Its accepted format is the strict uniform userdb row used by librime:
 
 ```text
 code<TAB>phrase<TAB>c=<signed-commits> d=<finite-score> t=<tick>
@@ -148,9 +153,10 @@ and encrypted outbox mutation share one SQLite transaction, so a failed batch
 cannot suppress a retry. No phrase or code is included in parser errors or
 operational summaries.
 
-Providing `--rime-userdb-export` selects this cumulative source for the run and
-suppresses native per-selection spool consumption, because ingesting both views
-of the same commits would double-count learning. The production helper must
+When a cumulative source is selected, native spool events still persist local
+selection/correction evidence and idempotent receipts, but never increment
+phrase CRDT counts or create an outbox entry. Rime alone supplies those counts;
+the native correction evidence is not discarded. The production helper must
 always export one fixed userdb identity to this stable staging path; changing
 the source database behind the path is outside the high-water contract.
 
@@ -163,7 +169,7 @@ of being silently discarded or sent.
 `configure-rime-bridge --confirm` reads exactly one safe top-level
 `installation_id`, creates a private first-state backup of `installation.yaml`,
 then atomically sets Rime's `sync_dir` to the agent-owned `rime-sync` directory.
-It does not inspect the old default sync directory. Resident `run` invokes only
+It does not inspect the old default sync directory. Default `sync-once` and `run` invoke only
 the fixed installed host (`YunPin --sync <request-nonce>` on macOS or
 `YunPinDeployer.exe /sync` on Windows), requires a fresh stable uniform snapshot
 under `rime-sync/<installation_id>/rime_ice.userdb.txt`, validates the directory

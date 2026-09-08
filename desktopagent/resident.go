@@ -34,28 +34,22 @@ func NewResidentAgent(defaults Paths) (Agent, error) {
 	if err != nil {
 		return Agent{}, err
 	}
-	bridgePaths, err := DefaultRimeBridgePaths(defaults)
-	if err != nil {
+	agent := Agent{
+		Secrets:            secrets,
+		Profile:            DefaultProfile,
+		StateDirectory:     defaults.StateDirectory,
+		EndpointConfigPath: defaults.EndpointConfigPath,
+		DatabasePath:       defaults.DatabasePath,
+		NativeEventsPath:   defaults.NativeEventsPath,
+		BaselinePath:       defaults.BaselinePath,
+		SnapshotPath:       defaults.SnapshotPath,
+		SnapshotStatePath:  defaults.SnapshotStatePath,
+		Reload:             DefaultReloadHook(),
+	}
+	if err := ConfigureDefaultLearningSource(&agent, defaults); err != nil {
 		return Agent{}, err
 	}
-	refresh, err := NewDefaultRimeUserDBRefresh(bridgePaths)
-	if err != nil {
-		return Agent{}, err
-	}
-	return Agent{
-		Secrets:              secrets,
-		Profile:              DefaultProfile,
-		StateDirectory:       defaults.StateDirectory,
-		EndpointConfigPath:   defaults.EndpointConfigPath,
-		DatabasePath:         defaults.DatabasePath,
-		NativeEventsPath:     defaults.NativeEventsPath,
-		RimeUserDBExportPath: bridgePaths.StagingPath,
-		RimeUserDBRefresh:    refresh,
-		BaselinePath:         defaults.BaselinePath,
-		SnapshotPath:         defaults.SnapshotPath,
-		SnapshotStatePath:    defaults.SnapshotStatePath,
-		Reload:               DefaultReloadHook(),
-	}, nil
+	return agent, nil
 }
 
 // RunResident runs the background synchronization loop until ctx is cancelled.
