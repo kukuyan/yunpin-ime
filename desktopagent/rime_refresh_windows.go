@@ -14,24 +14,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const (
-	windowsRimeMaintenanceUnavailableExitCode = 69
-	windowsRimeMaintenanceBusyExitCode        = 75
-)
-
-func windowsRimeMaintenanceExitCodeError(code int) error {
-	switch code {
-	case 0:
-		return nil
-	case windowsRimeMaintenanceUnavailableExitCode:
-		return ErrRimeMaintenanceUnavailable
-	case windowsRimeMaintenanceBusyExitCode:
-		return ErrRimeMaintenanceBusy
-	default:
-		return fmt.Errorf("fixed YunPin deployer exited with code %d", code)
-	}
-}
-
 func invokeFixedWindowsRimeMaintenance(ctx context.Context, path, nonce string) error {
 	if !safeMaintenanceNonce(nonce) {
 		return errors.New("Rime maintenance nonce is invalid")
@@ -61,8 +43,8 @@ func invokeFixedWindowsRimeMaintenance(ctx context.Context, path, nonce string) 
 	var exitError *exec.ExitError
 	if errors.As(err, &exitError) {
 		// Exit status is read from the exact child process started from the fixed
-		// platform path. The closed contract distinguishes initial IPC
-		// unavailability from an authenticated busy response; no writable
+		// platform path. The closed contract distinguishes IPC transport and
+		// protocol failures from a composing response; no writable
 		// acknowledgement file or PATH lookup participates.
 		return windowsRimeMaintenanceExitCodeError(exitError.ExitCode())
 	}
