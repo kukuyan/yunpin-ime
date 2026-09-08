@@ -252,18 +252,18 @@ func (store *Store) recordLearningEventOnly(ctx context.Context, event NativeLea
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
-	found, err := nativeLearningEventExists(ctx, store.db, normalized.EventID)
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	defer transaction.Rollback()
+	found, err := nativeLearningEventExists(ctx, transaction, normalized.EventID)
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
 	if found {
 		return NativeSelectionResult{Duplicate: true}, nil
 	}
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return NativeSelectionResult{}, err
-	}
-	defer transaction.Rollback()
 	if err := store.insertLearningEventTx(ctx, transaction, normalized); err != nil {
 		return NativeSelectionResult{}, err
 	}

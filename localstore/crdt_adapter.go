@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -123,47 +124,7 @@ func ensurePhraseState(phrase *Phrase, objectID [16]byte, deviceID string, event
 	return nil
 }
 
-func (store *Store) nextHLC(ctx context.Context) (protocol.HLC, error) {
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return protocol.HLC{}, err
-	}
-	defer transaction.Rollback()
-	var wallMillis, counter int64
-	if err := transaction.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key = 'hlc_wall_ms'").Scan(&wallMillis); err != nil {
-		return protocol.HLC{}, err
-	}
-	if err := transaction.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key = 'hlc_counter'").Scan(&counter); err != nil {
-		return protocol.HLC{}, err
-	}
-	physical := store.now().UnixMilli()
-	if physical > wallMillis {
-		wallMillis = physical
-		counter = 0
-	} else if counter >= math.MaxUint32 {
-		wallMillis++
-		counter = 0
-	} else {
-		counter++
-	}
-	if _, err := transaction.ExecContext(ctx, "UPDATE metadata SET value = ? WHERE key = 'hlc_wall_ms'", wallMillis); err != nil {
-		return protocol.HLC{}, err
-	}
-	if _, err := transaction.ExecContext(ctx, "UPDATE metadata SET value = ? WHERE key = 'hlc_counter'", counter); err != nil {
-		return protocol.HLC{}, err
-	}
-	if err := transaction.Commit(); err != nil {
-		return protocol.HLC{}, err
-	}
-	return protocol.HLC{WallMillis: wallMillis, Counter: uint32(counter), Node: store.deviceID}, nil
-}
-
-func (store *Store) observeHLC(ctx context.Context, observed protocol.HLC) error {
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer transaction.Rollback()
+func (store *Store) observeHLCInTransaction(ctx context.Context, transaction *sql.Tx, observed protocol.HLC) error {
 	var wallMillis, counter int64
 	if err := transaction.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key = 'hlc_wall_ms'").Scan(&wallMillis); err != nil {
 		return err
@@ -181,7 +142,7 @@ func (store *Store) observeHLC(ctx context.Context, observed protocol.HLC) error
 			return err
 		}
 	}
-	return transaction.Commit()
+	return nil
 }
 
 func validatePayloadObject(payload PhrasePayload, idKey []byte) ([16]byte, error) {
@@ -297,14 +258,19 @@ func (store *Store) MergeRemotePayload(ctx context.Context, payload PhrasePayloa
 	if err != nil {
 		return err
 	}
-	existing, found, err := store.loadByID(ctx, objectID[:])
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	existing, found, err := store.loadByIDInTransaction(ctx, transaction, objectID[:])
 	if err != nil {
 		return err
 	}
 	merged := payload
 	if found {
 		if existing.CRDT.ObjectID == "" {
-			clock, err := store.nextHLC(ctx)
+			clock, err := store.nextHLCInTransaction(ctx, transaction)
 			if err != nil {
 				return err
 			}
@@ -332,8 +298,11 @@ func (store *Store) MergeRemotePayload(ctx context.Context, payload PhrasePayloa
 	if latestClock.Compare(phrase.CRDT.Presence.Clock) < 0 {
 		latestClock = phrase.CRDT.Presence.Clock
 	}
-	if err := store.observeHLC(ctx, latestClock); err != nil {
+	if err := store.observeHLCInTransaction(ctx, transaction, latestClock); err != nil {
 		return err
 	}
-	return store.upsert(ctx, phrase, false)
+	if err := store.upsertPhraseInTransaction(ctx, transaction, objectID, phrase, false); err != nil {
+		return err
+	}
+	return transaction.Commit()
 }

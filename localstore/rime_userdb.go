@@ -151,7 +151,9 @@ func (store *Store) loadByIDInTransaction(ctx context.Context, transaction *sql.
 	return phrase, true, err
 }
 
-func (store *Store) upsertRimeObservation(ctx context.Context, transaction *sql.Tx, objectID [16]byte, phrase Phrase, enqueue bool) error {
+// upsertPhraseInTransaction persists one state and its optional exact outbox
+// version inside the same transaction that read/merged it and advanced HLC.
+func (store *Store) upsertPhraseInTransaction(ctx context.Context, transaction *sql.Tx, objectID [16]byte, phrase Phrase, enqueue bool) error {
 	nonce, ciphertext, err := store.seal(objectID[:], phrase)
 	if err != nil {
 		return err
@@ -213,7 +215,7 @@ func (store *Store) ImportRimeUserDB(ctx context.Context, observations []RimeUse
 	}
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
-	transaction, err := store.db.BeginTx(ctx, nil)
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
 	if err != nil {
 		return RimeUserDBImportResult{}, err
 	}
@@ -291,7 +293,7 @@ ON CONFLICT(device_id, object_id) DO UPDATE SET commits=excluded.commits`,
 		phrase.CRDT.Counts[store.deviceID] += delta
 		phrase.LastUsedDay = store.now().UTC().Unix() / 86400
 		materializePhrase(&phrase)
-		if err := store.upsertRimeObservation(ctx, transaction, objectID, phrase, phrase.UseCount >= learningThreshold); err != nil {
+		if err := store.upsertPhraseInTransaction(ctx, transaction, objectID, phrase, phrase.UseCount >= learningThreshold); err != nil {
 			return RimeUserDBImportResult{}, err
 		}
 		result.Advanced++

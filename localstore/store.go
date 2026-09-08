@@ -339,59 +339,6 @@ WHERE event_id IN (
 	return err
 }
 
-func (store *Store) upsert(ctx context.Context, phrase Phrase, enqueue bool) error {
-	return store.upsertWithNativeEvent(ctx, phrase, enqueue, nil)
-}
-
-func (store *Store) upsertWithNativeEvent(ctx context.Context, phrase Phrase, enqueue bool, nativeEvent *NativeLearningEvent) error {
-	objectID, err := store.objectID(phrase)
-	if err != nil {
-		return err
-	}
-	nonce, ciphertext, err := store.seal(objectID[:], phrase)
-	if err != nil {
-		return err
-	}
-	var eventNonce, eventCiphertext []byte
-	if enqueue {
-		eventNonce, eventCiphertext, err = store.seal(objectID[:], phrase)
-		if err != nil {
-			return err
-		}
-	}
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer transaction.Rollback()
-	_, err = transaction.ExecContext(ctx, `INSERT INTO encrypted_phrases(object_id, nonce, ciphertext, updated_at)
-VALUES(?, ?, ?, ?)
-ON CONFLICT(object_id) DO UPDATE SET nonce=excluded.nonce, ciphertext=excluded.ciphertext, updated_at=excluded.updated_at`,
-		objectID[:], nonce, ciphertext, time.Now().UnixMilli())
-	if err == nil {
-		err = bumpGeneration(ctx, transaction)
-	}
-	if err == nil && enqueue {
-		_, err = transaction.ExecContext(ctx, `INSERT INTO encrypted_outbox(object_id, nonce, ciphertext, created_at)
-VALUES(?, ?, ?, ?)
-ON CONFLICT(object_id) DO UPDATE SET nonce=excluded.nonce, ciphertext=excluded.ciphertext,
-  version=encrypted_outbox.version + 1, created_at=excluded.created_at`,
-			objectID[:], eventNonce, eventCiphertext, time.Now().UnixMilli())
-	}
-	if err == nil && nativeEvent != nil {
-		normalized, normalizeErr := store.normalizeLearningEvent(*nativeEvent)
-		if normalizeErr != nil {
-			err = normalizeErr
-		} else {
-			err = store.insertLearningEventTx(ctx, transaction, normalized)
-		}
-	}
-	if err != nil {
-		return err
-	}
-	return transaction.Commit()
-}
-
 // SaveExplicit records a user-reviewed phrase. Pinned phrases are immediately
 // sync-eligible in the caller; automatically learned entries use RecordSelection.
 func (store *Store) SaveExplicit(ctx context.Context, phrase Phrase) error {
@@ -408,11 +355,16 @@ func (store *Store) SaveExplicit(ctx context.Context, phrase Phrase) error {
 	wantedPinned := phrase.Pinned
 	wantedCount := phrase.UseCount
 	wantedLastUsedDay := phrase.LastUsedDay
-	existing, found, err := store.loadByID(ctx, objectID[:])
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
 	if err != nil {
 		return err
 	}
-	clock, err := store.nextHLC(ctx)
+	defer transaction.Rollback()
+	existing, found, err := store.loadByIDInTransaction(ctx, transaction, objectID[:])
+	if err != nil {
+		return err
+	}
+	clock, err := store.nextHLCInTransaction(ctx, transaction)
 	if err != nil {
 		return err
 	}
@@ -453,20 +405,10 @@ func (store *Store) SaveExplicit(ctx context.Context, phrase Phrase) error {
 		phrase.CRDT.Counts[store.deviceID] += delta
 	}
 	materializePhrase(&phrase)
-	return store.upsert(ctx, phrase, true)
-}
-
-func (store *Store) loadByID(ctx context.Context, objectID []byte) (Phrase, bool, error) {
-	var nonce, ciphertext []byte
-	err := store.db.QueryRowContext(ctx, "SELECT nonce, ciphertext FROM encrypted_phrases WHERE object_id = ?", objectID).Scan(&nonce, &ciphertext)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Phrase{}, false, nil
+	if err := store.upsertPhraseInTransaction(ctx, transaction, objectID, phrase, true); err != nil {
+		return err
 	}
-	if err != nil {
-		return Phrase{}, false, err
-	}
-	phrase, err := store.open(objectID, nonce, ciphertext)
-	return phrase, true, err
+	return transaction.Commit()
 }
 
 // RecordSelection never writes anything for protected contexts. The first
@@ -478,7 +420,21 @@ func (store *Store) RecordSelection(ctx context.Context, phrase Phrase, learning
 	}
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
-	return store.recordSelectionLocked(ctx, phrase, nil)
+	// Reserve the WAL writer before reading the phrase. Store.mutation protects
+	// only this handle; another connection/process may mutate the same object.
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
+	if err != nil {
+		return LearnResult{}, err
+	}
+	defer transaction.Rollback()
+	result, err := store.recordSelectionInTransaction(ctx, transaction, phrase, nil)
+	if err != nil {
+		return LearnResult{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return LearnResult{}, err
+	}
+	return result, nil
 }
 
 // RecordNativeSelection records a background native event and its receipt in
@@ -499,15 +455,23 @@ func (store *Store) RecordNativeSelection(ctx context.Context, selection NativeS
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
-	consumed, err := nativeLearningEventExists(ctx, store.db, selection.EventID)
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
+	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	defer transaction.Rollback()
+	consumed, err := nativeLearningEventExists(ctx, transaction, selection.EventID)
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
 	if consumed {
 		return NativeSelectionResult{Duplicate: true}, nil
 	}
-	result, err := store.recordSelectionLocked(ctx, selection.Phrase, &nativeEvent)
+	result, err := store.recordSelectionInTransaction(ctx, transaction, selection.Phrase, &nativeEvent)
 	if err != nil {
+		return NativeSelectionResult{}, err
+	}
+	if err := transaction.Commit(); err != nil {
 		return NativeSelectionResult{}, err
 	}
 	return NativeSelectionResult{LearnResult: result}, nil
@@ -523,7 +487,7 @@ func (store *Store) RecordNativeSelectionReceipt(ctx context.Context, eventID st
 	}
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
-	transaction, err := store.db.BeginTx(ctx, nil)
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
 	if err != nil {
 		return NativeSelectionResult{}, err
 	}
@@ -560,12 +524,12 @@ func validNativeEventID(eventID string) bool {
 	return true
 }
 
-func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, nativeEvent *NativeLearningEvent) (LearnResult, error) {
+func (store *Store) recordSelectionInTransaction(ctx context.Context, transaction *sql.Tx, phrase Phrase, nativeEvent *NativeLearningEvent) (LearnResult, error) {
 	objectID, err := store.objectID(phrase)
 	if err != nil {
 		return LearnResult{}, err
 	}
-	existing, found, err := store.loadByID(ctx, objectID[:])
+	existing, found, err := store.loadByIDInTransaction(ctx, transaction, objectID[:])
 	if err != nil {
 		return LearnResult{}, err
 	}
@@ -574,7 +538,7 @@ func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, na
 	} else {
 		phrase.Source = "learned"
 	}
-	clock, err := store.nextHLC(ctx)
+	clock, err := store.nextHLCInTransaction(ctx, transaction)
 	if err != nil {
 		return LearnResult{}, err
 	}
@@ -583,15 +547,7 @@ func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, na
 	}
 	if !phrase.CRDT.Presence.Present {
 		if nativeEvent != nil {
-			transaction, err := store.db.BeginTx(ctx, nil)
-			if err != nil {
-				return LearnResult{}, err
-			}
-			defer transaction.Rollback()
 			if err := store.insertLearningEventTx(ctx, transaction, *nativeEvent); err != nil {
-				return LearnResult{}, err
-			}
-			if err := transaction.Commit(); err != nil {
 				return LearnResult{}, err
 			}
 		}
@@ -603,8 +559,13 @@ func (store *Store) recordSelectionLocked(ctx context.Context, phrase Phrase, na
 	phrase.CRDT.Counts[store.deviceID]++
 	phrase.LastUsedDay = store.now().UTC().Unix() / 86400
 	materializePhrase(&phrase)
-	if err := store.upsertWithNativeEvent(ctx, phrase, phrase.UseCount >= learningThreshold, nativeEvent); err != nil {
+	if err := store.upsertPhraseInTransaction(ctx, transaction, objectID, phrase, phrase.UseCount >= learningThreshold); err != nil {
 		return LearnResult{}, err
+	}
+	if nativeEvent != nil {
+		if err := store.insertLearningEventTx(ctx, transaction, *nativeEvent); err != nil {
+			return LearnResult{}, err
+		}
 	}
 	return LearnResult{Recorded: true, UseCount: phrase.UseCount, SyncEligible: phrase.UseCount >= learningThreshold}, nil
 }
@@ -617,7 +578,12 @@ func (store *Store) Delete(ctx context.Context, text, pinyin string) error {
 	if err != nil {
 		return err
 	}
-	phrase, found, err := store.loadByID(ctx, objectID[:])
+	transaction, err := beginImmediateWithRetry(ctx, store.db)
+	if err != nil {
+		return err
+	}
+	defer transaction.Rollback()
+	phrase, found, err := store.loadByIDInTransaction(ctx, transaction, objectID[:])
 	if err != nil {
 		return err
 	}
@@ -625,7 +591,7 @@ func (store *Store) Delete(ctx context.Context, text, pinyin string) error {
 		phrase = probe
 		phrase.Source = "tombstone"
 	}
-	clock, err := store.nextHLC(ctx)
+	clock, err := store.nextHLCInTransaction(ctx, transaction)
 	if err != nil {
 		return err
 	}
@@ -635,7 +601,10 @@ func (store *Store) Delete(ctx context.Context, text, pinyin string) error {
 	phrase.CRDT.Presence.Present = false
 	phrase.CRDT.Presence.Clock = clock
 	materializePhrase(&phrase)
-	return store.upsert(ctx, phrase, true)
+	if err := store.upsertPhraseInTransaction(ctx, transaction, objectID, phrase, true); err != nil {
+		return err
+	}
+	return transaction.Commit()
 }
 
 // PendingEventCount is an operational/background-worker metric. Outbox rows
