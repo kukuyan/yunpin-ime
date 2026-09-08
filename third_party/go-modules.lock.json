@@ -216,6 +216,13 @@
   ],
   "local_replacements": [
     {
+      "module": "github.com/kukuyan/yunpin-ime/desktopagent",
+      "version": "v0.0.0",
+      "replacement": "../desktopagent",
+      "license": "Apache-2.0",
+      "license_source": "LICENSE"
+    },
+    {
       "module": "github.com/kukuyan/yunpin-ime/protocol",
       "version": "v0.0.0",
       "replacement": "../protocol",
