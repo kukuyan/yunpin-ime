@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -388,12 +389,18 @@ func rebuildPrivateSnapshot(ctx context.Context, store *localstore.Store, baseli
 }
 
 func snapshotReloadMarker(digest [sha256.Size]byte) []byte {
-	return []byte("v1\t" + hex.EncodeToString(digest[:]) + "\n")
+	version := "v1"
+	if runtime.GOOS == "darwin" {
+		// v1 on macOS only proved notification delivery. Do not carry that
+		// weaker receipt across the engine-acknowledgement upgrade.
+		version = "v2-applied"
+	}
+	return []byte(version + "\t" + hex.EncodeToString(digest[:]) + "\n")
 }
 
 // snapshotReloadPending compares the generated snapshot with the last digest
 // whose platform reload completed. This closes the crash window between the
-// atomic private.tsv replacement and the reload notification: a later run
+// atomic private.tsv replacement and the host's application ACK: a later run
 // retries the reload even when private.tsv itself no longer changes.
 func snapshotReloadPending(path string, digest [sha256.Size]byte) (bool, error) {
 	if path == "" || !filepath.IsAbs(path) {

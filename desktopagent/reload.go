@@ -3,15 +3,27 @@ package desktopagent
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
 
+type snapshotReloadRequest struct {
+	Generation uint64
+	Digest     [sha256.Size]byte
+}
+type snapshotReloadContextKey struct{}
+type settingsDeployContextKey struct{}
+
+func snapshotReloadContext(ctx context.Context, generation uint64, digest [sha256.Size]byte) context.Context {
+	return context.WithValue(ctx, snapshotReloadContextKey{}, snapshotReloadRequest{generation, digest})
+}
+
 // executableReloadHook runs one platform-owned executable directly, without a
-// shell or inherited standard streams. Arguments are compile-time constants in
-// the platform-specific DefaultReloadHook implementations.
+// shell or inherited standard streams. Arguments are fixed platform actions
+// and, for the snapshot action, a validated unpredictable request nonce.
 func executableReloadHook(path string, arguments ...string) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if path == "" || !filepath.IsAbs(path) {

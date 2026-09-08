@@ -157,7 +157,7 @@ class MacOSIntegrationTests(unittest.TestCase):
 
     def test_ordered_gpl_patch_set_applies_and_records_base(self) -> None:
         patches = sorted(PATCH_DIR.glob("*.patch"))
-        self.assertEqual(16, len(patches))
+        self.assertEqual(17, len(patches))
         for patch in patches:
             text = patch.read_text(encoding="utf-8")
             self.assertIn("SPDX-License-Identifier: GPL-3.0-only", text)
@@ -267,7 +267,7 @@ class MacOSIntegrationTests(unittest.TestCase):
         self.assertIn("validMaintenanceNonce", sources)
         self.assertIn("requestNonce: String", sources)
         self.assertIn("join_maintenance_thread", sources)
-        self.assertIn('acknowledgementName = "rime-maintenance.ack"', sources)
+        self.assertIn('acknowledgementName: String = "rime-maintenance.ack"', sources)
         self.assertIn("O_DIRECTORY | O_NOFOLLOW", sources)
         self.assertIn("O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW", sources)
         self.assertIn("fchmod(temporaryFD, 0o600)", sources)
@@ -2082,4 +2082,6 @@ class MacOSIntegrationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    from test_snapshot_activation import SnapshotActivationTests
+
     unittest.main()

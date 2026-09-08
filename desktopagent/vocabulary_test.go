@@ -55,7 +55,13 @@ func newVocabularyAgent(t *testing.T) Agent {
 		BaselinePath:       baseline,
 		SnapshotPath:       filepath.Join(root, "rime", "private.tsv"),
 		SnapshotStatePath:  filepath.Join(root, "sync", "snapshot-state"),
-		Reload:             func(context.Context) error { reloads++; return nil },
+		Reload: func(ctx context.Context) error {
+			if _, ok := ctx.Value(snapshotReloadContextKey{}).(snapshotReloadRequest); !ok {
+				t.Fatal("vocabulary publication omitted the snapshot application identity")
+			}
+			reloads++
+			return nil
+		},
 	}
 }
 

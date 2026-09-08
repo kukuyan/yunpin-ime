@@ -117,6 +117,10 @@
     {
       "path": "platform/patches/squirrel/0016-yunpin-start-replay-lab-spooler.patch",
       "sha256": "639b97be4a0713b8e5e2196cee813521f3ea9dccdcb2624f1aaa53e33306c32f"
+    },
+    {
+      "path": "platform/patches/squirrel/0017-yunpin-acknowledge-applied-private-snapshot.patch",
+      "sha256": "7bd64827e06dd86f755947e6a7a87fcccac89e3ce1c4fdf988a78c923af168dc"
     }
   ],
   "archives": [
