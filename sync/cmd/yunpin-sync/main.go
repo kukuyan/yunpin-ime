@@ -28,6 +28,9 @@ func main() {
 		log.Fatalf("initialize server: %v", err)
 	}
 	defer application.Close()
+	if err := application.ConfigureTrustedProxies(os.Getenv("YUNPIN_TRUSTED_PROXY_IPS")); err != nil {
+		log.Fatalf("configure trusted proxy peers: %v", err)
+	}
 
 	httpServer := &http.Server{
 		Addr:              listenAddress,
