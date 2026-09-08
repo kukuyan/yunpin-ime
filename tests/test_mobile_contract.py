@@ -319,8 +319,8 @@ class MobileContractTests(unittest.TestCase):
             "prepared-wire retry",
             "compare-and-swap",
             "remove-wins",
-            "fixed two-device preview",
-            "signed roster-chain",
+            "frozen mobile control plane",
+            "signed add-only roster chains",
             "Recovery is out of scope and fail-closed",
             "Containing app and system keyboard boundary",
             "Android uses the native `JobScheduler`",
@@ -370,7 +370,17 @@ class MobileContractTests(unittest.TestCase):
         )
 
         self.assertRegex(server, r"\bprotocolVersion\s*=\s*1\b")
-        self.assertRegex(server, r"\bmaxActiveDevices\s*=\s*2\b")
+        # Desktop enrollment now has a signed add-only chain. The mobile v1
+        # control plane remains gated; its contract must not force the shared
+        # relay back to two devices or confuse a capacity limit with trust.
+        self.assertRegex(server, r"\bmaxActiveDevices\s*=\s*128\b")
+        roster = (ROOT / "protocol" / "roster.go").read_text(encoding="utf-8")
+        self.assertRegex(roster, r"\bMaxChainedRosterDevices\s*=\s*128\b")
+        self.assertIn("VerifyPairingRosterAdvance", roster)
+        self.assertIn("verifyRosterAdvance(previous, roster)", server)
+        self.assertIn('"signed_roster_required"', server)
+        self.assertIn('ControlPlaneGate: "signed_roster_chain_required"',
+                      (MOBILE / "synccore" / "core.go").read_text(encoding="utf-8"))
         self.assertRegex(server, r"\btwoDeviceRecoveryEnabled\s*=\s*false\b")
         self.assertRegex(server, r"\btwoDeviceRevocationEnabled\s*=\s*false\b")
         self.assertIn('"device_limit_reached"', server)
@@ -381,7 +391,9 @@ class MobileContractTests(unittest.TestCase):
         self.assertRegex(credentials, r"\bCredentialBundleVersion\s*=\s*2\b")
         self.assertIn("{'Y', 'P', 'C', 'B'}", credentials)
         self.assertGreaterEqual(credentials.count("len(bundle.TrustedRoster.Devices) != 2"), 1)
-        self.assertIn("supports exactly two", credentials)
+        self.assertIn("v2 credential requires an unchained two-device anchor", credentials)
+        self.assertRegex(credentials, r"\bChainedCredentialBundleVersion\s*=\s*3\b")
+        self.assertIn("v3 credential requires a chained multi-device checkpoint", credentials)
 
         self.assertRegex(boxes, r"\bSealedBoxWireVersion\s*=\s*1\b")
         self.assertIn("{'Y', 'P', 'B', 'X'}", boxes)
