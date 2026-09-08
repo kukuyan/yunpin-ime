@@ -1,0 +1,239 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 9cc96e20dc71b80876b12f689bb5863c76c2a7ed
+# Applies after the existing YunPin Weasel patch series.
+# Distinguish composing from post-connect IPC failures with a closed v2 reply.
+diff --git a/RimeWithWeasel/RimeWithWeasel.cpp b/RimeWithWeasel/RimeWithWeasel.cpp
+index 9bcb7de..95b59bc 100644
+--- a/RimeWithWeasel/RimeWithWeasel.cpp
++++ b/RimeWithWeasel/RimeWithWeasel.cpp
+@@ -585,8 +585,12 @@ void RimeWithWeaselHandler::StartMaintenance() {
+ }
+ 
+ bool RimeWithWeaselHandler::_SessionsAreIdle() {
++  return _MaintenanceReadiness() == weasel::MaintenanceResult::Accepted;
++}
++
++weasel::MaintenanceResult RimeWithWeaselHandler::_MaintenanceReadiness() {
+   if (m_disabled)
+-    return true;
++    return weasel::MaintenanceResult::Accepted;
+   for (auto entry = m_session_status_map.begin();
+        entry != m_session_status_map.end();) {
+     const RimeSessionId session_id = entry->second.session_id;
+@@ -598,14 +602,14 @@ bool RimeWithWeaselHandler::_SessionsAreIdle() {
+     }
+     RIME_STRUCT(RimeStatus, status);
+     if (!rime_api->get_status(session_id, &status))
+-      return false;
++      return weasel::MaintenanceResult::ProtocolError;
+     const bool idle = !status.is_composing;
+     rime_api->free_status(&status);
+     if (!idle)
+-      return false;
++      return weasel::MaintenanceResult::ComposingBusy;
+     ++entry;
+   }
+-  return true;
++  return weasel::MaintenanceResult::Accepted;
+ }
+ 
+ bool RimeWithWeaselHandler::TryStartMaintenance() {
+@@ -618,6 +622,15 @@ bool RimeWithWeaselHandler::TryStartMaintenance() {
+   return true;
+ }
+ 
++weasel::MaintenanceResult RimeWithWeaselHandler::TryStartMaintenanceResult() {
++  const auto result = _MaintenanceReadiness();
++  if (result != weasel::MaintenanceResult::Accepted)
++    return result;
++  if (!m_disabled)
++    StartMaintenance();
++  return weasel::MaintenanceResult::Accepted;
++}
++
+ void RimeWithWeaselHandler::EndMaintenance() {
+   if (m_disabled) {
+     Initialize();
+diff --git a/WeaselDeployer/Configurator.cpp b/WeaselDeployer/Configurator.cpp
+index 5fabe04..f7ce3b8 100644
+--- a/WeaselDeployer/Configurator.cpp
++++ b/WeaselDeployer/Configurator.cpp
+@@ -200,6 +200,7 @@ int Configurator::SyncUserData() {
+   // Keep initial IPC unavailability distinct from authenticated state busy
+   // without relying on a writable side channel or PATH lookup.
+   constexpr int kMaintenanceUnavailableExitCode = 69;
++  constexpr int kMaintenanceProtocolErrorExitCode = 70;
+   constexpr int kMaintenanceBusyExitCode = 75;
+   HANDLE hMutex = CreateMutex(NULL, TRUE, L"YunPinDeployerMutex");
+   if (!hMutex) {
+@@ -223,10 +224,17 @@ int Configurator::SyncUserData() {
+     return kMaintenanceUnavailableExitCode;
+   }
+   LOG(INFO) << "Requesting idle-only WeaselServer maintenance mode.";
+-  if (!client.TryStartMaintenance()) {
+-    LOG(INFO) << "Deferring user data sync while a composition is active.";
++  const auto maintenance = client.TryStartMaintenanceResult();
++  if (maintenance != weasel::MaintenanceResult::Accepted) {
+     CloseHandle(hMutex);
+-    return kMaintenanceBusyExitCode;
++    switch (maintenance) {
++      case weasel::MaintenanceResult::ComposingBusy:
++        return kMaintenanceBusyExitCode;
++      case weasel::MaintenanceResult::Unavailable:
++        return kMaintenanceUnavailableExitCode;
++      default:
++        return kMaintenanceProtocolErrorExitCode;
++    }
+   }
+ 
+   int result = 0;
+diff --git a/WeaselIPC/WeaselClientImpl.cpp b/WeaselIPC/WeaselClientImpl.cpp
+index 72c1926..526fcb3 100644
+--- a/WeaselIPC/WeaselClientImpl.cpp
++++ b/WeaselIPC/WeaselClientImpl.cpp
+@@ -170,6 +170,21 @@ bool ClientImpl::TryStartMaintenance() {
+   return accepted != 0;
+ }
+ 
++MaintenanceResult ClientImpl::TryStartMaintenanceResult() {
++  try {
++    // Do not use _SendMessage: its exception-to-zero conversion loses the
++    // distinction between a broken pipe and a successfully received reply.
++    PipeMessage request{WEASEL_IPC_START_MAINTENANCE,
++                        WEASEL_IPC_MAINTENANCE_IF_IDLE_V2, 0};
++    const auto result = DecodeMaintenanceReply(channel.Transact(request));
++    if (result == MaintenanceResult::Accepted)
++      session_id = 0;
++    return result;
++  } catch (DWORD) {
++    return MaintenanceResult::Unavailable;
++  }
++}
++
+ void ClientImpl::EndMaintenance() {
+   _SendMessage(WEASEL_IPC_END_MAINTENANCE, 0, 0);
+   session_id = 0;
+@@ -281,6 +296,10 @@ bool Client::TryStartMaintenance() {
+   return m_pImpl->TryStartMaintenance();
+ }
+ 
++MaintenanceResult Client::TryStartMaintenanceResult() {
++  return m_pImpl->TryStartMaintenanceResult();
++}
++
+ void Client::EndMaintenance() {
+   m_pImpl->EndMaintenance();
+ }
+diff --git a/WeaselIPC/WeaselClientImpl.h b/WeaselIPC/WeaselClientImpl.h
+index bb0b58e..03266a3 100644
+--- a/WeaselIPC/WeaselClientImpl.h
++++ b/WeaselIPC/WeaselClientImpl.h
+@@ -16,6 +16,7 @@ class ClientImpl {
+   void EndSession();
+   void StartMaintenance();
+   bool TryStartMaintenance();
++  MaintenanceResult TryStartMaintenanceResult();
+   void EndMaintenance();
+   bool Echo();
+   bool ProcessKeyEvent(KeyEvent const& keyEvent);
+diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
+index 50f7d8e..a74f052 100644
+--- a/WeaselIPCServer/WeaselServerImpl.cpp
++++ b/WeaselIPCServer/WeaselServerImpl.cpp
+@@ -295,6 +295,10 @@ DWORD ServerImpl::OnUpdateInputPosition(WEASEL_IPC_COMMAND uMsg,
+ DWORD ServerImpl::OnStartMaintenance(WEASEL_IPC_COMMAND uMsg,
+                                      DWORD wParam,
+                                      DWORD lParam) {
++  if (wParam == WEASEL_IPC_MAINTENANCE_IF_IDLE_V2)
++    return static_cast<DWORD>(m_pRequestHandler
++        ? m_pRequestHandler->TryStartMaintenanceResult()
++        : MaintenanceResult::Unavailable);
+   if (!m_pRequestHandler)
+     return FALSE;
+   if (wParam == WEASEL_IPC_MAINTENANCE_IF_IDLE)
+diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
+index ff220a3..2e9d998 100644
+--- a/include/RimeWithWeasel.h
++++ b/include/RimeWithWeasel.h
+@@ -57,6 +57,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   virtual void UpdateInputPosition(RECT const& rc, WeaselSessionId ipc_id);
+   virtual void StartMaintenance();
+   virtual bool TryStartMaintenance();
++  virtual weasel::MaintenanceResult TryStartMaintenanceResult();
+   virtual void EndMaintenance();
+   virtual void SetOption(WeaselSessionId ipc_id,
+                          const std::string& opt,
+@@ -86,6 +87,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
+   bool _IsSessionTSF(RimeSessionId session_id);
+   void _UpdateInlinePreeditStatus(WeaselSessionId ipc_id);
+   bool _SessionsAreIdle();
++  weasel::MaintenanceResult _MaintenanceReadiness();
+ 
+   RimeSessionId to_session_id(WeaselSessionId ipc_id) {
+     const auto found = m_session_status_map.find(ipc_id);
+diff --git a/include/WeaselIPC.h b/include/WeaselIPC.h
+index 57164d0..95bbc63 100644
+--- a/include/WeaselIPC.h
++++ b/include/WeaselIPC.h
+@@ -35,9 +35,12 @@ enum WEASEL_IPC_COMMAND {
+   WEASEL_IPC_LAST_COMMAND
+ };
+ 
++#include "YunPinMaintenanceResult.h"
++
+ enum WEASEL_IPC_MAINTENANCE_MODE {
+   WEASEL_IPC_MAINTENANCE_FORCE = 0,
+   WEASEL_IPC_MAINTENANCE_IF_IDLE = 1,
++  WEASEL_IPC_MAINTENANCE_IF_IDLE_V2 = 2,
+ };
+ 
+ namespace weasel {
+@@ -87,6 +90,9 @@ struct RequestHandler {
+     StartMaintenance();
+     return true;
+   }
++  virtual MaintenanceResult TryStartMaintenanceResult() {
++    return MaintenanceResult::ProtocolError;
++  }
+   virtual void EndMaintenance() {}
+   virtual void SetOption(DWORD session_id, const std::string& opt, bool val) {}
+   virtual void UpdateColorTheme(BOOL darkMode) {}
+@@ -127,6 +133,7 @@ class Client {
+   void StartMaintenance();
+   // 僅在所有輸入會話皆無未提交組字時進入維護模式
+   bool TryStartMaintenance();
++  MaintenanceResult TryStartMaintenanceResult();
+   // 退出維護模式
+   void EndMaintenance();
+   // 测试连接
+diff --git a/include/YunPinMaintenanceResult.h b/include/YunPinMaintenanceResult.h
+new file mode 100644
+index 0000000..30781b4
+--- /dev/null
++++ b/include/YunPinMaintenanceResult.h
+@@ -0,0 +1,24 @@
++// SPDX-License-Identifier: GPL-3.0-only
++#pragma once
++
++namespace weasel {
++// Nonzero, versioned wire values: a legacy boolean reply is never a v2 ACK.
++enum class MaintenanceResult : unsigned long {
++  Accepted = 0x59500101,
++  ComposingBusy = 0x59500102,
++  Unavailable = 0x59500103,
++  ProtocolError = 0x59500104,
++};
++
++inline MaintenanceResult DecodeMaintenanceReply(unsigned long value) {
++  switch (value) {
++    case static_cast<unsigned long>(MaintenanceResult::Accepted):
++    case static_cast<unsigned long>(MaintenanceResult::ComposingBusy):
++    case static_cast<unsigned long>(MaintenanceResult::Unavailable):
++    case static_cast<unsigned long>(MaintenanceResult::ProtocolError):
++      return static_cast<MaintenanceResult>(value);
++    default:
++      return MaintenanceResult::ProtocolError;
++  }
++}
++}  // namespace weasel
+

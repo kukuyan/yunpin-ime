@@ -1,6 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build windows
-
 package desktopagent
 
 import (
@@ -24,6 +22,10 @@ func TestWindowsRimeMaintenanceExitCodeContract(t *testing.T) {
 	busy := windowsRimeMaintenanceExitCodeError(windowsRimeMaintenanceBusyExitCode)
 	if !errors.Is(busy, ErrRimeMaintenanceBusy) || errors.Is(busy, ErrRimeMaintenanceUnavailable) {
 		t.Fatalf("retryable idle-gate result did not map exclusively to ErrRimeMaintenanceBusy: %v", busy)
+	}
+	protocol := windowsRimeMaintenanceExitCodeError(windowsRimeMaintenanceProtocolErrorExitCode)
+	if !errors.Is(protocol, ErrRimeMaintenanceProtocol) || errors.Is(protocol, ErrRimeMaintenanceBusy) {
+		t.Fatalf("malformed or legacy IPC reply was treated as user activity: %v", protocol)
 	}
 	if err := windowsRimeMaintenanceExitCodeError(1); err == nil ||
 		errors.Is(err, ErrRimeMaintenanceBusy) || errors.Is(err, ErrRimeMaintenanceUnavailable) {

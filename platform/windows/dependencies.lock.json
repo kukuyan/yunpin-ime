@@ -63,6 +63,10 @@
       {
         "path": "platform/patches/weasel/0010-yunpin-prune-stale-sessions-before-maintenance.patch",
         "sha256": "600f37504635235d0b007b5ca902f6681b00f1ec93256966738147a4c0b746c1"
+      },
+      {
+        "path": "platform/patches/weasel/0011-yunpin-type-maintenance-ipc-results.patch",
+        "sha256": "9c5623c867edaf8c650b84e511d34dcbcc9424cfeae08fce592a226612430951"
       }
     ]
   },

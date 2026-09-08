@@ -416,7 +416,7 @@ class WindowsClientTests(unittest.TestCase):
                 idle_sessions.index("if (!rime_api->get_status(session_id, &status))") :
                 idle_sessions.index("const bool idle = !status.is_composing")
             ]
-            self.assertIn("return false", uninspectable)
+            self.assertIn("return weasel::MaintenanceResult::ProtocolError", uninspectable)
             self.assertNotIn("erase", uninspectable)
             resolver = rime_with_weasel_header[
                 rime_with_weasel_header.index("RimeSessionId to_session_id") :
@@ -483,7 +483,7 @@ class WindowsClientTests(unittest.TestCase):
             sync_method = configurator[configurator.index("int Configurator::SyncUserData()") :]
             self.assertIn("constexpr int kMaintenanceUnavailableExitCode = 69", sync_method)
             self.assertIn("constexpr int kMaintenanceBusyExitCode = 75", sync_method)
-            self.assertIn("client.TryStartMaintenance()", sync_method)
+            self.assertIn("client.TryStartMaintenanceResult()", sync_method)
             connect_gate = sync_method[
                 sync_method.index("if (!client.Connect())") :
                 sync_method.index("LOG(INFO) << \"Requesting idle-only")
@@ -491,13 +491,14 @@ class WindowsClientTests(unittest.TestCase):
             self.assertIn("return kMaintenanceUnavailableExitCode", connect_gate)
             self.assertNotIn("return kMaintenanceBusyExitCode", connect_gate)
             busy_gate = sync_method[
-                sync_method.index("if (!client.TryStartMaintenance())") :
+                sync_method.index("if (maintenance != weasel::MaintenanceResult::Accepted)") :
                 sync_method.index("int result = 0;")
             ]
             self.assertIn("return kMaintenanceBusyExitCode", busy_gate)
-            self.assertNotIn("return kMaintenanceUnavailableExitCode", busy_gate)
+            self.assertIn("return kMaintenanceUnavailableExitCode", busy_gate)
+            self.assertIn("return kMaintenanceProtocolErrorExitCode", busy_gate)
             self.assertLess(
-                sync_method.index("client.TryStartMaintenance()"),
+                sync_method.index("client.TryStartMaintenanceResult()"),
                 sync_method.index("rime->sync_user_data()"),
             )
             self.assertNotIn("client.StartMaintenance()", sync_method)
@@ -1311,4 +1312,6 @@ class WindowsClientTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    from test_maintenance_result import MaintenanceResultTests
+
     unittest.main()
