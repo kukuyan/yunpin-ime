@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -26,6 +27,8 @@ class MaintenanceResultTests(unittest.TestCase):
                 stream.extractall(target)
             lock = json.loads((ROOT / "platform/windows/dependencies.lock.json").read_text())
             for row in lock["weasel"]["patches"]:
+                if "0011-" in row["path"]:
+                    legacy_server = (target / "WeaselIPCServer/WeaselServerImpl.cpp").read_text(encoding="utf-8-sig")
                 subprocess.run(["git", "-c", "core.whitespace=cr-at-eol", "apply", "--ignore-space-change",
                                 "--whitespace=error-all", str(ROOT / row["path"])], cwd=target, check=True)
             implementation = (target / "WeaselIPC/WeaselClientImpl.cpp").read_text(encoding="utf-8-sig")
@@ -36,18 +39,45 @@ class MaintenanceResultTests(unittest.TestCase):
             start = server.index("weasel::MaintenanceResult RimeWithWeaselHandler::_MaintenanceReadiness()")
             end = server.index("\nbool RimeWithWeaselHandler::TryStartMaintenance()", start)
             readiness = server[start:end]
+            ipc = (target / "include/WeaselIPC.h").read_text(encoding="utf-8-sig")
+            command_start = ipc.index("enum WEASEL_IPC_COMMAND {")
+            commands = ipc[command_start:ipc.index("};", command_start) + 2]
+            # Compile the real legacy dispatcher, not a simulated switch. An
+            # unknown command must not reach any old maintenance handler.
+            begin = legacy_server.index("#define MAP_PIPE_MSG_HANDLE")
+            finish = legacy_server.index("\nPipeServer::PipeServer", begin)
+            dispatch = legacy_server[begin:finish].replace("ServerImpl::HandlePipeMessage", "LegacyServer::HandlePipeMessage")
+            handlers = set(re.findall(r"PIPE_MSG_HANDLE\(WEASEL_[A-Z_]+,\s*(\w+)\)", dispatch))
+            stub_handlers = "\n".join(
+                f"DWORD {name}(WEASEL_IPC_COMMAND, DWORD, DWORD) {{ ++calls; return 1; }}"
+                for name in sorted(handlers))
+            legacy = ("struct LegacyServer { int calls = 0; " + stub_handlers +
+                      " template <typename T> void HandlePipeMessage(PipeMessage, T); };\n" +
+                      dispatch + "\n")
             harness = '''#include <cassert>
 #include <map>
 #include "YunPinMaintenanceResult.h"
 using DWORD = unsigned long;
 using LRESULT = long;
-constexpr int WEASEL_IPC_START_MAINTENANCE = 1;
-constexpr int WEASEL_IPC_MAINTENANCE_IF_IDLE_V2 = 2;
-struct PipeMessage { int message; int mode; int parameter; };
+constexpr int WM_APP = 0x8000;
+''' + commands + '''
+[[maybe_unused]] constexpr int WEASEL_IPC_MAINTENANCE_IF_IDLE_V2 = 2;
+struct PipeMessage { WEASEL_IPC_COMMAND Msg; DWORD wParam; DWORD lParam; };
 using namespace weasel;
+''' + legacy + '''
 struct Channel {
+  LegacyServer legacy;
+  bool old_host = false;
   bool fail = false; LRESULT reply = 0;
-  LRESULT Transact(PipeMessage) { if (fail) throw DWORD(109); return reply; }
+  LRESULT Transact(PipeMessage request) {
+    if (fail) throw DWORD(109);
+    if (old_host) {
+      LRESULT value = 0;
+      legacy.HandlePipeMessage(request, [&](DWORD result) { value = result; });
+      return value;
+    }
+    return reply;
+  }
 };
 struct ClientImpl {
   Channel channel; int session_id = 42;
@@ -74,6 +104,11 @@ struct RimeWithWeaselHandler {
 ''' + body + readiness + '''
 int main() {
   ClientImpl client;
+  client.channel.old_host = true;
+  assert(client.TryStartMaintenanceResult() == MaintenanceResult::ProtocolError);
+  assert(client.channel.legacy.calls == 0);
+  assert(client.session_id == 42);
+  client.channel.old_host = false;
   client.channel.fail = true;
   assert(client.TryStartMaintenanceResult() == MaintenanceResult::Unavailable);
   assert(client.session_id == 42);
@@ -106,7 +141,7 @@ int main() {
 }
 '''
             (target / "maintenance_test.cpp").write_text(harness)
-            subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-include", "initializer_list",
+            subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wno-switch", "-include", "initializer_list",
                             "-I", str(target / "include"), str(target / "maintenance_test.cpp"),
                             "-o", str(target / "maintenance-test")], check=True)
             subprocess.run([str(target / "maintenance-test")], check=True)

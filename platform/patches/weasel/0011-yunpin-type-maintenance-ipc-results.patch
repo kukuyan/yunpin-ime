@@ -88,10 +88,10 @@ index 5fabe04..f7ce3b8 100644
  
    int result = 0;
 diff --git a/WeaselIPC/WeaselClientImpl.cpp b/WeaselIPC/WeaselClientImpl.cpp
-index 72c1926..526fcb3 100644
+index 72c1926..2355622 100644
 --- a/WeaselIPC/WeaselClientImpl.cpp
 +++ b/WeaselIPC/WeaselClientImpl.cpp
-@@ -170,6 +170,21 @@ bool ClientImpl::TryStartMaintenance() {
+@@ -170,6 +170,22 @@ bool ClientImpl::TryStartMaintenance() {
    return accepted != 0;
  }
  
@@ -99,8 +99,9 @@ index 72c1926..526fcb3 100644
 +  try {
 +    // Do not use _SendMessage: its exception-to-zero conversion loses the
 +    // distinction between a broken pipe and a successfully received reply.
-+    PipeMessage request{WEASEL_IPC_START_MAINTENANCE,
-+                        WEASEL_IPC_MAINTENANCE_IF_IDLE_V2, 0};
++    // A separate appended command is essential: an old server interprets
++    // unknown modes on START_MAINTENANCE as a forced maintenance request.
++    PipeMessage request{WEASEL_IPC_TRY_START_MAINTENANCE_V2, 0, 0};
 +    const auto result = DecodeMaintenanceReply(channel.Transact(request));
 +    if (result == MaintenanceResult::Accepted)
 +      session_id = 0;
@@ -113,7 +114,7 @@ index 72c1926..526fcb3 100644
  void ClientImpl::EndMaintenance() {
    _SendMessage(WEASEL_IPC_END_MAINTENANCE, 0, 0);
    session_id = 0;
-@@ -281,6 +296,10 @@ bool Client::TryStartMaintenance() {
+@@ -281,6 +297,10 @@ bool Client::TryStartMaintenance() {
    return m_pImpl->TryStartMaintenance();
  }
  
@@ -137,20 +138,28 @@ index bb0b58e..03266a3 100644
    bool Echo();
    bool ProcessKeyEvent(KeyEvent const& keyEvent);
 diff --git a/WeaselIPCServer/WeaselServerImpl.cpp b/WeaselIPCServer/WeaselServerImpl.cpp
-index 50f7d8e..a74f052 100644
+index 50f7d8e..4a0e80f 100644
 --- a/WeaselIPCServer/WeaselServerImpl.cpp
 +++ b/WeaselIPCServer/WeaselServerImpl.cpp
 @@ -295,6 +295,10 @@ DWORD ServerImpl::OnUpdateInputPosition(WEASEL_IPC_COMMAND uMsg,
  DWORD ServerImpl::OnStartMaintenance(WEASEL_IPC_COMMAND uMsg,
                                       DWORD wParam,
                                       DWORD lParam) {
-+  if (wParam == WEASEL_IPC_MAINTENANCE_IF_IDLE_V2)
++  if (uMsg == WEASEL_IPC_TRY_START_MAINTENANCE_V2)
 +    return static_cast<DWORD>(m_pRequestHandler
 +        ? m_pRequestHandler->TryStartMaintenanceResult()
 +        : MaintenanceResult::Unavailable);
    if (!m_pRequestHandler)
      return FALSE;
    if (wParam == WEASEL_IPC_MAINTENANCE_IF_IDLE)
+@@ -391,6 +395,7 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
+   PIPE_MSG_HANDLE(WEASEL_IPC_FOCUS_OUT, OnFocusOut)
+   PIPE_MSG_HANDLE(WEASEL_IPC_UPDATE_INPUT_POS, OnUpdateInputPosition)
+   PIPE_MSG_HANDLE(WEASEL_IPC_START_MAINTENANCE, OnStartMaintenance)
++  PIPE_MSG_HANDLE(WEASEL_IPC_TRY_START_MAINTENANCE_V2, OnStartMaintenance)
+   PIPE_MSG_HANDLE(WEASEL_IPC_END_MAINTENANCE, OnEndMaintenance)
+   PIPE_MSG_HANDLE(WEASEL_IPC_COMMIT_COMPOSITION, OnCommitComposition)
+   PIPE_MSG_HANDLE(WEASEL_IPC_CLEAR_COMPOSITION, OnClearComposition);
 diff --git a/include/RimeWithWeasel.h b/include/RimeWithWeasel.h
 index ff220a3..2e9d998 100644
 --- a/include/RimeWithWeasel.h
@@ -172,10 +181,14 @@ index ff220a3..2e9d998 100644
    RimeSessionId to_session_id(WeaselSessionId ipc_id) {
      const auto found = m_session_status_map.find(ipc_id);
 diff --git a/include/WeaselIPC.h b/include/WeaselIPC.h
-index 57164d0..95bbc63 100644
+index 57164d0..13b0be4 100644
 --- a/include/WeaselIPC.h
 +++ b/include/WeaselIPC.h
-@@ -35,9 +35,12 @@ enum WEASEL_IPC_COMMAND {
+@@ -32,9 +32,12 @@ enum WEASEL_IPC_COMMAND {
+   WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE,
+   WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
+   WEASEL_IPC_CHANGE_PAGE,
++  WEASEL_IPC_TRY_START_MAINTENANCE_V2,
    WEASEL_IPC_LAST_COMMAND
  };
  
@@ -184,10 +197,6 @@ index 57164d0..95bbc63 100644
  enum WEASEL_IPC_MAINTENANCE_MODE {
    WEASEL_IPC_MAINTENANCE_FORCE = 0,
    WEASEL_IPC_MAINTENANCE_IF_IDLE = 1,
-+  WEASEL_IPC_MAINTENANCE_IF_IDLE_V2 = 2,
- };
- 
- namespace weasel {
 @@ -87,6 +90,9 @@ struct RequestHandler {
      StartMaintenance();
      return true;
@@ -236,4 +245,3 @@ index 0000000..30781b4
 +  }
 +}
 +}  // namespace weasel
-
