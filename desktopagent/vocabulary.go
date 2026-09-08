@@ -186,7 +186,7 @@ func (agent Agent) republishSnapshot(
 	if agent.Reload == nil {
 		return errors.New("private snapshot is pending reload but no platform reload hook is available")
 	}
-	if err := agent.Reload(ctx); err != nil {
+	if err := agent.Reload(snapshotReloadContext(ctx, rebuilt.Generation, rebuilt.digest)); err != nil {
 		return fmt.Errorf("reload Rime after atomic snapshot replacement: %w", err)
 	}
 	if err := markSnapshotReloaded(agent.SnapshotStatePath, rebuilt.digest); err != nil {

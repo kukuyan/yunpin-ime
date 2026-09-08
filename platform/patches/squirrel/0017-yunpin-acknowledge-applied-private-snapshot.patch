@@ -1,0 +1,250 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Base-Commit: 876adebaf2f612951dcdca8a591de65401222b9a
+# Applies after the existing YunPin Squirrel patch series.
+# Acknowledge exact snapshot application only after real filter construction.
+diff --git a/sources/Main.swift b/sources/Main.swift
+index 3eff224..e738171 100644
+--- a/sources/Main.swift
++++ b/sources/Main.swift
+@@ -94,6 +94,12 @@ struct SquirrelApp {
+           rimeAPI.deployer_initialize(nil)
+           _ = rimeAPI.deploy()
+           return true
++        case "--reload-snapshot":
++          guard args.count == 3, validMaintenanceNonce(args[2]) else {
++            exit(64)
++          }
++          DistributedNotificationCenter.default().postNotificationName(.init("YunPinSnapshotReloadNotification"), object: args[2], deliverImmediately: true)
++          return true
+         case "--sync":
+           guard args.count == 3, validMaintenanceNonce(args[2]) else {
+             fputs("YunPin --sync requires one private maintenance request nonce.\n", stderr)
+@@ -160,6 +166,7 @@ Supported arguments:
+ Perform actions:
+   --quit                     quit all Squirrel process
+   --reload                   deploy
++  --reload-snapshot <request nonce>  apply the private candidate snapshot with an engine receipt
+   --sync <request nonce>     refresh the private local Rime userdb snapshot
+   --build                    build all schemas in current directory
+ Install YunPin:
+diff --git a/sources/SquirrelApplicationDelegate.swift b/sources/SquirrelApplicationDelegate.swift
+index 845f7a7..2781b01 100644
+--- a/sources/SquirrelApplicationDelegate.swift
++++ b/sources/SquirrelApplicationDelegate.swift
+@@ -17,6 +17,9 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+   private let rimeSyncCompletionQueue = DispatchQueue(label: "io.github.kukuyan.inputmethod.YunPin.rime-sync-completion")
+   private let rimeSyncStateLock = NSLock()
+   private var rimeSyncInFlight = false
++  private let snapshotHostSession = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
++  private var appliedSnapshotSession: RimeSessionId = 0
++  private var snapshotProbeSession: RimeSessionId = 0
+   var config: SquirrelConfig?
+   var panel: SquirrelPanel?
+   var enableNotifications = false
+@@ -49,7 +52,11 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+     self.loadSettings()
+   }
+ 
+-  private func writeMaintenanceAcknowledgement(_ nonce: String, busy: Bool = false) -> Bool {
++  private func writeMaintenanceAcknowledgement(_ nonce: String, busy: Bool = false,
++      acknowledgementName: String = "rime-maintenance.ack", contents: String? = nil) -> Bool {
++    guard acknowledgementName == "rime-maintenance.ack" || acknowledgementName == "snapshot-reload.ack" else {
++      return false
++    }
+     let directoryURL = FileManager.default.homeDirectoryForCurrentUser
+       .appendingPathComponent("Library", isDirectory: true)
+       .appendingPathComponent("Application Support", isDirectory: true)
+@@ -69,7 +76,6 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+       return false
+     }
+ 
+-    let acknowledgementName = "rime-maintenance.ack"
+     var existingMetadata = stat()
+     if fstatat(directoryFD, acknowledgementName, &existingMetadata, AT_SYMLINK_NOFOLLOW) == 0 {
+       guard (existingMetadata.st_mode & S_IFMT) == S_IFREG,
+@@ -81,7 +87,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+       return false
+     }
+ 
+-    let temporaryName = ".rime-maintenance.ack.\(nonce).tmp"
++    let temporaryName = ".\(acknowledgementName).\(nonce).tmp"
+     let temporaryFD = openat(directoryFD, temporaryName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+     guard temporaryFD >= 0 else {
+       return false
+@@ -103,7 +109,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+       return false
+     }
+ 
+-    let bytes = Array("\(busy ? "busy:" : "")\(nonce)\n".utf8)
++    let bytes = Array((contents ?? "\(busy ? "busy:" : "")\(nonce)\n").utf8)
+     let wroteAll = bytes.withUnsafeBytes { rawBuffer -> Bool in
+       guard let baseAddress = rawBuffer.baseAddress else {
+         return false
+@@ -131,6 +137,106 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+     return true
+   }
+ 
++  private func snapshotReloadRequest(_ nonce: String) -> [String]? {
++    guard SquirrelApp.validMaintenanceNonce(nonce) else { return nil }
++    let directory = FileManager.default.homeDirectoryForCurrentUser
++      .appendingPathComponent("Library/Application Support/YunPin/Sync", isDirectory: true)
++    let directoryFD = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
++    guard directoryFD >= 0 else { return nil }
++    defer { close(directoryFD) }
++    var metadata = stat()
++    guard fstat(directoryFD, &metadata) == 0,
++          (metadata.st_mode & S_IFMT) == S_IFDIR, metadata.st_uid == geteuid(),
++          (metadata.st_mode & 0o777) == 0o700 else { return nil }
++    let requestFD = openat(directoryFD, "snapshot-reload.request", O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
++    guard requestFD >= 0 else { return nil }
++    defer { close(requestFD) }
++    guard fstat(requestFD, &metadata) == 0,
++          (metadata.st_mode & S_IFMT) == S_IFREG, metadata.st_uid == geteuid(),
++          (metadata.st_mode & 0o777) == 0o600, metadata.st_size > 0, metadata.st_size <= 256 else { return nil }
++    var bytes = [UInt8](repeating: 0, count: 257)
++    let count = bytes.withUnsafeMutableBytes { buffer in
++      Darwin.read(requestFD, buffer.baseAddress, buffer.count)
++    }
++    guard count == metadata.st_size,
++          let text = String(bytes: bytes.prefix(count), encoding: .utf8), text.hasSuffix("\n") else { return nil }
++    let fields = String(text.dropLast()).components(separatedBy: "\t")
++    guard fields.count == 4, fields[0] == "v1", fields[1] == nonce,
++          let generation = UInt64(fields[2]), String(generation) == fields[2],
++          fields[3].utf8.count == 64,
++          SquirrelApp.validMaintenanceNonce(String(fields[3].prefix(32))),
++          SquirrelApp.validMaintenanceNonce(String(fields[3].suffix(32))) else { return nil }
++    return fields
++  }
++
++  private func clearAppliedSnapshotSession() {
++    if appliedSnapshotSession != 0, rimeAPI.find_session(appliedSnapshotSession) {
++      _ = rimeAPI.destroy_session(appliedSnapshotSession)
++    }
++    appliedSnapshotSession = 0
++  }
++
++  func shouldIgnoreSnapshotProbeNotification(_ session: RimeSessionId) -> Bool {
++    rimeSyncStateLock.lock()
++    defer { rimeSyncStateLock.unlock() }
++    return session != 0 && session == snapshotProbeSession
++  }
++
++  func applyPrivateSnapshot(requestNonce: String) {
++    guard Thread.isMainThread else {
++      DispatchQueue.main.async { [weak self] in self?.applyPrivateSnapshot(requestNonce: requestNonce) }
++      return
++    }
++    guard let request = snapshotReloadRequest(requestNonce) else { return }
++    func acknowledge(_ outcome: String) {
++      let receipt = (request + [snapshotHostSession, String(getpid()), outcome]).joined(separator: "\t") + "\n"
++      if !writeMaintenanceAcknowledgement(requestNonce, acknowledgementName: "snapshot-reload.ack", contents: receipt) {
++        print("Private snapshot application receipt could not be committed.")
++      }
++    }
++    rimeSyncStateLock.lock()
++    let syncInFlight = rimeSyncInFlight
++    rimeSyncStateLock.unlock()
++    guard !syncInFlight, !rimeAPI.is_maintenance_mode(),
++          SquirrelInputController.prepareForUserDataMaintenance(invalidate: false) else {
++      acknowledge("busy")
++      return
++    }
++
++    // Build the new real filter/index before touching any old controller.
++    // Unlike deploy()/initialize(), this property is set by YunPinFilter only
++    // after parsing these exact bytes and atomically replacing its index.
++    let probe = rimeAPI.create_session()
++    guard probe != 0 else { acknowledge("failed"); return }
++    rimeSyncStateLock.lock()
++    snapshotProbeSession = probe
++    rimeSyncStateLock.unlock()
++    var retained = false
++    defer {
++      rimeSyncStateLock.lock()
++      snapshotProbeSession = 0
++      rimeSyncStateLock.unlock()
++      if !retained { _ = rimeAPI.destroy_session(probe) }
++    }
++    guard rimeAPI.select_schema(probe, "rime_ice") else { acknowledge("failed"); return }
++    var digest = [CChar](repeating: 0, count: 65)
++    guard rimeAPI.get_property(probe, "yunpin_snapshot_applied_digest", &digest, digest.count),
++          String(cString: digest) == request[3] else { acknowledge("failed"); return }
++    // Request removal/supersession means the caller already timed out. Never
++    // let an expired request invalidate otherwise working controller sessions.
++    guard snapshotReloadRequest(requestNonce) == request else { return }
++    // Recheck every controller after construction. No async/yield separates
++    // this final idle gate from invalidation on the serialized main thread.
++    guard SquirrelInputController.prepareForUserDataMaintenance() else {
++      acknowledge("busy")
++      return
++    }
++    clearAppliedSnapshotSession()
++    appliedSnapshotSession = probe
++    retained = true
++    acknowledge("applied")
++  }
++
+   func syncUserData(requestNonce: String) {
+     guard SquirrelApp.validMaintenanceNonce(requestNonce) else {
+       print("Rejected invalid private Rime maintenance request.")
+@@ -162,6 +268,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+     rimeSyncStateLock.unlock()
+ 
+     print("Refreshing private local Rime user data snapshot.")
++    clearAppliedSnapshotSession()
+     guard rimeAPI.sync_user_data() else {
+       rimeSyncStateLock.lock()
+       rimeSyncInFlight = false
+@@ -377,6 +484,10 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+     let notifCenter = DistributedNotificationCenter.default()
+     notifCenter.addObserver(forName: .init("YunPinReloadNotification"), object: nil, queue: nil, using: rimeNeedsReload)
+     notifCenter.addObserver(forName: .init("YunPinSyncNotification"), object: nil, queue: nil, using: rimeNeedsSync)
++    notifCenter.addObserver(forName: .init("YunPinSnapshotReloadNotification"), object: nil, queue: .main) { [weak self] notification in
++      guard let nonce = notification.object as? String else { return }
++      self?.applyPrivateSnapshot(requestNonce: nonce)
++    }
+   }
+ 
+   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+@@ -391,8 +502,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
+ private func notificationHandler(contextObject: UnsafeMutableRawPointer?, sessionId: RimeSessionId, messageTypeC: UnsafePointer<CChar>?, messageValueC: UnsafePointer<CChar>?) {
+   guard let contextObject else { return }
+   let delegate: SquirrelApplicationDelegate = Unmanaged<SquirrelApplicationDelegate>.fromOpaque(contextObject).takeUnretainedValue()
++  // Check on the synchronous callback boundary, before the probe is retired.
++  // Probe schema/property notifications must never become a visible UI bubble.
++  if delegate.shouldIgnoreSnapshotProbeNotification(sessionId) { return }
+   let messageType = messageTypeC.map { String(cString: $0) }
+   let messageValue = messageValueC.map { String(cString: $0) }
++  if messageType == "property", messageValue?.hasPrefix("yunpin_snapshot_applied_digest=") == true { return }
+ 
+   // librime invokes this C callback synchronously from inside ProcessKey and
+   // SetOption while its engine graph is still mutating. Never enter AppKit,
+@@ -473,6 +588,7 @@ private extension SquirrelApplicationDelegate {
+   func shutdownRime() -> Bool {
+     guard Thread.isMainThread else { return false }
+     waitForRimeSyncCompletion()
++    clearAppliedSnapshotSession()
+     guard SquirrelInputController.invalidateAllSessionsForRimeShutdown() else {
+       return false
+     }
+diff --git a/sources/SquirrelInputController.swift b/sources/SquirrelInputController.swift
+index 6435f01..dd72294 100644
+--- a/sources/SquirrelInputController.swift
++++ b/sources/SquirrelInputController.swift
+@@ -120,7 +120,7 @@ final class SquirrelInputController: IMKInputController {
+     maintenanceStateLock.unlock()
+   }
+ 
+-  static func prepareForUserDataMaintenance() -> Bool {
++  static func prepareForUserDataMaintenance(invalidate: Bool = true) -> Bool {
+     guard Thread.isMainThread else { return false }
+     maintenanceStateLock.lock()
+     let idleFor = ProcessInfo.processInfo.systemUptime - lastInputActivityUptime
+@@ -154,6 +154,7 @@ final class SquirrelInputController: IMKInputController {
+           return false
+       }
+     }
++    guard invalidate else { return true }
+     for controller in controllers {
+       controller.clearChord()
+       controller.sessionLifetime.requestDestroy()

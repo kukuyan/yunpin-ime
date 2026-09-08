@@ -207,7 +207,7 @@ func ApplyGuardSettings(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if err := reload(ctx); err != nil {
+	if err := reload(context.WithValue(ctx, settingsDeployContextKey{}, true)); err != nil {
 		return result, fmt.Errorf("deploy updated Rime settings: %w", err)
 	}
 	result.Reloaded = true

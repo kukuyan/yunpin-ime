@@ -2,10 +2,12 @@
 #include "rime_yunpin_filter.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <fstream>
 #include <functional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +24,7 @@
 
 #include "yunpin/native_selection_events.hpp"
 #include "yunpin/replay_native.hpp"
+#include "yunpin/snapshot_identity.hpp"
 
 namespace rime {
 namespace {
@@ -757,6 +760,10 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
           std::clamp(configured_min_chars, 6, 64));
     }
   }
+#if defined(__APPLE__)
+  if (engine_ && engine_->context())
+    engine_->context()->set_property("yunpin_snapshot_applied_digest", "");
+#endif
   if (enabled_ && max_candidates_ > 0) {
     private_ready_ = LoadSnapshot(snapshot_path_);
   }
@@ -826,6 +833,10 @@ bool YunPinFilter::Active() const {
 }
 
 bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
+#if defined(__APPLE__)
+  if (engine_ && engine_->context())
+    engine_->context()->set_property("yunpin_snapshot_applied_digest", "");
+#endif
   if (!IsSafeRelativePath(relative_path)) {
     LOG(ERROR) << "yunpin snapshot path must be a safe relative path";
     return false;
@@ -838,12 +849,40 @@ bool YunPinFilter::LoadSnapshot(const std::string& relative_path) {
                  "disabled";
     return false;
   }
+  // Preserve the exact byte identity consumed by the parser. This happens
+  // only when a filter/session is constructed, not on the per-key path.
+#if defined(__APPLE__)
+  std::string contents;
+  std::array<char, 8192> buffer{};
+  while (input) {
+    input.read(buffer.data(), buffer.size());
+    contents.append(buffer.data(), static_cast<std::size_t>(input.gcount()));
+    if (contents.size() > 64U * 1024U * 1024U) {
+      LOG(ERROR) << "yunpin private snapshot exceeds the bounded load size";
+      return false;
+    }
+  }
+  if (!input.eof())
+    return false;
+  std::istringstream parsed(contents);
+  auto result = yunpin::ParsePrivateSnapshot(parsed);
+#else
   auto result = yunpin::ParsePrivateSnapshot(input);
+#endif
   if (!result.header_valid) {
     LOG(ERROR) << "yunpin private snapshot has an invalid header";
     return false;
   }
   store_.Replace(std::move(result.entries));
+#if defined(__APPLE__)
+  if (result.rejected_rows == 0 && engine_ && engine_->context()) {
+    // Published strictly after Replace() builds and switches the real index.
+    // Empty snapshots are valid applications of deletion; size==0 is not a
+    // failure receipt. No private digest enters a log or OS notification.
+    engine_->context()->set_property(
+        "yunpin_snapshot_applied_digest", yunpin::SnapshotContentDigest(contents));
+  }
+#endif
   LOG(INFO) << "yunpin private snapshot loaded: " << result.accepted_rows
             << " accepted, " << result.rejected_rows << " rejected";
   return store_.size() > 0;
