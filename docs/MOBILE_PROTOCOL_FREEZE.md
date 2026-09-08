@@ -144,24 +144,27 @@ The CRDT behavior is also frozen:
 - unknown setting keys remain opaque for forward compatibility;
 - remote merges do not echo a new local outbox event.
 
-## 4. Extensible data plane, currently fixed control plane
+## 4. Extensible data plane, frozen mobile control plane
 
 The data plane uses arbitrary source device IDs and a dynamically sized map of
 verification keys derived from an authenticated roster. Mobile databases,
 models, and UI lists therefore have no compiled device-count capacity.
 
-The current enrollment/revocation control plane is intentionally the fixed
-two-device preview. The relay's `maxActiveDevices` guard, the exact signed-roster
-checks in YPCB validation, disabled recovery, and disabled general revocation
-are security controls. A third-device registration/pairing attempt must surface
-the stable relay conflict and leave local credentials, roster, outbox, cursor,
-and snapshots unchanged.
+The frozen mobile v1 client still has the two-device credential checkpoint and
+reports `signed_roster_chain_required`; this desktop remediation does not enable
+mobile enrollment or certify mobile v3 migration. Mobile credentials, outbox,
+cursor and snapshots must remain unchanged when an unsupported flow is refused.
 
-Do not raise or bypass the current server constant to make a mobile enrollment
-demo pass. Enrollment beyond the preview remains disabled until a monotonically
-versioned signed roster-chain protocol provides authenticated add/revoke/replace
-transitions, downgrade and fork rejection, durable migration, and cross-device
-acceptance tests. Relay `/v1/devices` output alone never enables a device.
+The shared desktop/relay implementation now supports
+[signed add-only roster chains](../protocol/ROSTER_CHAIN.md), with a tested
+128-device resource bound, unchanged v1/two-device trust anchors and explicit
+v3 chained credentials. The capacity constant is not enrollment authorization:
+legacy requests cannot add a third device, and signed predecessor/member checks
+must succeed. General recovery and revocation stay disabled. Mobile enablement
+requires its own durable OS-store migration, chain refresh, platform lifecycle
+and real-device acceptance; do not bypass the mobile gate merely because the
+relay can accept a properly signed desktop addition. Relay `/v1/devices` output
+alone never enables a device.
 
 ## 5. Recovery is out of scope and fail-closed
 
