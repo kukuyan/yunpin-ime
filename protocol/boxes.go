@@ -107,6 +107,7 @@ type PairingRoster struct {
 	Devices        []PairingRosterDevice `json:"devices" cbor:"3,keyasint"`
 	SignerDeviceID []byte                `json:"signer_device_id" cbor:"4,keyasint"`
 	Signature      []byte                `json:"signature" cbor:"5,keyasint"`
+	PreviousHash   []byte                `json:"previous_hash,omitempty" cbor:"6,keyasint,omitempty"`
 }
 
 type PairingEpochKey struct {
@@ -126,12 +127,16 @@ type pairingRosterUnsigned struct {
 	AccountID      []byte                `cbor:"2,keyasint"`
 	Devices        []PairingRosterDevice `cbor:"3,keyasint"`
 	SignerDeviceID []byte                `cbor:"4,keyasint"`
+	PreviousHash   []byte                `cbor:"5,keyasint,omitempty"`
 }
 
 func pairingRosterSigningBytes(roster PairingRoster) ([]byte, error) {
 	if roster.Version == 0 || roster.Version > math.MaxInt64 || len(roster.AccountID) != 16 ||
 		len(roster.SignerDeviceID) != 16 || len(roster.Devices) < 2 || len(roster.Devices) > 256 {
 		return nil, errors.New("pairing roster metadata is invalid")
+	}
+	if len(roster.PreviousHash) != 0 && (len(roster.PreviousHash) != 32 || roster.Version < 2) {
+		return nil, errors.New("pairing roster predecessor is invalid")
 	}
 	zeroID := make([]byte, 16)
 	zeroKey := make([]byte, 32)
@@ -159,20 +164,30 @@ func pairingRosterSigningBytes(roster PairingRoster) ([]byte, error) {
 	}
 	encoded, err := canonicalCBOR.Marshal(pairingRosterUnsigned{
 		Version: roster.Version, AccountID: roster.AccountID, Devices: roster.Devices, SignerDeviceID: roster.SignerDeviceID,
+		PreviousHash: roster.PreviousHash,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte("yunpin-pairing-roster-v1\x00"), encoded...), nil
+	domain := "yunpin-pairing-roster-v1\x00"
+	if len(roster.PreviousHash) != 0 {
+		domain = "yunpin-pairing-roster-chain-v1\x00"
+	}
+	return append([]byte(domain), encoded...), nil
 }
 
 func SignPairingRoster(accountID []byte, version uint64, devices []PairingRosterDevice, signerDeviceID []byte, private ed25519.PrivateKey) (PairingRoster, error) {
+	return signPairingRoster(accountID, version, devices, signerDeviceID, nil, private)
+}
+
+func signPairingRoster(accountID []byte, version uint64, devices []PairingRosterDevice, signerDeviceID, previousHash []byte, private ed25519.PrivateKey) (PairingRoster, error) {
 	if len(private) != ed25519.PrivateKeySize {
 		return PairingRoster{}, errors.New("pairing roster signing key is invalid")
 	}
 	roster := PairingRoster{
 		Version: version, AccountID: append([]byte(nil), accountID...),
 		Devices: make([]PairingRosterDevice, len(devices)), SignerDeviceID: append([]byte(nil), signerDeviceID...),
+		PreviousHash: append([]byte(nil), previousHash...),
 	}
 	for index, device := range devices {
 		roster.Devices[index] = PairingRosterDevice{

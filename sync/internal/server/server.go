@@ -42,9 +42,9 @@ const (
 	defaultSyncLimit = 256
 	maximumSyncLimit = 256
 	maxDownloadBytes = maxCiphertext
-	// The first production slice is deliberately the Mac plus R0W.  Keep the
-	// active trust roster bounded until signed roster-chain propagation exists.
-	maxActiveDevices     = 2
+	// Add-only enrollment is authorized by the signed roster chain, not this
+	// resource bound. Legacy requests still cannot enroll beyond device two.
+	maxActiveDevices     = 128
 	pairingLifetime      = 10 * time.Minute
 	pairingClaimLifetime = 24 * time.Hour
 	// Provisioning is crash-resumable from an OS-protected local journal. A
@@ -293,6 +293,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.recoverAccount(w, r, parts[3])
 	case path == "/v1/pairings" && r.Method == http.MethodPost:
 		s.requireAuth(s.createPairing)(w, r)
+	case path == "/v1/roster" && r.Method == http.MethodGet:
+		s.requireAuth(s.getRosterUpdates)(w, r)
+	case path == "/v1/roster/anchor" && r.Method == http.MethodPut:
+		s.requireAuth(s.publishRosterAnchor)(w, r)
 	case strings.HasPrefix(path, "/v1/pairings/"):
 		s.routePairing(w, r, path)
 	case path == "/v1/sync" && r.Method == http.MethodPost:
@@ -889,6 +893,8 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		PairingID       string `json:"pairing_id"`
 		PairingVerifier string `json:"pairing_verifier"`
+		RosterVersion   uint64 `json:"roster_version,omitempty"`
+		RosterHash      string `json:"roster_hash,omitempty"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
@@ -908,6 +914,27 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	var deviceCount int
+	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL`, identity.AccountID).Scan(&deviceCount); err != nil {
+		writeError(w, 500, "database_error")
+		return
+	}
+	var baseHash []byte
+	if deviceCount > 1 {
+		baseHash, err = hex.DecodeString(input.RosterHash)
+		if err != nil || len(baseHash) != 32 || hex.EncodeToString(baseHash) != input.RosterHash || input.RosterVersion == 0 {
+			writeError(w, 409, "roster_checkpoint_required")
+			return
+		}
+		head, digest, err := loadRosterHead(r.Context(), tx, identity.AccountID)
+		if err != nil || head.Version != input.RosterVersion || !bytes.Equal(digest, baseHash) || len(head.Devices) != deviceCount {
+			writeError(w, 409, "roster_conflict")
+			return
+		}
+	} else if input.RosterVersion != 0 || input.RosterHash != "" {
+		writeError(w, 409, "roster_conflict")
+		return
+	}
 	// Expired joined/approved reservations already contain an authenticated
 	// joining tuple. Retire that tuple before freeing the live reservation;
 	// only an untouched created invitation may disappear without a tombstone.
@@ -985,12 +1012,12 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := tx.ExecContext(r.Context(), `INSERT OR IGNORE INTO pairings(
-		id, account_id, creator_device_id, secret_hash, state, expires_at, created_at)
-		SELECT ?, ?, ?, ?, 'created', ?, ?
-		WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) = 1
-		AND NOT EXISTS (SELECT 1 FROM pairings WHERE account_id = ? AND state IN ('created', 'joined', 'approved'))`,
+		id, account_id, creator_device_id, secret_hash, state, expires_at, created_at, base_roster_version, base_roster_hash)
+		SELECT ?, ?, ?, ?, 'created', ?, ?, ?, ?
+		WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) < ?
+		AND NOT EXISTS (SELECT 1 FROM pairings WHERE account_id = ? AND (state IN ('created', 'joined', 'approved') OR (state = 'claimed' AND finalized_at IS NULL)))`,
 		input.PairingID, identity.AccountID, identity.ID, verifier, expiresAt, now.UnixMilli(),
-		identity.AccountID, identity.AccountID)
+		input.RosterVersion, baseHash, identity.AccountID, maxActiveDevices, identity.AccountID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database_error")
 		return
@@ -1072,9 +1099,9 @@ func (s *Server) joinPairing(w http.ResponseWriter, r *http.Request, pairingID s
 		result, err = tx.ExecContext(r.Context(), `UPDATE pairings SET state = 'joined', new_device_id = ?,
 			pending_name_ciphertext = ?, pending_ed25519_public_key = ?, pending_x25519_public_key = ?,
 			pending_join_proof = ?, rollback_hash = ? WHERE id = ? AND state = 'created'
-			AND (SELECT COUNT(*) FROM devices WHERE account_id = pairings.account_id AND revoked_at IS NULL) = 1
+			AND (SELECT COUNT(*) FROM devices WHERE account_id = pairings.account_id AND revoked_at IS NULL) < ?
 			AND NOT EXISTS (SELECT 1 FROM devices WHERE id = ?)`,
-			input.DeviceID, nameCiphertext, edKey, xKey, joinProof, digest(input.RollbackToken), pairingID, input.DeviceID)
+			input.DeviceID, nameCiphertext, edKey, xKey, joinProof, digest(input.RollbackToken), pairingID, maxActiveDevices, input.DeviceID)
 		if err == nil {
 			if affected, _ := result.RowsAffected(); affected != 1 {
 				writeError(w, http.StatusConflict, "device_limit_reached")
@@ -1201,8 +1228,8 @@ func (s *Server) approvePairing(w http.ResponseWriter, r *http.Request, pairingI
 		var result sql.Result
 		result, err = tx.ExecContext(r.Context(), `UPDATE pairings SET state = 'approved', encrypted_keyring = ?, claim_expires_at = ?
 			WHERE id = ? AND state = 'joined'
-			AND (SELECT COUNT(*) FROM devices WHERE account_id = pairings.account_id AND revoked_at IS NULL) = 1`,
-			keyring, claimExpiresAt, pairingID)
+			AND (SELECT COUNT(*) FROM devices WHERE account_id = pairings.account_id AND revoked_at IS NULL) < ?`,
+			keyring, claimExpiresAt, pairingID, maxActiveDevices)
 		if err == nil {
 			if affected, _ := result.RowsAffected(); affected != 1 {
 				writeError(w, http.StatusConflict, "device_limit_reached")
@@ -1278,9 +1305,9 @@ func (s *Server) claimPairing(w http.ResponseWriter, r *http.Request, pairingID 
 		result, err = tx.ExecContext(r.Context(), `INSERT INTO devices(id, account_id, name_ciphertext, token_hash,
 			ed25519_public_key, x25519_public_key, created_at)
 			SELECT ?, ?, ?, ?, ?, ?, ?
-			WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) = 1`,
+			WHERE (SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL) < ?`,
 			deviceID, accountID, nameCiphertext, digest(input.DeviceToken), edKey, xKey,
-			s.now().UnixMilli(), accountID)
+			s.now().UnixMilli(), accountID, maxActiveDevices)
 		if err == nil {
 			if affected, _ := result.RowsAffected(); affected != 1 {
 				writeError(w, http.StatusConflict, "device_limit_reached")
@@ -1379,23 +1406,102 @@ func (s *Server) finalizePairing(w http.ResponseWriter, r *http.Request, pairing
 		writeError(w, http.StatusNotFound, "pairing_not_found")
 		return
 	}
-	s.pairingLifecycleMu.Lock()
-	defer s.pairingLifecycleMu.Unlock()
-	result, err := s.db.ExecContext(r.Context(), `UPDATE pairings SET finalized_at = COALESCE(finalized_at, ?)
-		WHERE id = ? AND account_id = ? AND creator_device_id = ? AND state = 'claimed' AND ready_at IS NOT NULL`,
-		s.now().UnixMilli(), pairingID, identity.AccountID, identity.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database_error")
+	var input struct {
+		Roster *signedRoster `json:"roster,omitempty"`
+	}
+	// Pre-chain clients finalize the original two-device flow with an empty
+	// body. Preserve that call shape; a chained pairing still requires Roster.
+	if r.ContentLength != 0 && !decodeJSON(w, r, &input) {
 		return
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
-		writeError(w, http.StatusConflict, "pairing_not_ready_to_finalize")
+	s.pairingLifecycleMu.Lock()
+	defer s.pairingLifecycleMu.Unlock()
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "database_error")
+		return
+	}
+	defer tx.Rollback()
+	var baseVersion uint64
+	var baseHash []byte
+	var finalized sql.NullInt64
+	err = tx.QueryRowContext(r.Context(), `SELECT base_roster_version, base_roster_hash, finalized_at FROM pairings
+		WHERE id = ? AND account_id = ? AND creator_device_id = ? AND state = 'claimed' AND ready_at IS NOT NULL`,
+		pairingID, identity.AccountID, identity.ID).Scan(&baseVersion, &baseHash, &finalized)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 409, "pairing_not_ready_to_finalize")
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "database_error")
+		return
+	}
+	if baseVersion > 0 && input.Roster == nil {
+		writeError(w, 409, "signed_roster_required")
+		return
+	}
+	if input.Roster != nil {
+		roster := *input.Roster
+		digest, err := rosterDigest(roster)
+		if err != nil || hex.EncodeToString(roster.AccountID) != identity.AccountID || hex.EncodeToString(roster.SignerDeviceID) != identity.ID || roster.Version != baseVersion+1 {
+			writeError(w, 400, "invalid_signed_roster")
+			return
+		}
+		if finalized.Valid {
+			var published []byte
+			if err := tx.QueryRowContext(r.Context(), `SELECT digest FROM account_rosters WHERE account_id = ? AND version = ?`, identity.AccountID, roster.Version).Scan(&published); err != nil || !bytes.Equal(published, digest) {
+				writeError(w, 409, "roster_conflict")
+				return
+			}
+		} else {
+			if baseVersion == 0 {
+				if len(roster.Devices) != 2 || len(roster.PreviousHash) != 0 {
+					writeError(w, 400, "invalid_roster_anchor")
+					return
+				}
+				if _, _, err := loadRosterHead(r.Context(), tx, identity.AccountID); !errors.Is(err, sql.ErrNoRows) {
+					writeError(w, 409, "roster_conflict")
+					return
+				}
+			} else {
+				previous, previousHash, err := loadRosterHead(r.Context(), tx, identity.AccountID)
+				if err != nil || previous.Version != baseVersion || !bytes.Equal(previousHash, baseHash) || verifyRosterAdvance(previous, roster) != nil {
+					writeError(w, 409, "roster_conflict")
+					return
+				}
+			}
+			if err := verifyRosterDevices(r.Context(), tx, identity.AccountID, roster); err != nil {
+				writeError(w, 409, "roster_conflict")
+				return
+			}
+			if err := insertRoster(r.Context(), tx, identity.AccountID, roster); err != nil {
+				writeError(w, 500, "database_error")
+				return
+			}
+		}
+	} else if !finalized.Valid {
+		var count int
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM devices WHERE account_id = ? AND revoked_at IS NULL`, identity.AccountID).Scan(&count); err != nil {
+			writeError(w, 500, "database_error")
+			return
+		}
+		if count != 2 {
+			writeError(w, 409, "signed_roster_required")
+			return
+		}
+	}
+	if _, err := tx.ExecContext(r.Context(), `UPDATE pairings SET finalized_at = COALESCE(finalized_at, ?) WHERE id = ?`, s.now().UnixMilli(), pairingID); err != nil {
+		writeError(w, 500, "database_error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, 500, "database_error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"state": "finalized"})
 }
 
-// cancelPairing keeps the creator's trust roster self-only. It is allowed
+// cancelPairing keeps the previous trusted checkpoint unchanged. It is allowed
 // before the joining device reports a durable local commit; after ready, only
 // creator finalization or the joining rollback capability may progress state.
 func (s *Server) cancelPairing(w http.ResponseWriter, r *http.Request, pairingID string) {
@@ -2299,6 +2405,8 @@ func routeLabel(path string) string {
 		return "/v1/pairings/:id"
 	case path == "/v1/sync":
 		return "/v1/sync"
+	case path == "/v1/roster" || path == "/v1/roster/anchor":
+		return "/v1/roster"
 	case path == "/v1/devices":
 		return "/v1/devices"
 	case strings.HasPrefix(path, "/v1/devices/"):

@@ -16,12 +16,13 @@ import (
 )
 
 const (
-	legacyCredentialBundleVersion = 1
-	CredentialBundleVersion       = 2
-	maxCredentialBlobBytes        = 64 * 1024
-	maxDeviceTokenBytes           = 512
-	maxEpochKeys                  = 64
-	maxVerificationKeys           = 256
+	legacyCredentialBundleVersion  = 1
+	CredentialBundleVersion        = 2
+	ChainedCredentialBundleVersion = 3
+	maxCredentialBlobBytes         = 64 * 1024
+	maxDeviceTokenBytes            = 512
+	maxEpochKeys                   = 64
+	maxVerificationKeys            = 256
 )
 
 var credentialMagic = [4]byte{'Y', 'P', 'C', 'B'}
@@ -74,7 +75,7 @@ func validDeviceToken(value []byte) bool {
 
 func rosterIsEmpty(roster protocol.PairingRoster) bool {
 	return roster.Version == 0 && len(roster.AccountID) == 0 && len(roster.Devices) == 0 &&
-		len(roster.SignerDeviceID) == 0 && len(roster.Signature) == 0
+		len(roster.SignerDeviceID) == 0 && len(roster.Signature) == 0 && len(roster.PreviousHash) == 0
 }
 
 func trustFromRoster(roster protocol.PairingRoster) (map[[16]byte][ed25519.PublicKeySize]byte, map[[16]byte][32]byte, error) {
@@ -124,7 +125,8 @@ func clonePairingRoster(roster protocol.PairingRoster) protocol.PairingRoster {
 	cloned := protocol.PairingRoster{
 		Version: roster.Version, AccountID: append([]byte(nil), roster.AccountID...),
 		SignerDeviceID: append([]byte(nil), roster.SignerDeviceID...), Signature: append([]byte(nil), roster.Signature...),
-		Devices: make([]protocol.PairingRosterDevice, len(roster.Devices)),
+		PreviousHash: append([]byte(nil), roster.PreviousHash...),
+		Devices:      make([]protocol.PairingRosterDevice, len(roster.Devices)),
 	}
 	for index, device := range roster.Devices {
 		cloned.Devices[index] = protocol.PairingRosterDevice{
@@ -144,10 +146,13 @@ func applyTrustedRoster(bundle *CredentialBundleV1, roster protocol.PairingRoste
 	if err != nil {
 		return err
 	}
-	if len(roster.Devices) != 2 {
-		return errors.New("this preview supports exactly two devices in its signed trust roster")
+	if len(roster.PreviousHash) == 0 && len(roster.Devices) != 2 {
+		return errors.New("unchained trust anchor must contain exactly two devices")
 	}
 	bundle.Version = CredentialBundleVersion
+	if len(roster.PreviousHash) != 0 {
+		bundle.Version = ChainedCredentialBundleVersion
+	}
 	bundle.TrustedRoster = clonePairingRoster(roster)
 	bundle.VerificationKeys = verification
 	bundle.X25519PublicKeys = x25519
@@ -173,7 +178,7 @@ func populateBootstrapTrust(bundle *CredentialBundleV1) error {
 }
 
 func (bundle CredentialBundleV1) Validate() error {
-	if bundle.Version != legacyCredentialBundleVersion && bundle.Version != CredentialBundleVersion {
+	if bundle.Version != legacyCredentialBundleVersion && bundle.Version != CredentialBundleVersion && bundle.Version != ChainedCredentialBundleVersion {
 		return fmt.Errorf("unsupported credential bundle version %d", bundle.Version)
 	}
 	if allZero(bundle.AccountID[:]) || allZero(bundle.DeviceID[:]) {
@@ -230,13 +235,19 @@ func (bundle CredentialBundleV1) Validate() error {
 		return errors.New("current device X25519 public key does not match its private key")
 	}
 	if rosterIsEmpty(bundle.TrustedRoster) {
+		if bundle.Version == ChainedCredentialBundleVersion {
+			return errors.New("chained credential requires a signed checkpoint")
+		}
 		if len(bundle.VerificationKeys) != 1 || len(bundle.X25519PublicKeys) != 1 {
 			return errors.New("bootstrap credential may trust only itself before its first signed roster")
 		}
 		return nil
 	}
-	if len(bundle.TrustedRoster.Devices) != 2 {
-		return errors.New("this preview supports exactly two trusted devices")
+	if bundle.Version == CredentialBundleVersion && (len(bundle.TrustedRoster.Devices) != 2 || len(bundle.TrustedRoster.PreviousHash) != 0) {
+		return errors.New("v2 credential requires an unchained two-device anchor")
+	}
+	if bundle.Version == ChainedCredentialBundleVersion && (len(bundle.TrustedRoster.Devices) < 3 || len(bundle.TrustedRoster.PreviousHash) != 32) {
+		return errors.New("v3 credential requires a chained multi-device checkpoint")
 	}
 	if !bytes.Equal(bundle.TrustedRoster.AccountID, bundle.AccountID[:]) {
 		return errors.New("trusted roster belongs to another account")
@@ -259,7 +270,7 @@ func EncodeCredentialBundle(bundle CredentialBundleV1) ([]byte, error) {
 	if err := bundle.Validate(); err != nil {
 		return nil, err
 	}
-	if bundle.Version != CredentialBundleVersion {
+	if bundle.Version != CredentialBundleVersion && bundle.Version != ChainedCredentialBundleVersion {
 		return nil, errors.New("legacy credential must be upgraded before it is encoded")
 	}
 	var encoded bytes.Buffer
@@ -302,6 +313,9 @@ func EncodeCredentialBundle(bundle CredentialBundleV1) ([]byte, error) {
 			encoded.Write(device.X25519PublicKey)
 		}
 		encoded.Write(bundle.TrustedRoster.Signature)
+		if bundle.Version == ChainedCredentialBundleVersion {
+			encoded.Write(bundle.TrustedRoster.PreviousHash)
+		}
 	}
 	if encoded.Len() > maxCredentialBlobBytes {
 		return nil, errors.New("credential bundle exceeds size limit")
@@ -358,7 +372,7 @@ func DecodeCredentialBundle(encoded []byte) (CredentialBundleV1, error) {
 		return CredentialBundleV1{}, errors.New("credential bundle magic is invalid")
 	}
 	version, err := reader.take(1)
-	if err != nil || (version[0] != legacyCredentialBundleVersion && version[0] != CredentialBundleVersion) {
+	if err != nil || (version[0] != legacyCredentialBundleVersion && version[0] != CredentialBundleVersion && version[0] != ChainedCredentialBundleVersion) {
 		return CredentialBundleV1{}, errors.New("credential bundle version is unsupported")
 	}
 	bundle := CredentialBundleV1{Version: version[0]}
@@ -496,6 +510,13 @@ func DecodeCredentialBundle(encoded []byte) (CredentialBundleV1, error) {
 				return CredentialBundleV1{}, err
 			}
 			roster.Signature = append([]byte(nil), roster.Signature...)
+			if bundle.Version == ChainedCredentialBundleVersion {
+				previous, err := reader.take(32)
+				if err != nil {
+					return CredentialBundleV1{}, err
+				}
+				roster.PreviousHash = append([]byte(nil), previous...)
+			}
 			if err := applyTrustedRoster(&bundle, roster); err != nil {
 				return CredentialBundleV1{}, err
 			}
