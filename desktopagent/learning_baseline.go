@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build yunpin_pairing_private
 
 package desktopagent
 
@@ -12,7 +11,7 @@ import (
 )
 
 // EmptyBaselineResult contains no path, phrase, or device identifier.  It is
-// intentionally safe for the private E2E CLI to print after local creation.
+// intentionally safe for the initialization CLI to print after local creation.
 type EmptyBaselineResult struct {
 	Created bool `json:"created"`
 }
@@ -143,8 +142,9 @@ func initializeEmptyBaselineLocked(paths Paths) (EmptyBaselineResult, error) {
 }
 
 // InitializeEmptyBaseline creates the immutable empty baseline needed by a
-// clean E2E device.  It never reads or overwrites an existing baseline or
-// private snapshot and is deliberately available only in private-tag builds.
+// newly enrolled device. It never reads or overwrites an existing baseline or
+// private snapshot. Callers must explicitly choose an empty static baseline;
+// this does not delete or reset Rime's separate learned vocabulary.
 func InitializeEmptyBaseline(paths Paths) (result EmptyBaselineResult, err error) {
 	if paths.LockPath == "" || !filepath.IsAbs(paths.LockPath) {
 		return EmptyBaselineResult{}, errors.New("fixed private process lock is required")

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build yunpin_pairing_private && !darwin && !linux && !windows
+//go:build !darwin && !linux && !windows
 
 package desktopagent
 

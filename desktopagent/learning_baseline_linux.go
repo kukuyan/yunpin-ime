@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//go:build yunpin_pairing_private && darwin
+//go:build linux
 
 package desktopagent
 
@@ -11,7 +11,7 @@ import (
 )
 
 func publishEmptyBaselineNoReplace(source, destination string) error {
-	if err := unix.RenameatxNp(unix.AT_FDCWD, source, unix.AT_FDCWD, destination, unix.RENAME_EXCL); err != nil {
+	if err := unix.Renameat2(unix.AT_FDCWD, source, unix.AT_FDCWD, destination, unix.RENAME_NOREPLACE); err != nil {
 		return err
 	}
 	if err := syncParentDirectory(filepath.Dir(destination)); err != nil {
