@@ -215,6 +215,8 @@ type creatorPairingJournal struct {
 	ApprovedBox         string `json:"approved_box,omitempty"`
 	UpdatedCredential   string `json:"updated_credential,omitempty"`
 	CancellationPending bool   `json:"cancellation_pending,omitempty"`
+	OriginalCredential  string `json:"original_credential,omitempty"`
+	FinalizationPending bool   `json:"finalization_pending,omitempty"`
 }
 
 type joiningPairingJournal struct {
@@ -280,7 +282,7 @@ func upgradeBootstrapCredential(bundle *CredentialBundleV1) error {
 	if bundle == nil {
 		return errors.New("credential is required")
 	}
-	if bundle.Version == CredentialBundleVersion {
+	if bundle.Version == CredentialBundleVersion || bundle.Version == ChainedCredentialBundleVersion {
 		return bundle.Validate()
 	}
 	if bundle.Version != legacyCredentialBundleVersion || len(bundle.VerificationKeys) != 1 {
@@ -338,8 +340,22 @@ func StartPairing(ctx context.Context, relay PairingRelay, options PairingOption
 	if err := upgradeBootstrapCredential(&bundle); err != nil {
 		return PairingResult{}, err
 	}
-	if !rosterIsEmpty(bundle.TrustedRoster) || len(bundle.VerificationKeys) != 1 || len(bundle.X25519PublicKeys) != 1 {
-		return PairingResult{}, errors.New("two-device preview is already paired; a third device is not supported")
+	if !rosterIsEmpty(bundle.TrustedRoster) {
+		chained, ok := relay.(chainedPairingRelay)
+		if !ok {
+			return PairingResult{}, errors.New("relay client does not support signed roster propagation")
+		}
+		if _, err := RefreshTrustedRoster(ctx, chained, options.Secrets, options.Profile, &bundle); err != nil {
+			return PairingResult{}, err
+		}
+		// Refresh may have durably advanced the checkpoint before this new
+		// invitation. Journal exactly those bytes, never the stale loaded copy.
+		zeroBytes(activeEncoded)
+		activeEncoded, err = EncodeCredentialBundle(bundle)
+		if err != nil {
+			return PairingResult{}, err
+		}
+		defer zeroBytes(activeEncoded)
 	}
 	upgraded, err := EncodeCredentialBundle(bundle)
 	if err != nil {
@@ -378,7 +394,7 @@ func StartPairing(ctx context.Context, relay PairingRelay, options PairingOption
 		if err != nil {
 			return PairingResult{}, err
 		}
-		journal = creatorPairingJournal{Version: pairingJournalVersion, Invitation: text, ActiveDigest: hex.EncodeToString(digest[:])}
+		journal = creatorPairingJournal{Version: pairingJournalVersion, Invitation: text, ActiveDigest: hex.EncodeToString(digest[:]), OriginalCredential: base64.RawURLEncoding.EncodeToString(activeEncoded)}
 		encodedJournal, err = encodePairingJournal(journal)
 		if err != nil {
 			return PairingResult{}, err
@@ -396,7 +412,12 @@ func StartPairing(ctx context.Context, relay PairingRelay, options PairingOption
 	if err != nil {
 		return PairingResult{}, err
 	}
-	created, err := relay.CreatePairing(ctx, account, invitation)
+	var created syncclient.PairingInvitation
+	if rosterIsEmpty(bundle.TrustedRoster) {
+		created, err = relay.CreatePairing(ctx, account, invitation)
+	} else {
+		created, err = relay.(chainedPairingRelay).CreatePairingFromRoster(ctx, account, invitation, bundle.TrustedRoster)
+	}
 	if err != nil {
 		return PairingResult{}, fmt.Errorf("create or resume pairing invitation: %w", err)
 	}
@@ -434,9 +455,6 @@ func transcriptFromStatus(invitation syncclient.PairingInvitation, status synccl
 }
 
 func pairingPackageFromBundle(bundle CredentialBundleV1, transcript protocol.PairingTranscript) (protocol.PairingPackage, error) {
-	if !rosterIsEmpty(bundle.TrustedRoster) || len(bundle.VerificationKeys) != 1 || len(bundle.X25519PublicKeys) != 1 {
-		return protocol.PairingPackage{}, errors.New("two-device preview cannot approve a third trusted device")
-	}
 	devices := make([]protocol.PairingRosterDevice, 0, len(bundle.VerificationKeys)+1)
 	for id, ed := range bundle.VerificationKeys {
 		x, ok := bundle.X25519PublicKeys[id]
@@ -454,8 +472,15 @@ func pairingPackageFromBundle(bundle CredentialBundleV1, transcript protocol.Pai
 		DeviceID: append([]byte(nil), transcript.JoiningDeviceID...), Ed25519PublicKey: append([]byte(nil), transcript.JoiningEd25519PublicKey...),
 		X25519PublicKey: append([]byte(nil), transcript.JoiningX25519PublicKey...),
 	})
-	version := uint64(1)
-	roster, err := protocol.SignPairingRoster(bundle.AccountID[:], version, devices, bundle.DeviceID[:], ed25519.NewKeyFromSeed(bundle.SigningSeed[:]))
+	var roster protocol.PairingRoster
+	var err error
+	private := ed25519.NewKeyFromSeed(bundle.SigningSeed[:])
+	defer zeroBytes(private)
+	if rosterIsEmpty(bundle.TrustedRoster) {
+		roster, err = protocol.SignPairingRoster(bundle.AccountID[:], 1, devices, bundle.DeviceID[:], private)
+	} else {
+		roster, err = protocol.SignPairingRosterAdvance(bundle.TrustedRoster, devices[len(devices)-1], bundle.DeviceID[:], private)
+	}
 	if err != nil {
 		return protocol.PairingPackage{}, err
 	}
@@ -488,12 +513,72 @@ func decodeCreatorUpdatedCredential(journal creatorPairingJournal) ([]byte, Cred
 		zeroBytes(encoded)
 		return nil, CredentialBundleV1{}, err
 	}
-	if rosterIsEmpty(bundle.TrustedRoster) || len(bundle.TrustedRoster.Devices) != 2 {
+	if rosterIsEmpty(bundle.TrustedRoster) || len(bundle.TrustedRoster.Devices) < 2 {
 		zeroBytes(encoded)
 		bundle.Zero()
-		return nil, CredentialBundleV1{}, errors.New("creator pairing journal lacks an exact two-device signed roster")
+		return nil, CredentialBundleV1{}, errors.New("creator pairing journal lacks a signed roster")
+	}
+	original, err := originalCreatorCredential(journal, bundle)
+	zeroBytes(original)
+	if err != nil {
+		zeroBytes(encoded)
+		bundle.Zero()
+		return nil, CredentialBundleV1{}, err
 	}
 	return encoded, bundle, nil
+}
+
+func originalCreatorCredential(journal creatorPairingJournal, updated CredentialBundleV1) ([]byte, error) {
+	if journal.OriginalCredential == "" {
+		// Compatibility is intentionally limited to old first-pairing journals.
+		return originalBootstrapCredential(updated, journal.ActiveDigest)
+	}
+	encoded, err := decodeCanonicalBase64Bounded(journal.OriginalCredential, maxCredentialBlobBytes)
+	if err != nil {
+		return nil, err
+	}
+	valid := false
+	defer func() {
+		if !valid {
+			zeroBytes(encoded)
+		}
+	}()
+	digest := sha256.Sum256(encoded)
+	if hex.EncodeToString(digest[:]) != journal.ActiveDigest {
+		return nil, errors.New("original creator credential digest differs")
+	}
+	original, err := DecodeCredentialBundle(encoded)
+	if err != nil {
+		return nil, err
+	}
+	defer original.Zero()
+	if !rosterIsEmpty(original.TrustedRoster) {
+		if err := protocol.VerifyPairingRosterAdvance(original.TrustedRoster, updated.TrustedRoster); err != nil {
+			return nil, err
+		}
+	} else if len(updated.TrustedRoster.Devices) != 2 || len(updated.TrustedRoster.PreviousHash) != 0 || updated.TrustedRoster.Version != 1 {
+		return nil, errors.New("bootstrap pairing update is not the first two-device anchor")
+	}
+	// Only trust is permitted to change in a pairing. Check the exact unchanged
+	// identity/token/epoch/local keys without exposing any of them.
+	if err := applyTrustedRoster(&original, updated.TrustedRoster); err != nil {
+		return nil, err
+	}
+	projected, err := EncodeCredentialBundle(original)
+	if err != nil {
+		return nil, err
+	}
+	defer zeroBytes(projected)
+	wanted, err := EncodeCredentialBundle(updated)
+	if err != nil {
+		return nil, err
+	}
+	defer zeroBytes(wanted)
+	if !bytes.Equal(projected, wanted) {
+		return nil, errors.New("pairing changed material outside its trust roster")
+	}
+	valid = true
+	return encoded, nil
 }
 
 func originalBootstrapCredential(updated CredentialBundleV1, expectedDigest string) ([]byte, error) {
@@ -525,8 +610,8 @@ func verifyCreatorClaimedStatus(invitation syncclient.PairingInvitation, status 
 		return fmt.Errorf("verify claimed pairing transcript: %w", err)
 	}
 	if !bytes.Equal(updated.AccountID[:], transcript.AccountID) || !bytes.Equal(updated.DeviceID[:], transcript.CreatorDeviceID) ||
-		!bytes.Equal(updated.TrustedRoster.SignerDeviceID, transcript.CreatorDeviceID) || updated.TrustedRoster.Version != 1 ||
-		len(updated.TrustedRoster.Devices) != 2 {
+		!bytes.Equal(updated.TrustedRoster.SignerDeviceID, transcript.CreatorDeviceID) ||
+		len(updated.TrustedRoster.Devices) < 2 {
 		return errors.New("claimed pairing differs from the protected creator credential")
 	}
 	creatorFound, joiningFound := false, false
@@ -538,8 +623,6 @@ func verifyCreatorClaimedStatus(invitation syncclient.PairingInvitation, status 
 		case bytes.Equal(device.DeviceID, transcript.JoiningDeviceID):
 			joiningFound = bytes.Equal(device.Ed25519PublicKey, transcript.JoiningEd25519PublicKey) &&
 				bytes.Equal(device.X25519PublicKey, transcript.JoiningX25519PublicKey)
-		default:
-			return errors.New("claimed pairing roster contains an unrelated device")
 		}
 	}
 	if !creatorFound || !joiningFound {
@@ -563,7 +646,10 @@ func terminalPairingError(err error) bool {
 
 func cleanupCreatorGhostTrust(ctx context.Context, options PairingOptions, journalProfile string,
 	journalEncoded []byte, journal creatorPairingJournal, updatedEncoded []byte, updated CredentialBundleV1) error {
-	original, err := originalBootstrapCredential(updated, journal.ActiveDigest)
+	if journal.FinalizationPending {
+		return errors.New("finalization may be published; resume it instead of rolling back trust")
+	}
+	original, err := originalCreatorCredential(journal, updated)
 	if err != nil {
 		return err
 	}
@@ -609,6 +695,9 @@ func CancelCreatorPairing(ctx context.Context, relay PairingRelay, options Pairi
 	if err := decodePairingJournal(encodedJournal, &journal); err != nil || journal.Version != pairingJournalVersion {
 		return PairingResult{}, errors.New("creator pairing journal is invalid")
 	}
+	if journal.FinalizationPending {
+		return PairingResult{}, errors.New("finalization is pending; resume it instead of cancelling")
+	}
 	invitation, err := DecodePairingInvitation(journal.Invitation)
 	if err != nil {
 		return PairingResult{}, err
@@ -640,7 +729,7 @@ func CancelCreatorPairing(ctx context.Context, relay PairingRelay, options Pairi
 		}
 		defer zeroBytes(updatedEncoded)
 		defer updated.Zero()
-		original, err := originalBootstrapCredential(updated, journal.ActiveDigest)
+		original, err := originalCreatorCredential(journal, updated)
 		if err != nil {
 			return PairingResult{}, err
 		}
@@ -786,17 +875,18 @@ func ApprovePairing(ctx context.Context, relay PairingRelay, options PairingOpti
 		return PairingResult{}, fmt.Errorf("approve or resume pairing: %w", err)
 	}
 	// Approval only uploads an opaque package. The creator deliberately keeps
-	// its self-only trust until a separate resume/finalize observes that the
+	// its previous trusted checkpoint until a separate resume/finalize observes that the
 	// joining device has durably committed and marked this exact transcript ready.
 	return PairingResult{AccountIDHex: hex.EncodeToString(invitation.AccountID), PairingIDHex: hex.EncodeToString(invitation.PairingID), State: "awaiting_claim"}, nil
 }
 
 // FinalizePairing is intentionally separate from approval. It closes the
-// creator-side ghost-trust window: a second device enters active trust only
+// creator-side ghost-trust window: an added device enters active trust only
 // after the relay reports a ready (or already finalized) pairing whose
 // PSK-authenticated public material exactly matches the protected signed roster.
-// Terminal rollback or expiry restores the canonical self-only credential
-// before journal removal.
+// Before finalization intent, terminal rollback or expiry restores the exact
+// original credential. Once intent is durable, resume instead of cancelling:
+// even a failed response cannot prove the signed addition was never published.
 func FinalizePairing(ctx context.Context, relay PairingRelay, options PairingOptions) (PairingResult, error) {
 	if relay == nil || options.Secrets == nil {
 		return PairingResult{}, errors.New("pairing relay and OS secret store are required")
@@ -857,7 +947,26 @@ func FinalizePairing(ctx context.Context, relay PairingRelay, options PairingOpt
 		return PairingResult{}, err
 	}
 	if status.State == "ready" {
-		if err := relay.FinalizePairing(ctx, invitation.PairingID, account.DeviceToken); err != nil {
+		if !journal.FinalizationPending {
+			journal.FinalizationPending = true
+			pending, err := encodePairingJournal(journal)
+			if err != nil {
+				return PairingResult{}, err
+			}
+			defer zeroBytes(pending)
+			if err := replaceSecretExact(ctx, options.Secrets, journalProfile, encodedJournal, pending); err != nil {
+				return PairingResult{}, err
+			}
+		}
+		var finalizeErr error
+		if chained, ok := relay.(chainedPairingRelay); ok {
+			finalizeErr = chained.FinalizePairingWithRoster(ctx, invitation.PairingID, account.DeviceToken, updated.TrustedRoster)
+		} else if len(updated.TrustedRoster.PreviousHash) == 0 {
+			finalizeErr = relay.FinalizePairing(ctx, invitation.PairingID, account.DeviceToken)
+		} else {
+			finalizeErr = errors.New("relay client does not support chained roster finalization")
+		}
+		if err := finalizeErr; err != nil {
 			return PairingResult{}, fmt.Errorf("finalize ready pairing on relay: %w", err)
 		}
 	}
@@ -1060,7 +1169,7 @@ func decodeJoiningPendingCredential(journal joiningPairingJournal, account syncc
 	if !bytes.Equal(bundle.AccountID[:], account.AccountID) || !bytes.Equal(bundle.DeviceID[:], account.DeviceID) ||
 		string(bundle.DeviceToken) != account.DeviceToken || !bytes.Equal(bundle.SigningSeed[:], seed) ||
 		!bytes.Equal(bundle.X25519Private[:], xPrivate) || !bytes.Equal(bundle.LocalDataKey[:], localDataKey) ||
-		rosterIsEmpty(bundle.TrustedRoster) || len(bundle.TrustedRoster.Devices) != 2 {
+		rosterIsEmpty(bundle.TrustedRoster) || len(bundle.TrustedRoster.Devices) < 2 {
 		zeroBytes(encoded)
 		bundle.Zero()
 		return nil, CredentialBundleV1{}, errors.New("joining journal credential identities differ from its protected pairing material")

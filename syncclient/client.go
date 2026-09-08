@@ -585,6 +585,10 @@ func pairingVerifier(invitation PairingInvitation) ([]byte, error) {
 }
 
 func (client *Client) CreatePairing(ctx context.Context, creator Account, invitation PairingInvitation) (PairingInvitation, error) {
+	return client.createPairing(ctx, creator, invitation, 0, nil)
+}
+
+func (client *Client) createPairing(ctx context.Context, creator Account, invitation PairingInvitation, rosterVersion uint64, rosterHash []byte) (PairingInvitation, error) {
 	if err := validateProvisionedAccount(creator); err != nil || !bytes.Equal(creator.AccountID, invitation.AccountID) ||
 		!bytes.Equal(creator.DeviceID, invitation.CreatorDeviceID) {
 		return PairingInvitation{}, errors.New("pairing invitation does not belong to the authenticated creator")
@@ -597,9 +601,13 @@ func (client *Client) CreatePairing(ctx context.Context, creator Account, invita
 		PairingID string    `json:"pairing_id"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	request := map[string]string{
+	request := map[string]any{
 		"pairing_id":       hex.EncodeToString(invitation.PairingID),
 		"pairing_verifier": base64.RawURLEncoding.EncodeToString(verifier),
+	}
+	if rosterVersion != 0 {
+		request["roster_version"] = rosterVersion
+		request["roster_hash"] = hex.EncodeToString(rosterHash)
 	}
 	if err := client.doJSON(ctx, http.MethodPost, "/v1/pairings", creator.DeviceToken, request, &response, http.StatusCreated); err != nil {
 		return PairingInvitation{}, err

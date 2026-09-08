@@ -42,6 +42,7 @@ var (
 		"/v1/pairings/:id/approve": {},
 		"/v1/pairings/:id/claim":   {},
 		"/v1/sync":                 {},
+		"/v1/roster":               {},
 		"unmatched":                {},
 	}
 )

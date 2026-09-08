@@ -2220,7 +2220,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 		FROM schema_migrations WHERE name = '001_init.sql'`).Scan(&count, &checksum); err != nil {
 		t.Fatal(err)
 	}
-	if count != 4 || checksum != hex.EncodeToString(expected[:]) {
+	if count != 5 || checksum != hex.EncodeToString(expected[:]) {
 		t.Fatalf("migration ledger mismatch: count=%d checksum=%q", count, checksum)
 	}
 	if err := application.Close(); err != nil {
@@ -2230,7 +2230,7 @@ func TestMigrationLedgerIsIdempotentAndChecksumProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 4 {
+	if err := application.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 5 {
 		t.Fatalf("migration reapplied: count=%d err=%v", count, err)
 	}
 	if _, err := application.db.Exec("UPDATE schema_migrations SET checksum = ? WHERE name = ?", strings.Repeat("0", 64), "001_init.sql"); err != nil {
@@ -2292,7 +2292,7 @@ func TestUserAuthMigrationPreservesExistingEncryptedAccount(t *testing.T) {
 		FROM accounts WHERE id = ?`, accountID).Scan(&userID, &devices, &migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if userID.Valid || devices != 1 || migrationCount != 4 {
+	if userID.Valid || devices != 1 || migrationCount != 5 {
 		t.Fatalf("legacy account changed by login migration: user=%#v devices=%d migrations=%d", userID, devices, migrationCount)
 	}
 }
