@@ -1026,12 +1026,18 @@ class WindowsClientTests(unittest.TestCase):
             "Copy-OverlayWithBackup",
             "ConvertTo-NativeCommandLineArgument",
             "Diagnostics.ProcessStartInfo",
-            "$process.WaitForExit()",
+            "$process.WaitForExit($TimeoutSeconds * 1000)",
             "Set-YunPinMachineRegistry64",
             "Registry64",
             "registry64Runtime = $current",
             "$process.ExitCode",
-            '"YunPinIMEPreview"',
+            "'YunPinIMEPreview'",
+            "Invoke-YunPinInstallTransaction",
+            "Restore-YunPinPackage",
+            "RECOVERY_REQUIRED",
+            "Assert-YunPinReplaceableDlls",
+            "Write-YunPinPriorState",
+            "[switch]$RecoverTransaction",
         ):
             self.assertIn(required, installer)
         self.assertNotIn("$LASTEXITCODE", installer)
