@@ -155,7 +155,7 @@ func TestRebuildDoesNotReplaceMalformedExistingSnapshot(t *testing.T) {
 }
 
 func TestMergeCanonicalizesLearnedPinyinAndDropsUnsafeRemoteRows(t *testing.T) {
-	rows, learned := mergeSnapshotRows(nil, []localstore.Phrase{
+	rows, learned, _ := mergeSnapshotRows(nil, []localstore.Phrase{
 		{Text: "测试", Pinyin: "CÈ---SHI4", UseCount: 3, LastUsedDay: 21000},
 		{Text: "方向\u202e词", Pinyin: "fang xiang ci", UseCount: 9},
 		{Text: "空拼音", Pinyin: "---", UseCount: 9},
