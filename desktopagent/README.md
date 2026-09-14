@@ -259,11 +259,41 @@ not the aggregate totals.
 
 `settings` opens one temporary browser page bound only to an ephemeral
 `127.0.0.1` port. A per-process unguessable path scopes every GET and POST;
-responses are non-cacheable and the process exits after 30 minutes. The page
-contains only four product functions: the three ranking/correction booleans,
-redacted synchronization health, a real `sync-once` action, and the existing
-personal-vocabulary operations. It has no endpoint, account/device identifier,
-credential, recovery, reset, clear or re-pair field.
+responses are non-cacheable and the process exits after 30 minutes. Mutations
+also require a same-origin browser request. Alongside ranking controls and
+personal vocabulary, the page includes a resumable sync onboarding wizard:
+
+1. Enter and anonymously test a server address. HTTPS is the default; private
+   network HTTP requires an explicit opt-in. An already paired device can only
+   correct the address of the same service, with confirmation and verification
+   against its existing device identity and signed roster before saving.
+2. Reuse an existing login session, or log in with the existing username and
+   password. Paired devices do not need another login for normal sync. To add a
+   device, create an invitation on an existing device, submit it on the new
+   device, then follow both pages through approval and final confirmation.
+   Pending steps survive reopening settings. Invitations appear only in the
+   initiating response, never in a status page, log, or redirect URL.
+3. Export the static baseline on an existing device and import it on the new
+   one. The encrypted sync service transfers personal vocabulary and learning
+   changes; it does not distribute the static baseline. Uploads accept UTF-8
+   five-column TSV up to 64 MiB. Generated seven-column snapshots are rejected.
+   A different existing baseline requires an explicit merge or replace choice
+   against its current hash; the previous file is retained. An empty baseline
+   is a separate explicit choice. Old local vocabulary is backed up before
+   replacement and can be restored after the first sync, preserving counts and
+   pins without silently resurrecting account-deleted entries.
+4. Prepare the local vocabulary, synchronize and load it, then enable the
+   installed background component. Preparation preserves the Rime identity and
+   unrelated settings and retains the original overlay. It does not create a
+   baseline. First sync is bounded to three minutes and cannot run without a
+   baseline. Background activation reuses the standard readiness checks and
+   leaves an already running agent alone.
+
+The page reports local opt-in, current snapshot receipt, and actual background
+registration separately. A historical successful sync does not imply current
+activation. These checks do not replace testing Chinese candidates and phrase
+selection in an application. The wizard joins an existing sync account; it does
+not initialize a new encrypted account or create recovery material.
 
 Saving guards replaces only the exact `yunpin/short_input_guard`,
 `yunpin/long_correction_guard`, and `yunpin/typo_correction` boolean tokens in
