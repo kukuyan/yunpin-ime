@@ -9,11 +9,15 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 #include <rime/candidate.h>
 #include <rime/context.h>
 #include <rime/engine.h>
+#include <rime/dict/dictionary.h>
+#include <rime/gear/translator_commons.h>
+#include <rime/language.h>
 #include <rime/key_event.h>
 #include <rime/schema.h>
 #include <rime/segmentation.h>
@@ -21,6 +25,66 @@
 #include <rime/translation.h>
 
 namespace rime {
+
+// Load only the public translator's syllabary when a schema session starts.
+// A private candidate can then carry the same Code/Language as an ordinary
+// Rime Phrase without touching the user dictionary on the query path.
+class YunPinPhraseLearning {
+ public:
+  explicit YunPinPhraseLearning(const Ticket& filter_ticket) {
+    if (!filter_ticket.schema) return;
+    Config* config = filter_ticket.schema->config();
+    bool enabled = true;
+    config->GetBool("translator/enable_user_dict", &enabled);
+    if (!enabled) return;
+    auto component = Dictionary::Require("dictionary");
+    if (!component) return;
+    Ticket ticket = filter_ticket;
+    ticket.name_space = "translator";
+    std::unique_ptr<Dictionary> dictionary(component->Create(ticket));
+    if (!dictionary || !dictionary->Load() || !dictionary->primary_table())
+      return;
+    Syllabary syllabary;
+    if (!dictionary->primary_table()->GetSyllabary(&syllabary) ||
+        syllabary.empty() || syllabary.size() > 4096) return;
+    for (std::size_t index = 0; index < syllabary.size(); ++index) {
+      const std::string syllable = dictionary->primary_table()->GetSyllableById(
+          static_cast<int>(index));
+      if (syllable.empty() ||
+          !syllables_.emplace(syllable, static_cast<int>(index)).second) {
+        syllables_.clear();
+        return;
+      }
+    }
+    std::string name;
+    if (!config->GetString("translator/user_dict", &name))
+      name = Language::get_language_component(dictionary->name());
+    if (!name.empty()) language_ = std::make_shared<Language>(name);
+  }
+
+  an<DictEntry> EntryFor(const yunpin::Candidate& candidate) const {
+    auto entry = New<DictEntry>();
+    entry->text = candidate.text;
+    entry->comment = candidate.pinned ? "\xE2\x98\x85" : "";
+    if (!language_ || candidate.syllables.empty()) return entry;
+    for (const auto& syllable : candidate.syllables) {
+      const auto found = syllables_.find(syllable);
+      if (found == syllables_.end()) {
+        entry->code.clear();
+        return entry;
+      }
+      entry->code.push_back(found->second);
+    }
+    return entry;
+  }
+
+  std::shared_ptr<Language> language() const { return language_; }
+
+ private:
+  std::unordered_map<std::string, int> syllables_;
+  std::shared_ptr<Language> language_;
+};
+
 namespace {
 
 bool IsCjkIdeograph(std::uint32_t codepoint) noexcept {
@@ -112,21 +176,49 @@ bool IsWordCandidateType(std::string_view type) noexcept {
          type == "user_table" || type == "completion";
 }
 
-class YunPinCandidate : public SimpleCandidate {
+class YunPinCandidate : public Phrase {
  public:
   YunPinCandidate(std::string id,
                   std::size_t start,
                   std::size_t end,
-                  const yunpin::Candidate& candidate)
-      : SimpleCandidate("yunpin", start, end, candidate.text,
-                        candidate.pinned ? "\xE2\x98\x85" : ""),
-        id_(std::move(id)) {}
+                  const yunpin::Candidate& candidate,
+                  const std::shared_ptr<YunPinPhraseLearning>& learning)
+      : YunPinCandidate(std::move(id), start, end, candidate,
+                        learning->EntryFor(candidate), learning->language()) {}
+
+  YunPinCandidate(std::string id,
+                  std::size_t start,
+                  std::size_t end,
+                  const yunpin::Candidate& candidate,
+                  const an<DictEntry>& entry,
+                  std::shared_ptr<Language> language)
+      : Phrase(entry->code.empty() ? nullptr : language.get(),
+               "yunpin", start, end, entry),
+        id_(std::move(id)),
+        correction_score_(candidate.correction_score),
+        pinned_(candidate.pinned),
+        synced_learning_(candidate.synced_learning),
+        use_count_(candidate.use_count),
+        language_owner_(std::move(language)) {}
 
   const std::string& id() const noexcept { return id_; }
+  std::int32_t correction_score() const noexcept {
+    return correction_score_;
+  }
+  bool pinned() const noexcept { return pinned_; }
+  bool synced_learning() const noexcept { return synced_learning_; }
+  std::uint64_t use_count() const noexcept { return use_count_; }
 
  private:
   std::string id_;
+  std::int32_t correction_score_{0};
+  bool pinned_{false};
+  bool synced_learning_{false};
+  std::uint64_t use_count_{0};
+  // Menus may outlive their filter. Phrase retains a raw language pointer.
+  std::shared_ptr<Language> language_owner_;
 };
+
 
 // Ordering contract: bounded private phrases take the head of the list, then
 // the ordinary upstream translation. Expression actions are deliberately not
@@ -148,6 +240,7 @@ class YunPinMergedTranslation : public Translation {
       injected_text_.insert(candidate->text());
     }
     PrepareUpstreamWindow(correction_score);
+    PromoteLearnedUpstream();
     RefreshExhausted();
   }
 
@@ -244,6 +337,7 @@ class YunPinMergedTranslation : public Translation {
       if (!candidate) {
         break;
       }
+      upstream_evidence_.push_back(candidate);
       // Corrections inside the bounded first page are retained temporarily so
       // ProtectLongCorrections can choose at most one. Once this window has
       // been consumed, every later correction is dropped instead of leaking
@@ -260,6 +354,53 @@ class YunPinMergedTranslation : public Translation {
         });
     ProtectLongCorrections();
     SkipSuppressedUpstream();
+  }
+
+  void PromoteLearnedUpstream() {
+    if (front_.empty()) return;
+    const auto injected = As<YunPinCandidate>(front_.front());
+    if (!injected || injected->pinned() || injected->correction_score() > 0)
+      return;
+    const auto exact_phrase = [&](const of<Candidate>& candidate) {
+      const auto phrase = As<Phrase>(Candidate::GetGenuineCandidate(candidate));
+      return phrase && phrase->language() && injected->language() &&
+             *phrase->language() == *injected->language() &&
+             phrase->is_exact_match() && !phrase->code().empty() &&
+             !candidate->is_correction() && !phrase->is_correction() &&
+             candidate->start() == injected->start() &&
+             candidate->end() == injected->end();
+    };
+    const auto injected_native = std::find_if(
+        upstream_evidence_.begin(), upstream_evidence_.end(),
+        [&](const of<Candidate>& candidate) {
+          return candidate->text() == injected->text() && exact_phrase(candidate);
+        });
+    for (auto it = upstream_evidence_.begin(); it != upstream_evidence_.end(); ++it) {
+      const auto& candidate = *it;
+      if (!exact_phrase(candidate)) continue;
+      const auto phrase = As<Phrase>(Candidate::GetGenuineCandidate(candidate));
+      if (phrase->type() != "user_phrase") continue;
+      // A direct same-page native comparison takes precedence over counts.
+      // Without a local copy, compare positive commit counts only with an
+      // explicitly synchronized source. Equal counts are not a global clock.
+      const bool native_precedes = injected_native != upstream_evidence_.end() &&
+                                   it < injected_native;
+      const bool comparable_counts = injected_native == upstream_evidence_.end() &&
+          injected->synced_learning() && phrase->entry().commit_count > 0 &&
+          static_cast<std::uint64_t>(phrase->entry().commit_count) >= injected->use_count();
+      if (!native_precedes && !comparable_counts) continue;
+      // Evidence is captured before de-duplication: a newly learned phrase
+      // may already be present in the immutable snapshot's two head slots.
+      const auto same_text = [&](const of<Candidate>& item) {
+        return item->text() == candidate->text();
+      };
+      front_.erase(std::remove_if(front_.begin(), front_.end(), same_text), front_.end());
+      upstream_window_.erase(std::remove_if(upstream_window_.begin(),
+                                          upstream_window_.end(), same_text),
+                             upstream_window_.end());
+      front_.insert(front_.begin(), candidate);
+      return;
+    }
   }
 
   void ProtectLongCorrections() {
@@ -315,6 +456,7 @@ class YunPinMergedTranslation : public Translation {
   std::vector<of<Candidate>> front_;
   std::vector<of<Candidate>> upstream_window_;
   std::set<std::string> injected_text_;
+  std::vector<of<Candidate>> upstream_evidence_;
   std::size_t front_cursor_{0};
   std::size_t window_cursor_{0};
   bool suppress_long_cjk_upstream_{false};
@@ -369,6 +511,7 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
           std::clamp(configured_min_chars, 6, 64));
     }
   }
+  phrase_learning_ = std::make_shared<YunPinPhraseLearning>(ticket);
   if (enabled_ && max_candidates_ > 0) {
     private_ready_ = LoadSnapshot(snapshot_path_);
   }
@@ -527,7 +670,8 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   if (active_input_.empty()) {
     return translation;
   }
-  // Private phrases keep the head slots; max_candidates_ already bounds them.
+  // Private phrases get at most two head slots; native learned evidence may
+  // precede an unpinned automatic snapshot.
   const bool suppress_long_cjk_upstream =
       short_input_guard_ && IsShortNormalizedPinyin(active_input_);
   const std::string normalized = yunpin::NormalizePinyin(active_input_);
@@ -544,7 +688,7 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
         continue;
       }
       front.push_back(New<YunPinCandidate>(match.id, active_start_,
-                                           active_end_, match));
+                                           active_end_, match, phrase_learning_));
     }
   }
 

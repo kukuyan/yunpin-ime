@@ -16,6 +16,8 @@
 #include "rime_yunpin_filter.hpp"
 
 #include <rime/engine.h>
+#include <rime/dict/dictionary.h>
+#include <rime/gear/translator_commons.h>
 #include <rime/key_event.h>
 #include <rime/segmentation.h>
 #include <rime/service.h>
@@ -573,6 +575,166 @@ void TestPrivateCandidatesStayBounded() {
   assert(texts[1] == "u0");  // the clamp to two is still in force
 }
 
+class NativeUpstream : public Translation {
+ public:
+  explicit NativeUpstream(CandidateList candidates)
+      : candidates_(std::move(candidates)) {
+    set_exhausted(candidates_.empty());
+  }
+  bool Next() override {
+    ++cursor_; set_exhausted(cursor_ >= candidates_.size());
+    return !exhausted();
+  }
+  an<Candidate> Peek() override {
+    return exhausted() ? nullptr : candidates_[cursor_];
+  }
+ private:
+  CandidateList candidates_;
+  std::size_t cursor_ = 0;
+};
+
+CandidateList NativeMenu(YunPinFilter& filter, Harness& harness,
+                         const std::string& input,
+                         CandidateList upstream = {}) {
+  harness.context.input_ = input;
+  Segment segment(0, static_cast<int>(input.size()));
+  segment.tags.insert("abc");
+  assert(filter.AppliesToSegment(&segment));
+  CandidateList ignored;
+  auto translation = filter.Apply(New<NativeUpstream>(std::move(upstream)),
+                                  &ignored);
+  CandidateList result;
+  while (translation && !translation->exhausted() && result.size() < 16) {
+    result.push_back(translation->Peek());
+    if (!translation->Next()) break;
+  }
+  return result;
+}
+
+
+void WriteNativeLearningSnapshot(bool pinned = false,
+                                 const std::string& source = "synced_learning@20679",
+                                 bool include_learned = false) {
+  const auto dir = Service::instance().deployer().user_data_dir;
+  std::ofstream out(dir / "yunpin" / "private.tsv", std::ios::trunc);
+  out << "phrase\tpinyin\tsource\tuse_count\tpinned\n";
+  out << "办公时\tban gong shi\t" << source << "\t5\t" << pinned << "\n";
+  if (include_learned) out << "办公室\tban gong shi\t" << source << "\t2\tfalse\n";
+  out << "西安\txi an\tmanual\t2\tfalse\n";
+  out << "先\txian\tmanual\t2\tfalse\n";
+  out << "未知词\twei zhi ci\tmanual\t2\tfalse\n";
+}
+
+void TestPrivatePhrasesCarryNativeLearningIdentity() {
+  WriteNativeLearningSnapshot();
+  Dictionary::test_syllables = {"an", "ban", "gong", "shi", "xi", "xian"};
+  an<Phrase> retained;
+  {
+    Harness harness;
+    harness.config.strings_["translator/dictionary"] = "fixture.extra";
+    harness.config.strings_["translator/user_dict"] = "custom_learning";
+    YunPinFilter filter(harness.ticket());
+    retained = As<Phrase>(NativeMenu(filter, harness, "bangongshi").front());
+    assert(retained && retained->language());
+    assert(retained->type() == "yunpin");
+    assert(retained->language()->name() == "custom_learning");
+    assert((retained->code() == Code{1, 2, 3}));
+    // Equal concatenated keys must retain the dictionary's distinct syllables.
+    const auto homographs = NativeMenu(filter, harness, "xian");
+    assert(homographs.size() == 2);
+    for (const auto& candidate : homographs) {
+      const auto phrase = As<Phrase>(candidate);
+      assert(phrase && phrase->language());
+      assert(phrase->code().size() == (phrase->text() == "西安" ? 2U : 1U));
+    }
+    const auto unknown = As<Phrase>(NativeMenu(filter, harness, "weizhici").front());
+    assert(unknown && !unknown->language() && unknown->code().empty());
+  }
+  // Rime Menus can outlive their filter; Phrase's raw Language pointer stays valid.
+  assert(retained->language()->name() == "custom_learning");
+  {
+    Harness harness;
+    harness.config.strings_["translator/dictionary"] = "fixture.extra";
+    YunPinFilter filter(harness.ticket());
+    const auto phrase = As<Phrase>(NativeMenu(filter, harness, "bangongshi").front());
+    assert(phrase && phrase->language()->name() == "fixture");
+  }
+  {
+    Harness harness;
+    harness.config.strings_["translator/dictionary"] = "fixture.extra";
+    harness.config.bools_["translator/enable_user_dict"] = false;
+    YunPinFilter filter(harness.ticket());
+    const auto phrase = As<Phrase>(NativeMenu(filter, harness, "bangongshi").front());
+    assert(phrase && !phrase->language() && phrase->code().empty());
+  }
+  Dictionary::test_syllables.clear();
+  WriteSnapshot(Service::instance().deployer().user_data_dir);
+}
+
+void TestNativeLearningEvidenceOrdering() {
+  static const Language language("fixture");
+  Dictionary::test_syllables = {"ban", "gong", "shi"};
+  const auto learned = [&](const std::string& text, int count = 0) {
+    auto entry = New<DictEntry>();
+    entry->text = text; entry->code = {0, 1, 2}; entry->commit_count = count;
+    return New<Phrase>(&language, "user_phrase", 0, 10, entry);
+  };
+  const auto menu_for = [&](CandidateList upstream) {
+    Harness harness;
+    harness.config.strings_["translator/dictionary"] = "fixture";
+    YunPinFilter filter(harness.ticket());
+    return NativeMenu(filter, harness, "bangongshi", std::move(upstream));
+  };
+  WriteNativeLearningSnapshot();
+  const auto correct = learned("办公室");
+  auto menu = menu_for({correct, learned("办公时")});
+  assert(menu.size() == 2 && menu.front() == correct);
+  // If both words are already in the snapshot, removing native duplicates
+  // must still preserve Rime's directly observed homophone order.
+  WriteNativeLearningSnapshot(false, "synced_learning@20679", true);
+  menu = menu_for({correct, learned("办公时")});
+  assert(menu.size() == 2 && menu.front()->text() == "办公室");
+  // The remote stale homophone can also be absent from the native userdb.
+  assert(menu_for({learned("办公室", 5)}).front()->text() == "办公室");
+  WriteNativeLearningSnapshot(true, "synced_learning@20679", true);
+  assert(menu_for({correct, learned("办公时")}).front()->text() == "办公时");
+  WriteNativeLearningSnapshot();
+  // A direct native comparison is stronger than aggregate snapshot counts.
+  assert(menu_for({learned("办公时"), learned("办公室", 100)}).front()->text() == "办公时");
+  for (int count : {-1, 0, 1, 4, 5, 6}) {
+    const auto result = menu_for({learned("办公室", count)});
+    assert(result.front()->text() == (count >= 5 ? "办公室" : "办公时"));
+  }
+  for (const std::string& source : {"manual", "sogou_sgpybin", "synced_learning",
+                                    "synced_learning@0", "synced_learning@-1",
+                                    "synced_learning@20679junk"}) {
+    WriteNativeLearningSnapshot(false, source);
+    assert(menu_for({learned("办公室", 100)}).front()->text() == "办公时");
+  }
+  WriteNativeLearningSnapshot(true);
+  assert(menu_for({learned("办公室", 100)}).front()->text() == "办公时");
+  WriteNativeLearningSnapshot();
+  for (const std::string& rejected : {"prefix", "correction", "predictive", "foreign", "ordinary", "empty_code"}) {
+    auto candidate = learned("办公室", 100);
+    if (rejected == "prefix") candidate->set_end(3);
+    if (rejected == "correction") candidate->set_correction(true);
+    if (rejected == "ordinary") candidate->set_type("phrase");
+    if (rejected == "empty_code") candidate->code().clear();
+    if (rejected == "predictive" || rejected == "foreign") {
+      static const Language foreign("another_dictionary");
+      auto entry = New<DictEntry>();
+      entry->text = "办公室"; entry->code = {0, 1, 2}; entry->commit_count = 100;
+      if (rejected == "predictive") entry->matching_code_size = 1;
+      candidate = New<Phrase>(rejected == "foreign" ? &foreign : &language,
+                              "user_phrase", 0, 10, entry);
+    }
+    assert(menu_for({candidate, learned("办公时")}).front()->text() == "办公时");
+    assert(menu_for({candidate}).front()->text() == "办公时");
+  }
+  Dictionary::test_syllables.clear();
+  WriteSnapshot(Service::instance().deployer().user_data_dir);
+}
+
 }  // namespace
 
 int main() {
@@ -596,6 +758,8 @@ int main() {
   TestBothFeatureSwitchesOffStayInactive();
   TestPasswordModeDisablesEverything();
   TestPrivateCandidatesStayBounded();
+  TestPrivatePhrasesCarryNativeLearningIdentity();
+  TestNativeLearningEvidenceOrdering();
 
   std::filesystem::remove_all(user_data_dir);
   return 0;
