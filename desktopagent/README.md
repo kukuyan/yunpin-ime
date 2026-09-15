@@ -152,6 +152,16 @@ fixed platform reload (`YunPin --reload` on macOS or the fixed preview
 `YunPinDeployer.exe /deploy` path on Windows). A digest marker is written only
 after reload succeeds, so a crash between replacement and reload is retried.
 
+## Inspecting a running installation
+
+Use the installed agent's supported `status`, phrase-management commands, and
+managed export/maintenance paths for live diagnostics. Do not open a running
+installation's `private.db` with an external SQLite client, including
+`sqlite3 -readonly` or a Python read-only connection: a reader can still create
+WAL/SHM sidecars with ownership or ACLs that the agent correctly rejects.
+Do not open the production Rime LevelDB directly either. Native learning
+experiments must use isolated data copies and supported exported snapshots.
+
 ## Rime userdb learning bridge
 
 Default `sync-once` and resident `run` share the same fixed Rime maintenance

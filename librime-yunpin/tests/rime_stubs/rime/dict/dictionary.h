@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// API subset verified against librime 33e78140250125871856cdc5b42ddc6a5fcd3cd4.
 // Minimal read-only public dictionary surface; no stub userdb is involved.
 #pragma once
 #include <rime/common.h>
