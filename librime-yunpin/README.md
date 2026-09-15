@@ -12,6 +12,35 @@ the schema components are initialized. Candidate queries and the conservative
 session-learning state operate only in memory; encrypted SQLite refresh and
 background snapshot notifications are not connected yet.
 
+## Native phrase learning and ordering
+
+Injected personal candidates carry a genuine Rime `Phrase`, with the public
+translator dictionary's explicit syllable IDs and matching `Language`. This
+lets the existing ScriptTranslator learn a sentence assembled from several
+selected segments, including a private phrase. The native user dictionary
+persists that learning. Unknown public syllables and
+`translator/enable_user_dict: false` leave the candidate available with no
+native learning identity. The native host's existing privacy and learning
+controls still apply; this does not widen YunPin's separate correction chain.
+
+Private phrases keep at most two head slots. An exact native `user_phrase`
+covering the same input in the same language may precede an unpinned head when
+Rime directly ranks it before that head in the bounded first page. If the head
+has no comparable local copy, the fallback requires an explicit
+`synced_learning@<positive UTC day>` source and a positive native commit count
+at least as large as the snapshot's use count. Plain manual/imported sources
+never use this count fallback. Pins and positive explicit correction scores
+keep priority. Prefix predictions, automatic corrections and other languages
+cannot use either rule. Evidence is retained before duplicate removal, so a
+learned phrase already copied into the snapshot is handled the same way.
+
+The day marker identifies a source; it is not a global clock. Equal aggregate
+counts cannot establish which device made the last choice. This adapter adds
+no sync transport or background snapshot refresh. For acceptance, use an
+isolated, unpinned synthetic phrase: select its segments, retype the full code,
+and confirm the joined phrase remains first in a new Rime session/process.
+A manually pinned phrase demonstrates pin recall, not native learning.
+
 ## Private snapshot
 
 The filter looks for `yunpin/private.tsv` below the frontend's isolated user
@@ -242,8 +271,9 @@ sensitive option break the chain.
 
 A completed correction gives the old word `-1` and the replacement `+1`. Only
 the first eight ordinary upstream candidates are prefetched and stable-sorted;
-private candidates remain at the head, duplicates and the short-input guard
-retain their existing behavior, and the remainder stays in upstream order.
+private candidates follow the native-evidence rules above, duplicates and the
+short-input guard retain their existing behavior, and the remainder stays in
+upstream order.
 Both habit aggregates and correction scores reject new keys after 50,000 while
 allowing existing keys to update.
 

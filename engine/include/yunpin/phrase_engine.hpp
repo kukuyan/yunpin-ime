@@ -47,6 +47,8 @@ struct PhraseEntry {
   // available solely when its complete normalized code equals the literal
   // query; it never participates in full-prefix, initials or fuzzy matching.
   bool private_exact_code_only{false};
+  // Explicit synchronized source marker; never inferred from a use count.
+  bool synced_learning{false};
 };
 
 struct Candidate {
@@ -60,6 +62,10 @@ struct Candidate {
   std::int64_t static_weight{0};
   bool pinned{false};
   std::int32_t correction_score{0};
+
+  // Preserve xi an versus xian for the native dictionary Code.
+  std::vector<std::string> syllables;
+  bool synced_learning{false};
 
   [[nodiscard]] bool is_personal() const noexcept;
 };
