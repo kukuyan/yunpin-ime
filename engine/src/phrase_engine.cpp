@@ -729,7 +729,7 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
                                correction_scores_[index].load(
                                    std::memory_order_relaxed),
                                entry.last_used_day,
-                               {}}, index});
+                               {}, entry.synced_learning}, index});
   }
 
   std::sort(ranked.begin(), ranked.end(), [](const Candidate& left,

@@ -11,6 +11,7 @@ struct DictEntry {
   string text, comment, preedit;
   Code code;
   int matching_code_size = 0;
+  int commit_count = 0;
 };
 class Table {
  public:

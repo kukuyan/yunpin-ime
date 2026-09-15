@@ -1058,6 +1058,34 @@ void TestFreshNativePhraseOutranksAutomaticSnapshotButPreservesPin() {
                                  {candidate, learned(kOfficeWrong, 10)});
     assert(menu.front()->text() == kOfficeWrong);
   }
+  for (const int commits : {1, 4, 5, 6}) {
+    Harness harness; configure(harness); YunPinFilter filter(harness.ticket());
+    auto entry = New<DictEntry>(); entry->text = "本机明确新选词";
+    entry->code = {1, 2, 3}; entry->commit_count = commits;
+    const auto candidate = New<Phrase>(&language, "user_phrase", 0, 10, entry);
+    const auto menu = NativeMenu(filter, harness, "bangongshi", {candidate});
+    // Snapshot's automatically learned homophone has count 5. The fallback
+    // can compare commits even when that remote phrase is absent from Rime.
+    assert(menu.front()->text() ==
+           (commits >= 5 ? entry->text : kOfficeWrong));
+  }
+  {
+    const auto dir = Service::instance().deployer().user_data_dir;
+    // Rewrite only synthetic fixtures, never a live snapshot.
+    for (const std::string& source : {"sogou_sgpybin", "manual", "synced_learning"}) {
+      std::ofstream fixture(dir / "yunpin" / "private.tsv", std::ios::trunc);
+      fixture << "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\tcorrection_score\n";
+      fixture << kOfficeWrong << "\tban gong shi\t" << source << "\t1\tfalse\t0\t0\n";
+      fixture.close();
+      Harness harness; configure(harness); YunPinFilter filter(harness.ticket());
+      auto entry = New<DictEntry>(); entry->text = "不能凭次数挤掉基线";
+      entry->code = {1, 2, 3}; entry->commit_count = 100;
+      const auto menu = NativeMenu(filter, harness, "bangongshi",
+          {New<Phrase>(&language, "user_phrase", 0, 10, entry)});
+      assert(menu.front()->text() == kOfficeWrong);
+    }
+    WriteSnapshot(dir);
+  }
   {
     Harness harness; configure(harness); YunPinFilter filter(harness.ticket());
     // A synced phrase absent from this device's userdb has no direct native

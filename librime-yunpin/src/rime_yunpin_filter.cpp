@@ -212,6 +212,8 @@ class YunPinCandidate : public Phrase {
         id_(std::move(id)),
         correction_score_(candidate.correction_score),
         pinned_(candidate.pinned),
+        synced_learning_(candidate.synced_learning),
+        use_count_(candidate.use_count),
         language_owner_(std::move(language)) {}
 
   const std::string& id() const noexcept { return id_; }
@@ -219,11 +221,15 @@ class YunPinCandidate : public Phrase {
     return correction_score_;
   }
   bool pinned() const noexcept { return pinned_; }
+  bool synced_learning() const noexcept { return synced_learning_; }
+  std::uint64_t use_count() const noexcept { return use_count_; }
 
  private:
   std::string id_;
   std::int32_t correction_score_{0};
   bool pinned_{false};
+  bool synced_learning_{false};
+  std::uint64_t use_count_{0};
   // Menus may outlive their filter. Phrase retains a raw language pointer.
   std::shared_ptr<Language> language_owner_;
 };
@@ -494,25 +500,33 @@ class YunPinMergedTranslation : public Translation {
     if (!injected || injected->pinned() || injected->correction_score() > 0)
       return;
     const auto injected_order = upstream_order_.find(injected->text());
-    if (injected_order == upstream_order_.end()) return;
     // When Rime directly ranks an exact learned phrase ahead of the injected
     // phrase, its local learning must not be hidden by a stale snapshot.
-    // Without that comparison, keep the overlay: a newly synced remote phrase
-    // may not exist in this device's userdb yet. Pins and explicit correction
-    // feedback retain their priority.
+    // When a remote overlay has no local userdb copy, compare actual commit
+    // counts only for the synchronized projection. An imported baseline is
+    // never displaced using this fallback. Equal counts do not prove a global
+    // last choice; explicit pins and correction feedback retain priority.
     const auto learned = std::find_if(
         upstream_window_.begin(), upstream_window_.end(),
         [&](const of<Candidate>& candidate) {
           const auto phrase = As<Phrase>(
               Candidate::GetGenuineCandidate(candidate));
           const auto order = upstream_order_.find(candidate->text());
+          const bool native_precedes =
+              injected_order != upstream_order_.end() &&
+              order != upstream_order_.end() &&
+              order->second < injected_order->second;
+          const bool comparable_counts =
+              injected_order == upstream_order_.end() && phrase &&
+              injected->synced_learning() && phrase->entry().commit_count > 0 &&
+              static_cast<std::uint64_t>(phrase->entry().commit_count) >=
+                  injected->use_count();
           return phrase && phrase->type() == "user_phrase" &&
                  phrase->language() && injected->language() &&
                  *phrase->language() == *injected->language() &&
                  phrase->is_exact_match() && !phrase->code().empty() &&
                  !candidate->is_correction() &&
-                 order != upstream_order_.end() &&
-                 order->second < injected_order->second &&
+                 (native_precedes || comparable_counts) &&
                  candidate->start() == injected->start() &&
                  candidate->end() == injected->end();
         });
