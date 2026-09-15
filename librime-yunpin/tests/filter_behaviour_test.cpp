@@ -735,6 +735,51 @@ void TestNativeLearningEvidenceOrdering() {
   WriteSnapshot(Service::instance().deployer().user_data_dir);
 }
 
+
+void TestNativeLearningEvidenceRespectsShortGuardAndBound() {
+  static const Language language("fixture");
+  const auto native = [&](const std::string& text, std::size_t end, int count) {
+    auto entry = New<DictEntry>();
+    entry->text = text; entry->code = {0}; entry->commit_count = count;
+    return New<Phrase>(&language, "user_phrase", 0, end, entry);
+  };
+  const auto dir = Service::instance().deployer().user_data_dir;
+  {
+    std::ofstream out(dir / "yunpin" / "private.tsv", std::ios::trunc);
+    out << "phrase\tpinyin\tsource\tuse_count\tpinned\n";
+    out << "安\tan\tsynced_learning@20679\t5\tfalse\n";
+  }
+  Dictionary::test_syllables = {"an"};
+  for (bool guard : {true, false}) {
+    for (bool direct_comparison : {true, false}) {
+      Harness harness;
+      harness.config.strings_["translator/dictionary"] = "fixture";
+      harness.config.bools_["yunpin/short_input_guard"] = guard;
+      YunPinFilter filter(harness.ticket());
+      CandidateList upstream{native("安全感", 2, 100)};
+      if (direct_comparison) upstream.push_back(native("安", 2, 5));
+      const auto menu = NativeMenu(filter, harness, "an", std::move(upstream));
+      assert(menu.front()->text() == (guard ? "安" : "安全感"));
+      if (guard) assert(menu.size() == 1);
+    }
+  }
+  WriteNativeLearningSnapshot(false, "synced_learning@20679", true);
+  Dictionary::test_syllables = {"ban", "gong", "shi"};
+  for (std::size_t duplicates : {7U, 8U, 512U}) {
+    Harness harness;
+    harness.config.strings_["translator/dictionary"] = "fixture";
+    YunPinFilter filter(harness.ticket());
+    CandidateList upstream(duplicates, native("办公室", 10, 0));
+    upstream.push_back(native("办公事", 10, 100));
+    const auto menu = NativeMenu(filter, harness, "bangongshi", std::move(upstream));
+    // Duplicate removal must not extend native promotion evidence past eight
+    // eligible upstream entries, even if the ordinary window is still empty.
+    assert(menu.front()->text() == (duplicates < 8 ? "办公事" : "办公时"));
+  }
+  Dictionary::test_syllables.clear();
+  WriteSnapshot(dir);
+}
+
 }  // namespace
 
 int main() {
@@ -760,6 +805,7 @@ int main() {
   TestPrivateCandidatesStayBounded();
   TestPrivatePhrasesCarryNativeLearningIdentity();
   TestNativeLearningEvidenceOrdering();
+  TestNativeLearningEvidenceRespectsShortGuardAndBound();
 
   std::filesystem::remove_all(user_data_dir);
   return 0;

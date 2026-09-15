@@ -337,7 +337,14 @@ class YunPinMergedTranslation : public Translation {
       if (!candidate) {
         break;
       }
-      upstream_evidence_.push_back(candidate);
+      // Duplicate head phrases remain useful evidence, but candidates hidden
+      // by the short-input guard must never be promoted back into the menu.
+      // Count duplicates toward the cap so suppression cannot grow this list.
+      if (upstream_evidence_.size() < kCandidatePageSize &&
+          !(suppress_long_cjk_upstream_ &&
+            IsPureCjkAtLeast(candidate->text(), 3))) {
+        upstream_evidence_.push_back(candidate);
+      }
       // Corrections inside the bounded first page are retained temporarily so
       // ProtectLongCorrections can choose at most one. Once this window has
       // been consumed, every later correction is dropped instead of leaking
