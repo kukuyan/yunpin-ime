@@ -667,7 +667,10 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
     }
   }
 
-  std::vector<Candidate> ranked;
+  struct RankedCandidate : Candidate {
+    std::size_t entry_index;
+  };
+  std::vector<RankedCandidate> ranked;
   ranked.reserve(matches.size());
   for (const auto& [index, match] : matches) {
     const IndexedEntry& indexed = entries_[index];
@@ -713,7 +716,7 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
       continue;
     }
 
-    ranked.push_back(Candidate{entry.id,
+    ranked.push_back(RankedCandidate{Candidate{entry.id,
                                entry.text,
                                indexed.full_pinyin,
                                indexed.initials,
@@ -723,7 +726,8 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
                                entry.static_weight,
                                entry.pinned,
                                correction_scores_[index].load(
-                                   std::memory_order_relaxed)});
+                                   std::memory_order_relaxed),
+                               {}, entry.synced_learning}, index});
   }
 
   std::sort(ranked.begin(), ranked.end(), [](const Candidate& left,
@@ -778,6 +782,7 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
       ++personal_count;
     }
     result.push_back(ranked[i]);
+    result.back().syllables = entries_[ranked[i].entry_index].entry.syllables;
     selected[i] = true;
   }
 
@@ -789,6 +794,7 @@ std::vector<Candidate> PhraseIndex::Query(std::string_view input,
   for (std::size_t i = 0; i < ranked.size() && result.size() < limit; ++i) {
     if (!selected[i]) {
       result.push_back(ranked[i]);
+      result.back().syllables = entries_[ranked[i].entry_index].entry.syllables;
     }
   }
   return result;

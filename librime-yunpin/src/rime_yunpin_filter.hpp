@@ -15,6 +15,7 @@ namespace rime {
 
 class Context;
 class KeyEvent;
+class YunPinPhraseLearning;
 
 class YunPinFilter : public Filter {
  public:
@@ -59,6 +60,7 @@ class YunPinFilter : public Filter {
   bool session_learning_enabled_{false};
   bool private_ready_{false};
   std::unique_ptr<yunpin::SessionLearning> session_learning_;
+  std::shared_ptr<YunPinPhraseLearning> phrase_learning_;
   connection commit_connection_;
   connection update_connection_;
   connection unhandled_key_connection_;

@@ -60,6 +60,13 @@ bool ParseCount(std::string_view text, std::uint64_t* count) {
   return true;
 }
 
+bool IsSynchronizedLearningSource(std::string_view source) {
+  constexpr std::string_view prefix = "synced_learning@";
+  std::uint64_t day = 0;
+  return source.substr(0, prefix.size()) == prefix &&
+         ParseCount(source.substr(prefix.size()), &day) && day > 0;
+}
+
 bool ParsePinned(std::string value) {
   value = LowerAscii(std::move(value));
   return value == "1" || value == "true" || value == "yes" ||
@@ -211,6 +218,7 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     entry.pinned = has_pinned && ParsePinned(fields[4]);
     entry.learned = use_count >= 2;
     entry.private_exact_code_only = private_exact_code_only;
+    entry.synced_learning = IsSynchronizedLearningSource(fields[2]);
     result.entries.push_back(std::move(entry));
     ++result.accepted_rows;
   }
