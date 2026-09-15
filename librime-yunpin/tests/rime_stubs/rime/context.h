@@ -31,6 +31,9 @@ class Context {
   bool get_option(const string& name) const {
     auto it = options_.find(name); return it != options_.end() && it->second;
   }
+  void set_property(const string& name, const string& value) {
+    properties_[name] = value;
+  }
   Notifier& commit_notifier() { return commit_notifier_; }
   Notifier& update_notifier() { return update_notifier_; }
   Notifier& delete_notifier() { return delete_notifier_; }
@@ -44,6 +47,7 @@ class Context {
   string commit_text_;
   Composition composition_;
   std::map<string, bool> options_;
+  std::map<string, string> properties_;
  private:
   Notifier commit_notifier_;
   Notifier update_notifier_;

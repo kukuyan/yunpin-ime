@@ -10,13 +10,17 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <rime/candidate.h>
 #include <rime/context.h>
 #include <rime/engine.h>
+#include <rime/dict/dictionary.h>
+#include <rime/gear/translator_commons.h>
 #include <rime/key_event.h>
+#include <rime/language.h>
 #include <rime/schema.h>
 #include <rime/segmentation.h>
 #include <rime/service.h>
@@ -27,6 +31,66 @@
 #include "yunpin/snapshot_identity.hpp"
 
 namespace rime {
+
+// Load only the public translator's syllabary when a schema session starts.
+// A private candidate can then carry the same Code/Language as an ordinary
+// Rime Phrase without touching the user dictionary on the query path.
+class YunPinPhraseLearning {
+ public:
+  explicit YunPinPhraseLearning(const Ticket& filter_ticket) {
+    if (!filter_ticket.schema) return;
+    Config* config = filter_ticket.schema->config();
+    bool enabled = true;
+    config->GetBool("translator/enable_user_dict", &enabled);
+    if (!enabled) return;
+    auto component = Dictionary::Require("dictionary");
+    if (!component) return;
+    Ticket ticket = filter_ticket;
+    ticket.name_space = "translator";
+    std::unique_ptr<Dictionary> dictionary(component->Create(ticket));
+    if (!dictionary || !dictionary->Load() || !dictionary->primary_table())
+      return;
+    Syllabary syllabary;
+    if (!dictionary->primary_table()->GetSyllabary(&syllabary) ||
+        syllabary.empty() || syllabary.size() > 4096) return;
+    for (std::size_t index = 0; index < syllabary.size(); ++index) {
+      const std::string syllable = dictionary->primary_table()->GetSyllableById(
+          static_cast<int>(index));
+      if (syllable.empty() ||
+          !syllables_.emplace(syllable, static_cast<int>(index)).second) {
+        syllables_.clear();
+        return;
+      }
+    }
+    std::string name;
+    if (!config->GetString("translator/user_dict", &name))
+      name = Language::get_language_component(dictionary->name());
+    if (!name.empty()) language_ = std::make_shared<Language>(name);
+  }
+
+  an<DictEntry> EntryFor(const yunpin::Candidate& candidate) const {
+    auto entry = New<DictEntry>();
+    entry->text = candidate.text;
+    entry->comment = candidate.pinned ? "\xE2\x98\x85" : "";
+    if (!language_ || candidate.syllables.empty()) return entry;
+    for (const auto& syllable : candidate.syllables) {
+      const auto found = syllables_.find(syllable);
+      if (found == syllables_.end()) {
+        entry->code.clear();
+        return entry;
+      }
+      entry->code.push_back(found->second);
+    }
+    return entry;
+  }
+
+  std::shared_ptr<Language> language() const { return language_; }
+
+ private:
+  std::unordered_map<std::string, int> syllables_;
+  std::shared_ptr<Language> language_;
+};
+
 namespace {
 
 bool IsCjkIdeograph(std::uint32_t codepoint) noexcept {
@@ -127,25 +191,41 @@ bool IsWordCandidateType(std::string_view type) noexcept {
 
 using SessionRankingKey = std::pair<std::int32_t, std::uint64_t>;
 
-class YunPinCandidate : public SimpleCandidate {
+class YunPinCandidate : public Phrase {
  public:
   YunPinCandidate(std::string id,
                   std::size_t start,
                   std::size_t end,
-                  const yunpin::Candidate& candidate)
-      : SimpleCandidate("yunpin", start, end, candidate.text,
-                        candidate.pinned ? "\xE2\x98\x85" : ""),
+                  const yunpin::Candidate& candidate,
+                  const std::shared_ptr<YunPinPhraseLearning>& learning)
+      : YunPinCandidate(std::move(id), start, end, candidate,
+                        learning->EntryFor(candidate), learning->language()) {}
+
+  YunPinCandidate(std::string id,
+                  std::size_t start,
+                  std::size_t end,
+                  const yunpin::Candidate& candidate,
+                  const an<DictEntry>& entry,
+                  std::shared_ptr<Language> language)
+      : Phrase(entry->code.empty() ? nullptr : language.get(),
+               "yunpin", start, end, entry),
         id_(std::move(id)),
-        correction_score_(candidate.correction_score) {}
+        correction_score_(candidate.correction_score),
+        pinned_(candidate.pinned),
+        language_owner_(std::move(language)) {}
 
   const std::string& id() const noexcept { return id_; }
   std::int32_t correction_score() const noexcept {
     return correction_score_;
   }
+  bool pinned() const noexcept { return pinned_; }
 
  private:
   std::string id_;
   std::int32_t correction_score_{0};
+  bool pinned_{false};
+  // Menus may outlive their filter. Phrase retains a raw language pointer.
+  std::shared_ptr<Language> language_owner_;
 };
 
 bool IsLearnableCandidate(const an<Candidate>& candidate) {
@@ -181,6 +261,7 @@ class YunPinMergedTranslation : public Translation {
     }
     PrepareUpstreamWindow(ranking_key);
     AlignInjectedCandidatesWithUpstream();
+    PromoteLearnedUpstream();
     PromoteMostRecentSelection(ranking_key);
     PublishReplayComposition(replay_raw_input, replay_allowed);
     RefreshExhausted();
@@ -324,6 +405,7 @@ class YunPinMergedTranslation : public Translation {
       if (!candidate) {
         break;
       }
+      upstream_order_.emplace(candidate->text(), upstream_order_.size());
       // Corrections inside the bounded first page are retained temporarily so
       // ProtectLongCorrections can choose at most one. Once this window has
       // been consumed, every later correction is dropped instead of leaking
@@ -386,6 +468,9 @@ class YunPinMergedTranslation : public Translation {
         [&](const of<Candidate>& left, const of<Candidate>& right) {
           const auto left_yunpin = As<YunPinCandidate>(left);
           const auto right_yunpin = As<YunPinCandidate>(right);
+          const bool left_pinned = left_yunpin && left_yunpin->pinned();
+          const bool right_pinned = right_yunpin && right_yunpin->pinned();
+          if (left_pinned != right_pinned) return left_pinned;
           const std::int32_t left_score =
               left_yunpin ? left_yunpin->correction_score() : 0;
           const std::int32_t right_score =
@@ -403,6 +488,40 @@ class YunPinMergedTranslation : public Translation {
         });
   }
 
+  void PromoteLearnedUpstream() {
+    if (front_.empty() || upstream_window_.empty()) return;
+    const auto injected = As<YunPinCandidate>(front_.front());
+    if (!injected || injected->pinned() || injected->correction_score() > 0)
+      return;
+    const auto injected_order = upstream_order_.find(injected->text());
+    if (injected_order == upstream_order_.end()) return;
+    // When Rime directly ranks an exact learned phrase ahead of the injected
+    // phrase, its local learning must not be hidden by a stale snapshot.
+    // Without that comparison, keep the overlay: a newly synced remote phrase
+    // may not exist in this device's userdb yet. Pins and explicit correction
+    // feedback retain their priority.
+    const auto learned = std::find_if(
+        upstream_window_.begin(), upstream_window_.end(),
+        [&](const of<Candidate>& candidate) {
+          const auto phrase = As<Phrase>(
+              Candidate::GetGenuineCandidate(candidate));
+          const auto order = upstream_order_.find(candidate->text());
+          return phrase && phrase->type() == "user_phrase" &&
+                 phrase->language() && injected->language() &&
+                 *phrase->language() == *injected->language() &&
+                 phrase->is_exact_match() && !phrase->code().empty() &&
+                 !candidate->is_correction() &&
+                 order != upstream_order_.end() &&
+                 order->second < injected_order->second &&
+                 candidate->start() == injected->start() &&
+                 candidate->end() == injected->end();
+        });
+    if (learned != upstream_window_.end()) {
+      front_.insert(front_.begin(), *learned);
+      upstream_window_.erase(learned);
+    }
+  }
+
   void PromoteMostRecentSelection(
       const std::function<SessionRankingKey(std::string_view)>& ranking_key) {
     const auto key_for = [&](const of<Candidate>& candidate) {
@@ -411,12 +530,22 @@ class YunPinMergedTranslation : public Translation {
     std::stable_sort(front_.begin(), front_.end(),
                      [&](const of<Candidate>& left,
                          const of<Candidate>& right) {
+                       const auto left_private = As<YunPinCandidate>(left);
+                       const auto right_private = As<YunPinCandidate>(right);
+                       const bool left_pinned =
+                           left_private && left_private->pinned();
+                       const bool right_pinned =
+                           right_private && right_private->pinned();
+                       if (left_pinned != right_pinned) return left_pinned;
                        return key_for(left) > key_for(right);
                      });
 
     if (upstream_window_.empty()) {
       return;
     }
+    const auto pinned_front = front_.empty()
+        ? an<YunPinCandidate>() : As<YunPinCandidate>(front_.front());
+    if (pinned_front && pinned_front->pinned()) return;
     const SessionRankingKey front_key =
         front_.empty() ? SessionRankingKey{} : key_for(front_.front());
     const SessionRankingKey upstream_key = key_for(upstream_window_.front());
@@ -479,6 +608,7 @@ class YunPinMergedTranslation : public Translation {
   std::vector<of<Candidate>> front_;
   std::vector<of<Candidate>> upstream_window_;
   std::vector<std::string> upstream_injected_order_;
+  std::unordered_map<std::string, std::size_t> upstream_order_;
   std::set<std::string> injected_text_;
   std::size_t front_cursor_{0};
   std::size_t window_cursor_{0};
@@ -760,6 +890,7 @@ YunPinFilter::YunPinFilter(const Ticket& ticket) : Filter(ticket) {
           std::clamp(configured_min_chars, 6, 64));
     }
   }
+  phrase_learning_ = std::make_shared<YunPinPhraseLearning>(ticket);
 #if defined(__APPLE__)
   if (engine_ && engine_->context())
     engine_->context()->set_property("yunpin_snapshot_applied_digest", "");
@@ -963,7 +1094,8 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
         continue;
       }
       front.push_back(New<YunPinCandidate>(match.id, active_start_,
-                                           active_end_, match));
+                                           active_end_, match,
+                                           phrase_learning_));
     }
   }
 

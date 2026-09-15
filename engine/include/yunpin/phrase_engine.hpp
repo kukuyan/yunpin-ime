@@ -71,6 +71,10 @@ struct Candidate {
   std::int32_t correction_score{0};
   std::int64_t last_used_day{0};
 
+  // Keep the dictionary's explicit syllable boundaries for native learning.
+  // The concatenated lookup key cannot distinguish xi an from xian.
+  std::vector<std::string> syllables;
+
   [[nodiscard]] bool is_personal() const noexcept;
 };
 
