@@ -19,6 +19,10 @@ COPY sync /src/sync
 COPY syncclient /src/syncclient
 COPY desktopagent /src/desktopagent
 COPY integration /src/integration
+# Native-contract tests read these reviewed source authorities and fixture.
+COPY engine/src/phrase_engine.cpp /src/engine/src/phrase_engine.cpp
+COPY librime-yunpin/src/snapshot_store.cpp /src/librime-yunpin/src/snapshot_store.cpp
+COPY platform/macos/tests/fixtures/private.tsv /src/platform/macos/tests/fixtures/private.tsv
 RUN cd /src/syncclient && CGO_ENABLED=0 go test ./... && \
     cd /src/desktopagent && CGO_ENABLED=0 go test ./... && \
     cd /src/integration && CGO_ENABLED=0 go test ./...

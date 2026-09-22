@@ -335,18 +335,35 @@ func TestSettingsNonceAndDuplicateSubmitProtection(t *testing.T) {
 }
 
 func TestSettingsSyncRefusesImplicitBaselineFromLegacySnapshot(t *testing.T) {
-	directory := t.TempDir()
-	if err := os.Chmod(directory, 0700); err != nil {
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	baseline := filepath.Join(directory, "baseline.tsv")
-	snapshot := filepath.Join(directory, "private.tsv")
+	baseline := filepath.Join(directory, "yunpin", "baseline.tsv")
+	snapshot := filepath.Join(directory, "yunpin", "private.tsv")
+	state := filepath.Join(directory, "state")
+	defaults := desktopagent.Paths{
+		StateDirectory: state, BaselinePath: baseline, SnapshotPath: snapshot,
+		SnapshotStatePath: filepath.Join(state, "snapshot-generation"),
+		LockPath:          filepath.Join(state, "agent.lock"),
+	}
+	// Create the fixture through the protected writer, then retain its ACL
+	// when turning it into a legacy snapshot. Chmod alone is not a Windows ACL.
+	if _, err := desktopagent.InitializeEmptyBaseline(defaults); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(baseline, snapshot); err != nil {
+		t.Fatal(err)
+	}
 	original := []byte("phrase\tpinyin\tsource\tuse_count\tpinned\n旧词\tjiu ci\tmanual\t3\ttrue\n")
 	if err := os.WriteFile(snapshot, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	operations := &localSettingsOperations{defaults: desktopagent.Paths{BaselinePath: baseline, SnapshotPath: snapshot, SnapshotStatePath: filepath.Join(directory, "snapshot-state"), LockPath: filepath.Join(directory, "agent.lock")}}
-	_, err := operations.SyncNow(context.Background())
+	if activation, err := desktopagent.ReadSnapshotActivation(defaults); err != nil || activation.BaselinePresent {
+		t.Fatalf("legacy fixture must be readable with no baseline: %+v %v", activation, err)
+	}
+	operations := &localSettingsOperations{defaults: defaults}
+	_, err = operations.SyncNow(context.Background())
 	var safe *settingsOnboardingError
 	if !errors.As(err, &safe) || safe.Code != "baseline-missing" {
 		t.Fatalf("missing baseline did not stop before sync: %v", err)
