@@ -20,6 +20,7 @@ jobs:
       - run: python3 -m unittest tests.test_schema_overlay_contract -v
       - run: python3 -m unittest tests.test_patch_series_lock -v
       - run: python3 -m unittest tests.test_grammar_asset_metadata -v
+      - run: python3 -m unittest tests.test_update_upstreams -v
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
       - run: python3 -m unittest tests.test_mobile_contract -v
