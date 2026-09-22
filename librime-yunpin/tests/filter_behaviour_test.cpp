@@ -1103,6 +1103,83 @@ void TestFreshNativePhraseOutranksAutomaticSnapshotButPreservesPin() {
   Dictionary::test_syllables.clear();
 }
 
+
+void TestImportedLearnedDuplicateOutranksRemoteSnapshot() {
+  const auto dir = Service::instance().deployer().user_data_dir;
+  {
+    std::ofstream out(dir / "yunpin" / "private.tsv", std::ios::trunc);
+    out << "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\tcorrection_score\n";
+    out << "办公时\tban gong shi\tsynced_learning@20679\t1\tfalse\t20679\t0\n";
+    out << "办公室\tban gong shi\tsogou_sgpybin\t2\tfalse\t0\t0\n";
+  }
+  Dictionary::test_syllables = {"ban", "gong", "shi"};
+  static const Language language("fixture");
+  Harness harness;
+  harness.config.strings_["translator/dictionary"] = "fixture";
+  harness.config.bools_["yunpin/session_learning"] = false;
+  YunPinFilter filter(harness.ticket());
+  auto entry = New<DictEntry>();
+  entry->text = "办公室"; entry->code = {0, 1, 2}; entry->commit_count = 1;
+  const auto learned = New<Phrase>(&language, "user_phrase", 0, 10, entry);
+  // The incorrect remote homophone has no native copy. The selected correct
+  // phrase also exists in the imported overlay, so native de-duplication must
+  // not discard its learning evidence before count-based promotion.
+  const auto menu = NativeMenu(filter, harness, "bangongshi", {learned});
+  assert(menu.size() == 2);
+  assert(menu.front()->text() == "办公室");
+  Dictionary::test_syllables.clear();
+  WriteSnapshot(dir);
+}
+
+void TestNativeLearningEvidenceRespectsShortGuardAndBound() {
+  static const Language language("fixture");
+  const auto native = [&](const std::string& text, std::size_t end, int count) {
+    auto entry = New<DictEntry>();
+    entry->text = text; entry->code = {0}; entry->commit_count = count;
+    return New<Phrase>(&language, "user_phrase", 0, end, entry);
+  };
+  const auto dir = Service::instance().deployer().user_data_dir;
+  {
+    std::ofstream out(dir / "yunpin" / "private.tsv", std::ios::trunc);
+    out << "phrase\tpinyin\tsource\tuse_count\tpinned\n";
+    out << "安\tan\tsynced_learning@20679\t5\tfalse\n";
+  }
+  Dictionary::test_syllables = {"an"};
+  for (bool guard : {true, false}) {
+    for (bool direct_comparison : {true, false}) {
+      Harness harness;
+      harness.config.strings_["translator/dictionary"] = "fixture";
+      harness.config.bools_["yunpin/short_input_guard"] = guard;
+      YunPinFilter filter(harness.ticket());
+      CandidateList upstream{native("安全感", 2, 100)};
+      if (direct_comparison) upstream.push_back(native("安", 2, 5));
+      const auto menu = NativeMenu(filter, harness, "an", std::move(upstream));
+      assert(menu.front()->text() == (guard ? "安" : "安全感"));
+      if (guard) assert(menu.size() == 1);
+    }
+  }
+  {
+    std::ofstream out(dir / "yunpin" / "private.tsv", std::ios::trunc);
+    out << "phrase\tpinyin\tsource\tuse_count\tpinned\tlast_used_day\tcorrection_score\n";
+    out << "办公时\tban gong shi\tsynced_learning@20679\t1\tfalse\t20679\t0\n";
+    out << "办公室\tban gong shi\tsogou_sgpybin\t2\tfalse\t0\t0\n";
+  }
+  Dictionary::test_syllables = {"ban", "gong", "shi"};
+  for (std::size_t duplicates : {7U, 8U, 512U}) {
+    Harness harness;
+    harness.config.strings_["translator/dictionary"] = "fixture";
+    YunPinFilter filter(harness.ticket());
+    CandidateList upstream(duplicates, native("办公室", 10, 0));
+    upstream.push_back(native("办公事", 10, 100));
+    const auto menu = NativeMenu(filter, harness, "bangongshi", std::move(upstream));
+    // Duplicate removal must not extend native promotion evidence past eight
+    // eligible upstream entries, even if the ordinary window is still empty.
+    assert(menu.front()->text() == (duplicates < 8 ? "办公事" : "办公时"));
+  }
+  Dictionary::test_syllables.clear();
+  WriteSnapshot(dir);
+}
+
 }  // namespace
 
 int main() {
@@ -1137,6 +1214,8 @@ int main() {
   TestPrivateCandidatesStayBounded();
   TestPrivatePhrasesCarryNativeLearningIdentity();
   TestFreshNativePhraseOutranksAutomaticSnapshotButPreservesPin();
+  TestImportedLearnedDuplicateOutranksRemoteSnapshot();
+  TestNativeLearningEvidenceRespectsShortGuardAndBound();
 
   std::filesystem::remove_all(user_data_dir);
   return 0;

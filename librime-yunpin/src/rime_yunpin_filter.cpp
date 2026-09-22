@@ -412,6 +412,14 @@ class YunPinMergedTranslation : public Translation {
         break;
       }
       upstream_order_.emplace(candidate->text(), upstream_order_.size());
+      // Keep native learning evidence before private-text de-duplication.
+      // Suppression must neither revive long short-input predictions nor grow
+      // the evidence list beyond one page; duplicate entries count toward it.
+      if (upstream_evidence_.size() < kCandidatePageSize &&
+          !(suppress_long_cjk_upstream_ &&
+            IsPureCjkAtLeast(candidate->text(), 3))) {
+        upstream_evidence_.push_back(candidate);
+      }
       // Corrections inside the bounded first page are retained temporarily so
       // ProtectLongCorrections can choose at most one. Once this window has
       // been consumed, every later correction is dropped instead of leaking
@@ -430,6 +438,11 @@ class YunPinMergedTranslation : public Translation {
     }
     std::stable_sort(
         upstream_window_.begin(), upstream_window_.end(),
+        [&](const of<Candidate>& left, const of<Candidate>& right) {
+          return ranking_key(left->text()) > ranking_key(right->text());
+        });
+    std::stable_sort(
+        upstream_evidence_.begin(), upstream_evidence_.end(),
         [&](const of<Candidate>& left, const of<Candidate>& right) {
           return ranking_key(left->text()) > ranking_key(right->text());
         });
@@ -495,7 +508,7 @@ class YunPinMergedTranslation : public Translation {
   }
 
   void PromoteLearnedUpstream() {
-    if (front_.empty() || upstream_window_.empty()) return;
+    if (front_.empty() || upstream_evidence_.empty()) return;
     const auto injected = As<YunPinCandidate>(front_.front());
     if (!injected || injected->pinned() || injected->correction_score() > 0)
       return;
@@ -507,7 +520,7 @@ class YunPinMergedTranslation : public Translation {
     // never displaced using this fallback. Equal counts do not prove a global
     // last choice; explicit pins and correction feedback retain priority.
     const auto learned = std::find_if(
-        upstream_window_.begin(), upstream_window_.end(),
+        upstream_evidence_.begin(), upstream_evidence_.end(),
         [&](const of<Candidate>& candidate) {
           const auto phrase = As<Phrase>(
               Candidate::GetGenuineCandidate(candidate));
@@ -530,9 +543,19 @@ class YunPinMergedTranslation : public Translation {
                  candidate->start() == injected->start() &&
                  candidate->end() == injected->end();
         });
-    if (learned != upstream_window_.end()) {
-      front_.insert(front_.begin(), *learned);
-      upstream_window_.erase(learned);
+    if (learned != upstream_evidence_.end()) {
+      const auto same_text = [&](const of<Candidate>& candidate) {
+        return candidate->text() == (*learned)->text();
+      };
+      const auto duplicate = std::find_if(front_.begin(), front_.end(), same_text);
+      // Preserve an injected candidate's pin, annotation and learning identity
+      // when its native duplicate supplies the evidence for moving it forward.
+      const auto promoted = duplicate == front_.end() ? *learned : *duplicate;
+      if (duplicate != front_.end()) front_.erase(duplicate);
+      upstream_window_.erase(
+          std::remove_if(upstream_window_.begin(), upstream_window_.end(), same_text),
+          upstream_window_.end());
+      front_.insert(front_.begin(), promoted);
     }
   }
 
@@ -621,6 +644,7 @@ class YunPinMergedTranslation : public Translation {
   an<Translation> upstream_;
   std::vector<of<Candidate>> front_;
   std::vector<of<Candidate>> upstream_window_;
+  std::vector<of<Candidate>> upstream_evidence_;
   std::vector<std::string> upstream_injected_order_;
   std::unordered_map<std::string, std::size_t> upstream_order_;
   std::set<std::string> injected_text_;
