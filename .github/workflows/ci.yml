@@ -20,6 +20,7 @@ jobs:
       - run: python3 -m unittest tests.test_schema_overlay_contract -v
       - run: python3 -m unittest tests.test_patch_series_lock -v
       - run: python3 -m unittest tests.test_grammar_asset_metadata -v
+      - run: python3 -m unittest tests.test_grammar_model_recovery -v
       - run: python3 -m unittest tests.test_update_upstreams -v
       - run: python3 scripts/check_licenses.py
       - run: python3 scripts/check_supply_chain.py
@@ -129,6 +130,8 @@ jobs:
         run: cmake -S librime-yunpin -B build/librime-yunpin-windows -A x64
       - run: cmake --build build/librime-yunpin-windows --config Release --parallel
       - run: ctest --test-dir build/librime-yunpin-windows -C Release --output-on-failure
+      - name: Restore locked grammar model from immutable source release
+        run: python scripts/restore_grammar_model.py
       - name: Build and package merged Weasel preview
         shell: pwsh
         env:
@@ -446,6 +449,8 @@ jobs:
       - run: xcodebuild -version
       - run: cmake --version
       - run: make -C platform/macos test
+      - name: Restore locked grammar model from immutable source release
+        run: python3 scripts/restore_grammar_model.py
       - name: Build and package macOS preview
         env:
           GITHUB_TOKEN: ${{ github.token }}

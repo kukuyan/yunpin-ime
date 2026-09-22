@@ -13,6 +13,8 @@ out/
 # Official octagram language models are fetched by exact locked digest and
 # belong only in generated runtime/corresponding-source artifacts.
 *.gram
+# Restored model/license inputs for local and CI builds.
+/sources/
 
 # Tooling caches
 .cache/

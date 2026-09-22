@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "archive": {
+    "repository": "https://github.com/kukuyan/yunpin-ime",
+    "release": "v0.1.0-preview.3",
+    "immutable": true,
+    "assetId": 548104744,
+    "filename": "YunPin-IME-Windows-development-preview-source.zip",
+    "url": "https://github.com/kukuyan/yunpin-ime/releases/download/v0.1.0-preview.3/YunPin-IME-Windows-development-preview-source.zip",
+    "size": 512374181,
+    "sha256": "c4c1248a73e6722a52d441097368127fa6434e1c4dfeb84ddb83e2da2c7c51ef"
+  },
+  "resources": [
+    {
+      "filename": "wanxiang-lts-zh-hans.gram",
+      "member": "sources/wanxiang-lts-zh-hans.gram",
+      "size": 420339756,
+      "sha256": "654d7f1fe4b1bf3d425f8c0a44ac61423ded58c784267b4df03256030d72233f"
+    },
+    {
+      "filename": "RIME-LMDG-LICENSE.CC-BY-4.0",
+      "member": "sources/RIME-LMDG-LICENSE.CC-BY-4.0",
+      "size": 18656,
+      "sha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94"
+    }
+  ]
+}
