@@ -31,26 +31,38 @@ def head(url: str) -> str:
     return value
 
 
+def require_checkout(checkout: Path) -> None:
+    """Do not let Git discover the parent repository of an empty submodule."""
+    if not (checkout / ".git").exists():
+        raise RuntimeError(f"upstream checkout is not initialized: {checkout.name}")
+    root = subprocess.check_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=checkout, text=True
+    ).strip()
+    if Path(root).resolve() != checkout.resolve():
+        raise RuntimeError(f"upstream checkout resolves to another repository: {checkout.name}")
+
+
 def main() -> None:
     data = json.loads(LOCK.read_text(encoding="utf-8"))
     for item in data["upstreams"]:
         if item.get("update_policy") == "manual-release":
-            commit = item["commit"]
-        else:
-            commit = head(item["url"])
-            item["commit"] = commit
+            # These versions are intentionally pinned and their source trees
+            # are not initialized by the public-data update workflow.
+            continue
         checkout = ROOT / PATHS[item["name"]]
-        if checkout.exists():
-            subprocess.run(
-                ["git", "fetch", "--depth", "1", "origin", commit],
-                cwd=checkout,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "checkout", "--detach", commit],
-                cwd=checkout,
-                check=True,
-            )
+        require_checkout(checkout)
+        commit = head(item["url"])
+        subprocess.run(
+            ["git", "fetch", "--depth", "1", "origin", commit],
+            cwd=checkout,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "--detach", commit],
+            cwd=checkout,
+            check=True,
+        )
+        item["commit"] = commit
     data["observed_at"] = datetime.now(timezone.utc).date().isoformat()
     LOCK.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
