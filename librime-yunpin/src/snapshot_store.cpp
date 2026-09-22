@@ -336,6 +336,7 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
     entry.learned = use_count >= kAutomaticLearningThreshold;
     entry.private_exact_code_only = private_exact_code_only;
     entry.last_used_day = last_used_day;
+    entry.synced_learning = source_has_last_used_day;
     entry.correction_score = correction_score;
     result.entries.push_back(std::move(entry));
     ++result.accepted_rows;

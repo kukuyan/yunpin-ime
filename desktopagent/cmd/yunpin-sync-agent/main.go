@@ -752,10 +752,21 @@ func run(ctx context.Context, arguments []string) error {
 	}
 }
 
+// yunpin-settings.exe is the GUI-subsystem copy launched directly by the
+// Windows tray. It has no console and receives no command-line arguments, so
+// its fixed executable name supplies the settings command. The ordinary agent
+// keeps requiring an explicit command.
+func effectiveArguments(executable string, arguments []string) []string {
+	if len(arguments) == 0 && strings.EqualFold(filepath.Base(executable), "yunpin-settings.exe") {
+		return []string{"settings"}
+	}
+	return arguments
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:]); err != nil {
+	if err := run(ctx, effectiveArguments(os.Args[0], os.Args[1:])); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "yunpin-sync-agent:", err)
 		os.Exit(1)
 	}

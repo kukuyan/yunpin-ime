@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -167,6 +168,13 @@ func (operations *localSettingsOperations) Status(ctx context.Context) (desktopa
 func (operations *localSettingsOperations) SyncNow(ctx context.Context) (desktopagent.SyncSummary, error) {
 	var summary desktopagent.SyncSummary
 	err := desktopagent.WithProcessLock(operations.defaults.LockPath, func() error {
+		activation, err := desktopagent.ReadSnapshotActivation(operations.defaults)
+		if err != nil {
+			return onboardingError("local-state")
+		}
+		if !activation.BaselinePresent {
+			return onboardingError("baseline-missing")
+		}
 		var syncErr error
 		summary, syncErr = operations.agent.SyncOnce(ctx)
 		return syncErr
@@ -200,6 +208,8 @@ func (operations *localSettingsOperations) RemovePhrase(ctx context.Context, tex
 }
 
 type settingsPageData struct {
+	Nonce               string
+	Onboarding          *settingsOnboardingView
 	Base                string
 	Notice              string
 	Problem             string
@@ -218,21 +228,22 @@ var settingsPageTemplate = template.Must(template.New("settings").Parse(`<!docty
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>云拼设置</title><style>
 :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f5f7;color:#202124}body{margin:0;padding:32px 16px}.wrap{max-width:820px;margin:auto}.card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:22px;margin:16px 0;box-shadow:0 2px 10px #0000000d}h1{margin:0 0 6px}h2{font-size:18px;margin:0 0 16px}.muted{color:#666}.row{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:12px 0}.notice{padding:12px;border-radius:9px;background:#e8f5e9;color:#176b2c}.problem{padding:12px;border-radius:9px;background:#fff3e0;color:#8a4b00}button{border:0;border-radius:8px;padding:9px 15px;background:#f47b42;color:#fff;font-weight:600;cursor:pointer}button.secondary{background:#586174}button.danger{background:#b3261e}button:disabled{opacity:.45;cursor:not-allowed}input[type=text]{box-sizing:border-box;width:100%;padding:9px;border:1px solid #bbb;border-radius:8px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.phrase{border-top:1px solid #eee;padding:12px 0}.phrase-actions{display:flex;gap:8px;flex-wrap:wrap}.inline{display:inline}.value{font-variant-numeric:tabular-nums}@media(prefers-color-scheme:dark){:root{background:#17181a;color:#eee}.card{background:#222428;border-color:#3b3d42}.muted{color:#aaa}.phrase{border-color:#3b3d42}input[type=text]{background:#17181a;color:#eee;border-color:#555}}
-</style></head><body><main class="wrap"><h1>云拼设置</h1><div class="muted">本页面只在当前电脑的 127.0.0.1 临时开放，不显示账户、设备或恢复材料。</div>
+</style>` + settingsOnboardingStyle + `</head><body><main class="wrap"><h1>云拼设置</h1><div class="muted">管理本机输入体验、词库和设备同步。</div>
 {{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}{{if .Problem}}<p class="problem">{{.Problem}}</p>{{end}}
+{{if .Onboarding}}{{template "onboarding" .}}{{end}}
 <section class="card"><h2>候选保护与纠错</h2><form method="post" action="{{.Base}}/guards">
 <label class="row"><span><strong>短输入保护</strong><br><span class="muted">短拼音优先保留普通候选</span></span><input type="checkbox" name="short_input_guard" {{if .Guards.ShortInputGuard}}checked{{end}} {{if not .GuardsAvailable}}disabled{{end}}></label>
 <label class="row"><span><strong>长纠错保护</strong><br><span class="muted">长输入不让自动纠错抢占第一候选</span></span><input type="checkbox" name="long_correction_guard" {{if .Guards.LongCorrectionGuard}}checked{{end}} {{if not .GuardsAvailable}}disabled{{end}}></label>
 <label class="row"><span><strong>拼写纠错实验</strong><br><span class="muted">开启 typo correction；可随时关闭</span></span><input type="checkbox" name="typo_correction" {{if .Guards.TypoCorrection}}checked{{end}} {{if not .GuardsAvailable}}disabled{{end}}></label>
 <button type="submit" {{if not .GuardsAvailable}}disabled{{end}}>保存并部署</button></form></section>
-<section class="card"><h2>同步状态</h2><div class="row"><span>当前状态</span><span class="value">{{.HealthSummary}}</span></div><div class="row"><span>最近成功</span><span class="value">{{.LastSuccess}}</span></div><div class="row"><span>待上传变更</span><span class="value">{{.PendingUploads}}</span></div><div class="row"><span>诊断日志</span><span>{{if .EventLogAvailable}}可用{{else}}不可用（不阻断同步）{{end}}</span></div>
-<form method="post" action="{{.Base}}/sync"><button type="submit">立即同步</button></form></section>
+<section class="card"><h2>同步状态</h2><div class="row"><span>当前状态</span><span class="value">{{.HealthSummary}}</span></div><div class="row"><span>最近成功</span><span class="value">{{.LastSuccess}}</span></div><div class="row"><span>待上传变更</span><span class="value">{{if .HealthAvailable}}{{.PendingUploads}}{{else}}未知{{end}}</span></div><div class="row"><span>诊断日志</span><span>{{if .EventLogAvailable}}可用{{else}}不可用（不阻断同步）{{end}}</span></div>
+<form method="post" action="{{.Base}}/sync"><button type="submit" {{if .Onboarding}}{{if not .Onboarding.State.Paired}}disabled{{end}} {{if not .Onboarding.Activation.BaselinePresent}}disabled{{end}}{{end}}>立即同步</button></form></section>
 <section class="card"><h2>个人词库</h2><p class="muted">这里显示本机最多 50 条个人词语；修改会进入同一双向同步队列。</p>
 <form method="post" action="{{.Base}}/phrases/add"><div class="grid"><input type="text" name="text" maxlength="32" placeholder="词语，例如：办公室" required><input type="text" name="pinyin" maxlength="96" placeholder="拼音，例如：ban gong shi" pattern="[a-z ']+" required></div><label class="row"><span>加入后置顶</span><input type="checkbox" name="pinned"></label><button type="submit">添加词语</button></form>
 {{if .VocabularyAvailable}}{{range .Vocabulary.Entries}}<div class="phrase"><div><strong>{{.Text}}</strong> <span class="muted">{{.Pinyin}} · 使用 {{.UseCount}} 次{{if .Pinned}} · 已置顶{{end}}</span></div><div class="phrase-actions">
 <form class="inline" method="post" action="{{$.Base}}/phrases/pin"><input type="hidden" name="text" value="{{.Text}}"><input type="hidden" name="pinyin" value="{{.Pinyin}}"><input type="hidden" name="pinned" value="{{if .Pinned}}false{{else}}true{{end}}"><button class="secondary" type="submit">{{if .Pinned}}取消置顶{{else}}置顶{{end}}</button></form>
 <form class="inline" method="post" action="{{$.Base}}/phrases/remove"><input type="hidden" name="text" value="{{.Text}}"><input type="hidden" name="pinyin" value="{{.Pinyin}}"><button class="danger" type="submit">删除</button></form></div></div>{{else}}<p class="muted">词库暂无条目。</p>{{end}}{{else}}<p class="problem">个人词库当前不可读取。</p>{{end}}
-</section></main></body></html>`))
+</section></main>` + settingsSubmitScript + `</body></html>` + settingsOnboardingTemplate))
 
 type settingsHandler struct {
 	base        string
@@ -250,14 +261,29 @@ func newSettingsHandler(token, allowedHost string, operations settingsOperations
 func (handler *settingsHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-	response.Header().Set("Referrer-Policy", "no-referrer")
+	// Keep same-origin POST Origin intact while withholding the tokenized
+	// settings address from any cross-origin destination.
+	response.Header().Set("Referrer-Policy", "same-origin")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
 	response.Header().Set("X-Frame-Options", "DENY")
 	if request.Host != handler.allowedHost || !strings.HasPrefix(request.URL.Path, handler.base+"/") {
 		http.NotFound(response, request)
 		return
 	}
+	if request.Method == http.MethodPost && (request.Header.Get("Origin") != "http://"+handler.allowedHost || request.URL.RawQuery != "") {
+		http.Error(response, "invalid form origin", http.StatusForbidden)
+		return
+	}
+	nonce, err := newSettingsSessionToken()
+	if err != nil {
+		http.Error(response, "settings page unavailable", http.StatusInternalServerError)
+		return
+	}
+	response.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	request = request.WithContext(context.WithValue(request.Context(), settingsNonceKey{}, nonce))
 	switch {
+	case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, handler.base+"/setup/"):
+		handler.postOnboarding(response, request)
 	case request.Method == http.MethodGet && request.URL.Path == handler.base+"/":
 		handler.render(response, request)
 	case request.Method == http.MethodPost && request.URL.Path == handler.base+"/guards":
@@ -288,7 +314,7 @@ func settingsNotice(code string) string {
 	case "phrase-removed":
 		return "词语已从个人词库移除。"
 	default:
-		return ""
+		return onboardingNotice(code)
 	}
 }
 
@@ -305,7 +331,7 @@ func settingsProblem(code string) string {
 	case "phrase-failed":
 		return "词库操作未完成，请检查词语、拼音或本地同步状态。"
 	default:
-		return ""
+		return onboardingProblem(code)
 	}
 }
 
@@ -324,32 +350,64 @@ func healthSummary(status desktopagent.Status, err error) (bool, string, string,
 		return true, "尚未完成过同步", "尚无", status.Health.PendingUploads, status.EventLogAvailable
 	}
 	description := map[string]string{
-		"sync_complete":      "同步正常",
+		"sync_complete":      "最近一轮同步成功",
 		"sync_deferred_busy": "输入法忙，已自动延后",
 		"sync_failed":        "同步失败（" + status.Health.LastFailureClass + "）",
 	}[status.Health.LastEventCode]
 	if description == "" {
 		description = "状态未知"
 	}
+	if status.Health.LastSuccessAt > 0 && time.Since(time.UnixMilli(status.Health.LastSuccessAt)) > 15*time.Minute {
+		description = "最近成功记录已过期，请检查后台同步"
+	}
 	return true, description, formatSettingsTime(status.Health.LastSuccessAt), status.Health.PendingUploads, status.EventLogAvailable
 }
 
 func (handler *settingsHandler) render(response http.ResponseWriter, request *http.Request) {
+	handler.renderOnboarding(response, request, settingsRenderOptions{})
+}
+
+func (handler *settingsHandler) renderOnboarding(response http.ResponseWriter, request *http.Request, options settingsRenderOptions) {
+	view := handler.onboardingView(request.Context())
+	if view != nil && options.ServerDraft != "" {
+		view.State.Server, view.State.AllowPrivateHTTP = options.ServerDraft, options.AllowPrivateHTTP
+	}
 	guards, guardErr := handler.operations.LoadGuards(request.Context())
-	status, statusErr := handler.operations.Status(request.Context())
+	var status desktopagent.Status
+	statusErr := errors.New("device not connected")
+	if view == nil || (view.Available && view.State.CredentialPresent) {
+		status, statusErr = handler.operations.Status(request.Context())
+	}
 	healthAvailable, summary, lastSuccess, pending, logAvailable := healthSummary(status, statusErr)
 	var vocabulary desktopagent.VocabularySummary
 	vocabularyErr := statusErr
 	if statusErr == nil {
 		vocabulary, vocabularyErr = handler.operations.ListVocabulary(request.Context())
 	}
+	if view != nil && statusErr == nil && status.Health.LastEventCode == "sync_failed" {
+		view.Complete = false
+		if view.HealthSummary == "本机同步正在运行" || view.HealthSummary == "同步已接通，仍有变更等待上传" {
+			view.HealthSummary = "最近一轮同步失败，请检查网络或稍后重试"
+		}
+	}
 	data := settingsPageData{
+		Nonce: settingsNonce(request.Context()), Onboarding: view,
 		Base: handler.base, Notice: settingsNotice(request.URL.Query().Get("notice")),
 		Problem: settingsProblem(request.URL.Query().Get("error")), Guards: guards,
 		GuardsAvailable: guardErr == nil, HealthAvailable: healthAvailable,
 		HealthSummary: summary, LastSuccess: lastSuccess, PendingUploads: pending,
 		EventLogAvailable: logAvailable, VocabularyAvailable: vocabularyErr == nil,
 		Vocabulary: vocabulary,
+	}
+	if options.Notice != "" {
+		data.Notice = options.Notice
+	}
+	if view != nil {
+		data.HealthSummary = view.HealthSummary
+		if view.ActivationAvailable {
+			data.LastSuccess = formatSettingsTime(view.Activation.LastSuccessAt)
+			data.PendingUploads = view.Activation.PendingUploads
+		}
 	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := settingsPageTemplate.Execute(response, data); err != nil {
@@ -358,7 +416,8 @@ func (handler *settingsHandler) render(response http.ResponseWriter, request *ht
 }
 
 func (handler *settingsHandler) parseForm(response http.ResponseWriter, request *http.Request) bool {
-	if !strings.HasPrefix(strings.ToLower(request.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
 		http.Error(response, "unsupported form", http.StatusUnsupportedMediaType)
 		return false
 	}
@@ -376,6 +435,15 @@ func (handler *settingsHandler) redirect(response http.ResponseWriter, request *
 }
 
 func (handler *settingsHandler) redirectError(response http.ResponseWriter, request *http.Request, operation string, err error) {
+	var onboarding *settingsOnboardingError
+	if errors.As(err, &onboarding) {
+		code := onboarding.Code
+		if onboardingProblem(code) == "" {
+			code = "local-state"
+		}
+		handler.redirect(response, request, "error", code)
+		return
+	}
 	if errors.Is(err, desktopagent.ErrAlreadyRunning) {
 		handler.redirect(response, request, "error", "busy")
 		return
@@ -407,7 +475,9 @@ func (handler *settingsHandler) postSync(response http.ResponseWriter, request *
 	if !handler.parseForm(response, request) {
 		return
 	}
-	if _, err := handler.operations.SyncNow(request.Context()); err != nil {
+	ctx, cancel := context.WithTimeout(request.Context(), 180*time.Second)
+	defer cancel()
+	if _, err := handler.operations.SyncNow(ctx); err != nil {
 		handler.redirectError(response, request, "sync-failed", err)
 		return
 	}
@@ -475,8 +545,8 @@ func serveSettings(ctx context.Context, listener net.Listener, operations settin
 		return err
 	}
 	server := &http.Server{
-		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute,
+		Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second,
+		WriteTimeout: 210 * time.Second, IdleTimeout: time.Minute,
 		ErrorLog: log.New(io.Discard, "", 0),
 	}
 	serveResult := make(chan error, 1)

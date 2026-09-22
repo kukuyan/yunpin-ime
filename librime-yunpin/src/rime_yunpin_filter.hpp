@@ -16,6 +16,7 @@ namespace rime {
 class Context;
 class KeyEvent;
 class YunPinSessionLearningBridge;
+class YunPinPhraseLearning;
 
 class YunPinFilter : public Filter {
  public:
@@ -74,6 +75,7 @@ class YunPinFilter : public Filter {
   // filter.  This matters when an IMK/TSF host tears down a session from a
   // nested notifier or while an old Menu still owns a filtered translation.
   std::shared_ptr<YunPinSessionLearningBridge> session_learning_;
+  std::shared_ptr<YunPinPhraseLearning> phrase_learning_;
   connection commit_connection_;
   connection update_connection_;
   connection unhandled_key_connection_;

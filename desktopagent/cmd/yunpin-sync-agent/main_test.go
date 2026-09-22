@@ -15,6 +15,23 @@ import (
 	"github.com/kukuyan/yunpin-ime/syncclient"
 )
 
+func TestEffectiveArgumentsForWindowsSettingsLauncher(t *testing.T) {
+	got := effectiveArguments(filepath.Join("Program Files", "YunPin", "YUNPIN-SETTINGS.EXE"), nil)
+	if len(got) != 1 || got[0] != "settings" {
+		t.Fatalf("settings launcher arguments = %q, want settings", got)
+	}
+
+	explicit := []string{"status"}
+	got = effectiveArguments("yunpin-settings.exe", explicit)
+	if len(got) != 1 || got[0] != "status" {
+		t.Fatalf("explicit arguments changed: %q", got)
+	}
+
+	if got = effectiveArguments("yunpin-sync-agent.exe", nil); len(got) != 0 {
+		t.Fatalf("ordinary agent gained an implicit command: %q", got)
+	}
+}
+
 func TestInstallProbeIsIdentifierFreeAndNeedsNoConfiguredState(t *testing.T) {
 	read, write, err := os.Pipe()
 	if err != nil {

@@ -240,6 +240,37 @@ fail closed to the deterministic/exact path on timeout, crash or invalid
 output. Chinese-English mixed-input segmentation and ranking are likewise a
 future direction, not current behavior.
 
+## Native sentence learning and candidate order
+
+Injected private candidates carry Rime `Phrase` language and syllable codes so
+selecting them can participate in the translator's ordinary sentence learning.
+The language and syllable map come from the public translator dictionary when
+the schema starts. Candidate queries do not open the private user dictionary.
+If user dictionaries are disabled or a code cannot be represented, the
+candidate remains available without claiming native learning metadata. Existing
+privacy and explicit learning opt-in gates still apply.
+
+An exact, full-span native `user_phrase` may precede an unpinned injected
+candidate when Rime itself places that phrase ahead of the injected duplicate.
+If the injected phrase has no local upstream counterpart, a count comparison
+is allowed only for its `synced_learning@<UTC-day>` source: the positive native
+commit count must be at least the injected use count. Imported baseline rows
+and undated manual rows do not qualify for this count fallback. Explicit pins,
+positive correction feedback, and language/code/span boundaries take priority.
+Equal counts do not establish a global latest choice; this does not guarantee
+identical unpinned ordering on devices with different native learning history.
+
+To verify learning, use a sentence that has never been pinned, confirm it is
+initially wrong, select the intended segments once, then repeat the input in
+the same and a fresh session. A pinned phrase ranking first cannot distinguish
+this fix from an older library. Isolated native old/new-library comparisons
+and actual frontend keyboard acceptance are separate checks.
+
+Rime's Shift+Delete can record a local userdb deletion for a private candidate,
+but it does not remove the synchronized snapshot entry. Use the supported
+phrase-management UI or CLI to remove a synchronized phrase. The learning
+bridge does not turn a negative native count into a synchronized deletion.
+
 ## Session correction learning
 
 The filter connects to librime's commit, context-update, unhandled-key, option,

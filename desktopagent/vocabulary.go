@@ -42,12 +42,13 @@ const (
 // it asked for, and keeping the result free of vocabulary means it stays safe
 // to print, pipe and paste into a bug report.
 type VocabularyChange struct {
-	Applied          bool   `json:"applied"`
-	Pinned           bool   `json:"pinned"`
-	UseCount         uint64 `json:"use_count"`
-	SnapshotRows     int    `json:"snapshot_rows"`
-	SnapshotChanged  bool   `json:"snapshot_changed"`
-	SnapshotReloaded bool   `json:"snapshot_reloaded"`
+	Applied                     bool   `json:"applied"`
+	Pinned                      bool   `json:"pinned"`
+	UseCount                    uint64 `json:"use_count"`
+	SnapshotRows                int    `json:"snapshot_rows"`
+	SnapshotExcludedLearnedRows int    `json:"snapshot_excluded_learned_rows"`
+	SnapshotChanged             bool   `json:"snapshot_changed"`
+	SnapshotReloaded            bool   `json:"snapshot_reloaded"`
 }
 
 // VocabularyQuery bounds a listing.
@@ -175,6 +176,7 @@ func (agent Agent) republishSnapshot(
 		return err
 	}
 	change.SnapshotRows = rebuilt.TotalRows
+	change.SnapshotExcludedLearnedRows = rebuilt.ExcludedLearnedRows
 	change.SnapshotChanged = rebuilt.Changed
 	pending, err := snapshotReloadPending(agent.SnapshotStatePath, rebuilt.digest)
 	if err != nil {

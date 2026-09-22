@@ -170,9 +170,12 @@ user dictionaries:
 
 The YunPin tray's **Settings** item launches the verified
 `support\sync-agent\yunpin-settings.exe` GUI-subsystem image. It opens a
-temporary local-only page for the three guard switches, redacted sync health,
-immediate synchronization, and personal vocabulary management; no PowerShell
-or console window remains in the foreground.
+temporary local-only page for guard switches, personal vocabulary, and the
+server/login/device-joining/first-import wizard described in
+[`desktopagent/README.md`](../../desktopagent/README.md#local-settings-page).
+It reuses existing credentials and enables the installed background component
+after local vocabulary loading; no PowerShell or console window remains in the
+foreground.
 
 ```powershell
 PowerShell -ExecutionPolicy Bypass -File .\Uninstall-Preview.ps1 `

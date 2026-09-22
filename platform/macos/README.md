@@ -214,8 +214,12 @@ source, and does not overwrite unrecognised Rime settings.
 
 After installation, YunPin's input-menu **Settings…** item launches the public
 agent bundled inside `YunPin.app` and opens the same temporary local-only
-settings page used on Windows. It does not open the raw Rime folder and does not
-expose endpoint, account/device, credential or recovery controls.
+settings page used on Windows. The
+[`sync onboarding wizard`](../../desktopagent/README.md#local-settings-page)
+supports server configuration, existing-account login, device invitations,
+first baseline import, local vocabulary loading, and background activation.
+Already paired devices keep their current identity and do not need to repeat
+login or pairing.
 
 To inject or intentionally refresh the reviewed overlays without installing:
 

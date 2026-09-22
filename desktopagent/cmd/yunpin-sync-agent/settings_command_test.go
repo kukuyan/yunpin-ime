@@ -95,6 +95,7 @@ func settingsRequest(method, path string, form url.Values) *http.Request {
 	request.Host = "127.0.0.1:43210"
 	if method == http.MethodPost {
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.Header.Set("Origin", "http://127.0.0.1:43210")
 	}
 	return request
 }

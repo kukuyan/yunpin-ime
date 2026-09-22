@@ -109,6 +109,34 @@ platform. GitHub's release API does not bind the model asset to a source commit;
 source snapshot used to pin the reviewed license bytes, not a claim that the
 asset was built from that commit.
 
+### Recovering the locked model after upstream replacement
+
+The previously reviewed bytes remain in our immutable `v0.1.0-preview.3`
+Windows corresponding-source ZIP. `platform/grammar-model-recovery.lock.json`
+binds that archive's release, asset ID, URL, byte size and SHA-256, plus the exact
+model and license member paths. This is a recovery source for the existing
+`grammarModel`, not a model upgrade or a change to its upstream provenance.
+
+Both desktop CI jobs run `scripts/restore_grammar_model.py` before packaging.
+The helper verifies the entire ZIP before reading only its two named members,
+rejects missing/duplicate members, links, encryption, wrong sizes and hashes,
+and verifies both resources before publishing either one in ignored `sources/`.
+Existing files must match the locks; they are never overwritten. The existing
+platform downloaders then verify and consume those source inputs. Direct
+downloads from the mutable upstream retain their metadata checks. Quality,
+latency and extracted-source rebuild gates remain unchanged.
+
+For a fresh local checkout, run this before the usual platform build command:
+
+```console
+python3 scripts/restore_grammar_model.py
+```
+
+Use `--archive /path/to/YunPin-IME-Windows-development-preview-source.zip` to
+restore offline from an already downloaded archive. The same whole-archive and
+member checks apply. Updating the model later requires a separately reviewed
+dependency lock, recovery manifest, and quality/performance evidence.
+
 Run `python3 scripts/check_release_sbom.py` for the offline deterministic
 self-test. Passing `--tag`, `--commit` and an SPDX JSON path instead validates a
 release document against current locks. Neither command enumerates repository

@@ -369,22 +369,23 @@ func (agent Agent) ResidentReady(ctx context.Context) (ResidentReadiness, error)
 }
 
 type SyncSummary struct {
-	Rounds              int
-	Uploaded            int
-	Downloaded          int
-	Cursor              int64
-	NativeEvents        int
-	NativeDuplicates    int
-	NativeLocalOnly     int
-	NativeCorrections   int
-	RimeUserDBRows      int
-	RimeUserDBAdvanced  int
-	RimeUserDBResets    int
-	RimeUserDBLocalOnly int
-	RimeUserDBIgnored   int
-	SnapshotRows        int
-	SnapshotChanged     bool
-	SnapshotReloaded    bool
+	Rounds                      int
+	Uploaded                    int
+	Downloaded                  int
+	Cursor                      int64
+	NativeEvents                int
+	NativeDuplicates            int
+	NativeLocalOnly             int
+	NativeCorrections           int
+	RimeUserDBRows              int
+	RimeUserDBAdvanced          int
+	RimeUserDBResets            int
+	RimeUserDBLocalOnly         int
+	RimeUserDBIgnored           int
+	SnapshotRows                int
+	SnapshotExcludedLearnedRows int
+	SnapshotChanged             bool
+	SnapshotReloaded            bool
 }
 
 func sessionFromBundle(bundle CredentialBundleV1) syncclient.Session {
@@ -571,6 +572,7 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 			return SyncSummary{}, err
 		}
 		summary.SnapshotRows = rebuilt.TotalRows
+		summary.SnapshotExcludedLearnedRows = rebuilt.ExcludedLearnedRows
 		summary.SnapshotChanged = rebuilt.Changed
 		reloadPending, err := snapshotReloadPending(agent.SnapshotStatePath, rebuilt.digest)
 		if err != nil {

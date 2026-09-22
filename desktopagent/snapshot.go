@@ -33,9 +33,12 @@ type SnapshotSummary struct {
 	Generation   uint64
 	BaselineRows int
 	LearnedRows  int
-	TotalRows    int
-	Changed      bool
-	digest       [sha256.Size]byte
+	// ExcludedLearnedRows remain in encrypted storage and synchronization, but
+	// cannot be represented by the native private candidate parser.
+	ExcludedLearnedRows int
+	TotalRows           int
+	Changed             bool
+	digest              [sha256.Size]byte
 }
 
 type snapshotRow struct {
@@ -229,13 +232,14 @@ func ensureBaseline(baselinePath, existingSnapshotPath string) (bool, error) {
 	return writeAtomicPrivateFile(baselinePath, contents)
 }
 
-func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]snapshotRow, int) {
+func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]snapshotRow, int, int) {
 	rows := append([]snapshotRow(nil), baseline...)
 	baselinePhrases := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
 		baselinePhrases[protocol.CanonicalPhrase(row.Phrase)] = struct{}{}
 	}
 	learnedOnly := make(map[string]snapshotRow)
+	excluded := 0
 	for _, phrase := range learned {
 		pinyin := protocol.CanonicalPinyin(phrase.Pinyin)
 		if phrase.Deleted || phrase.UseCount == 0 || !validNativePhrase(phrase.Text) || !validNativePinyin(pinyin) {
@@ -248,6 +252,13 @@ func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]s
 			// state. A stale pre-activation or remote overlay must never rewrite
 			// its source/count/pin metadata or append another pronunciation. This
 			// matches the phrase-only local boundary used during event ingestion.
+			continue
+		}
+		if !nativeSnapshotCompatible(row.Phrase, row.Pinyin, row.LastUsedDay) {
+			// This is a candidate projection only. Preserve the original phrase,
+			// identity, counts, pins and outbox; never guess missing syllable
+			// boundaries or widen the native parser's literal-code allowance.
+			excluded++
 			continue
 		}
 		learnedOnly[key] = row
@@ -276,7 +287,7 @@ func mergeSnapshotRows(baseline []snapshotRow, learned []localstore.Phrase) ([]s
 		additions = additions[:capacity]
 	}
 	rows = append(rows, additions...)
-	return rows, len(additions)
+	return rows, len(additions), excluded
 }
 
 func encodeSnapshot(rows []snapshotRow) ([]byte, error) {
@@ -371,7 +382,7 @@ func rebuildPrivateSnapshot(ctx context.Context, store *localstore.Store, baseli
 	if err != nil {
 		return SnapshotSummary{}, err
 	}
-	rows, learnedRows := mergeSnapshotRows(baseline, snapshot.Phrases)
+	rows, learnedRows, excludedRows := mergeSnapshotRows(baseline, snapshot.Phrases)
 	habits, err := store.QueryHabits(ctx, localstore.HabitQuery{Limit: localstore.MaxHabitReportEntries})
 	if err != nil {
 		return SnapshotSummary{}, err
@@ -384,7 +395,8 @@ func rebuildPrivateSnapshot(ctx context.Context, store *localstore.Store, baseli
 	changed, err := writeAtomicPrivateFile(snapshotPath, contents)
 	return SnapshotSummary{
 		Generation: snapshot.Generation, BaselineRows: len(baseline), LearnedRows: learnedRows,
-		TotalRows: len(rows), Changed: changed, digest: sha256.Sum256(contents),
+		ExcludedLearnedRows: excludedRows,
+		TotalRows:           len(rows), Changed: changed, digest: sha256.Sum256(contents),
 	}, err
 }
 
