@@ -5,7 +5,7 @@ version: "1.0"
 sort: by_weight
 ...
 云拼输入法	yun pin shu ru fa	100
-中国石化销售股份有限公司河北石家庄石油分公司	zhong guo shi hua xiao shou gu fen you xian gong si he bei shi jia zhuang shi you fen gong si	10
+云拼示例科技股份有限公司星河星云技术分公司	yun pin shi li ke ji gu fen you xian gong si xing he xing yun ji shu fen gong si	10
 合并为	he bing wei	100
 和	he	90
 合并	he bing	80

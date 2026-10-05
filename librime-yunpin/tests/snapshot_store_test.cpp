@@ -20,9 +20,9 @@ static_assert(yunpin::kMaxPrivateSnapshotEntries == 100000,
 void TestImporterFormatAndPinnedLongPhrase() {
   std::istringstream input(
       "phrase\tpinyin\tsource\tuse_count\tpinned\n"
-      "中国石化销售股份有限公司河北石家庄石油分公司\t"
-      "zhong guo shi hua xiao shou gu fen you xian gong si he bei shi "
-      "jia zhuang shi you fen gong si\tsogou_import\t32\ttrue\n"
+      "云拼示例科技股份有限公司星河星云技术分公司\t"
+      "yun pin shi li ke ji gu fen you xian gong si xing he xing "
+      "yun ji shu fen gong si\tsogou_import\t32\ttrue\n"
       "云拼输入法\tyun pin shu ru fa\tcodex_history\t4\tfalse\n"
       "bad\tnot-a-syllable\ttext\t1\tfalse\n");
 
@@ -35,13 +35,13 @@ void TestImporterFormatAndPinnedLongPhrase() {
 
   yunpin::SnapshotStore store;
   store.Replace(std::move(parsed.entries));
-  auto initials = store.Query("zgsh", 9);
+  auto initials = store.Query("ypsl", 9);
   assert(initials.size() == 1);
   assert(initials.front().pinned);
   assert(initials.front().text ==
-         "中国石化销售股份有限公司河北石家庄石油分公司");
+         "云拼示例科技股份有限公司星河星云技术分公司");
   auto exact = store.Query(
-      "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi",
+      "yunpinshilikejigufenyouxiangongsixinghexingyunjishufengongsi",
       2);
   assert(!exact.empty());
 }

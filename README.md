@@ -21,7 +21,6 @@
 - 个人词库在客户端加密；服务端只保存随机标识、令牌哈希和密文信封。
 - 支持本地预览并导入 ChatGPT 导出、Codex 摘要、文本词库，以及通过独立 ImeWlConverter 迁移 `.scel`/`.bin`。
 
-黄金测试包含长机构名“`中国石化销售股份有限公司河北石家庄石油分公司`”：`zhongguo...`、`zhongguoshihua...` 或 `zgsh...` 均应进入前三，完整拼音应为第一候选。该字符串是公开验收夹具，不是个人词库数据。
 
 拼写纠错由独立的 `yunpin_corrector` 接入 ScriptTranslator，而不是用全局
 spelling algebra 扩散派生。macOS 的 librime 1.16 与 Windows 的 librime

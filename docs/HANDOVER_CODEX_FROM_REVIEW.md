@@ -155,7 +155,7 @@ trace 必须留在 Git 外，且 native bridge 接通前仍是 P0。
 
 Xcode 选择顺序是：有效 `DEVELOPER_DIR`、有效 `YUNPIN_XCODE_APP_PATH`、有效的 `xcode-select -p`（排除 Command Line Tools）、外置盘和常规路径扫描。该顺序避免 CI 或用户已经选择较新 Xcode 时，被较旧的默认 `/Applications/Xcode.app` 覆盖。测试构造了“已选新版本 + 默认旧版本”的场景来固定该行为。
 
-原生管线能构建合并 `librime-yunpin` 的 Universal Squirrel/InputMethodKit development preview；真实 Rime C API 已覆盖 `he` 短输入、`zgsh` 置顶长词、两项个人配额、去重/提交、私密模式抑制和会话纠错。发行自动拼写纠错已改为默认关闭；旧单错/双错/审核混淆性能夹具不能替代当前单桥策略的重写与复测。该证据仍不是 InputMethodKit 跨应用宿主或生产 Rime Ice 验收；manifest 应继续把 native host E2E、安全上下文、持久学习、encrypted cloud sync 和 production signing 标为未完成。正式结论必须来自最终 HEAD 的全新构建和真实应用矩阵，不能复用旧外置盘 artifact。
+原生管线能构建合并 `librime-yunpin` 的 Universal Squirrel/InputMethodKit development preview；真实 Rime C API 已覆盖 `he` 短输入、置顶的虚构长词、两项个人配额、去重/提交、私密模式抑制和会话纠错。发行自动拼写纠错已改为默认关闭；旧单错/双错/审核混淆性能夹具不能替代当前单桥策略的重写与复测。该证据仍不是 InputMethodKit 跨应用宿主或生产 Rime Ice 验收；manifest 应继续把 native host E2E、安全上下文、持久学习、encrypted cloud sync 和 production signing 标为未完成。正式结论必须来自最终 HEAD 的全新构建和真实应用矩阵，不能复用旧外置盘 artifact。
 
 ### Windows
 

@@ -14,7 +14,7 @@
   only for explicitly pinned long personal phrases.
 - Pinned, demoted, learned-once, learned-twice, imported, public, base, and tombstoned candidates.
 - At most two personal entries among the first eight.
-- `中国石化销售股份有限公司河北石家庄石油分公司` is top three for `zhongguo...`, `zhongguoshihua...`, and `zgsh...`, and first for the complete Pinyin.
+- Synthetic long-phrase fixtures rank in the top three for eligible prefixes and first for complete Pinyin.
 - 100,000 synthetic personal phrases, warm P95 no more than 20 ms.
 
 ## Experimental automatic Pinyin correction

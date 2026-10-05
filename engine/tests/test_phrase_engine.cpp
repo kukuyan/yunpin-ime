@@ -70,15 +70,15 @@ std::size_t PositionOf(const std::vector<Candidate>& candidates,
 std::vector<PhraseEntry> AcceptanceEntries() {
   return {
       Entry("company-long",
-            "中国石化销售股份有限公司河北石家庄石油分公司",
-            "zhong guo shi hua xiao shou gu fen you xian gong si he bei "
-            "shi jia zhuang shi you fen gong si",
+            "云拼示例科技股份有限公司星河星云技术分公司",
+            "yun pin shi li ke ji gu fen you xian gong si xing he "
+            "xing yun ji shu fen gong si",
             PhraseOrigin::kPersonal, 38, 1000, true),
-      Entry("china", "中国", "zhong guo", PhraseOrigin::kPublic, 0,
+      Entry("example-prefix", "云拼", "yun pin", PhraseOrigin::kPublic, 0,
             20000),
-      Entry("sinopec", "中国石化", "zhong guo shi hua",
+      Entry("example-org", "云拼示例", "yun pin shi li",
             PhraseOrigin::kPublic, 0, 18000),
-      Entry("china-affairs", "中国事务", "zhong guo shi wu",
+      Entry("example-affairs", "云拼事务", "yun pin shi wu",
             PhraseOrigin::kBase, 0, 5000),
       Entry("prc", "中华人民共和国",
             "zhong hua ren min gong he guo", PhraseOrigin::kPublic, 0,
@@ -89,15 +89,14 @@ std::vector<PhraseEntry> AcceptanceEntries() {
 void TestAcceptanceAndRecallThresholds() {
   PhraseIndex index(AcceptanceEntries());
   const std::string full =
-      "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyou"
-      "fengongsi";
+      "yunpinshilikejigufenyouxiangongsixinghexingyunjishufengongsi";
 
-  Check(!ContainsId(index.Query("zhong"), "company-long"),
+  Check(!ContainsId(index.Query("yun"), "company-long"),
         "pinned long phrase must wait for two complete syllables");
-  Check(!ContainsId(index.Query("zgs"), "company-long"),
+  Check(!ContainsId(index.Query("yps"), "company-long"),
         "pinned long phrase must wait for four initials");
 
-  for (const std::string query : {"zhongguo", "zhongguoshihua", "zgsh"}) {
+  for (const std::string query : {"yunpin", "yunpinshili", "ypsl"}) {
     const auto candidates = index.Query(query);
     Check(PositionOf(candidates, "company-long") < 3,
           "golden organization phrase must rank in the top three for " +
@@ -143,7 +142,7 @@ void TestShortPrefixDoesNotInjectLongPhrases() {
       Entry("merge", "合并", "he bing", PhraseOrigin::kPublic, 0, 800),
       Entry("personal-two", "合约", "he yue", PhraseOrigin::kPersonal, 8,
             700),
-      Entry("pinned-long", "河北石家庄公司", "he bei shi jia zhuang gong si",
+      Entry("pinned-long", "合约技术公司", "he yue ji shu gong si",
             PhraseOrigin::kPersonal, 10, 100, true),
   });
 

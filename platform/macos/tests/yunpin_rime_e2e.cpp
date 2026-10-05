@@ -13,11 +13,11 @@
 namespace {
 
 constexpr const char* kExpected =
-    "中国石化销售股份有限公司河北石家庄石油分公司";
+    "云拼示例科技股份有限公司星河星云技术分公司";
 constexpr std::array<const char*, 3> kPrivatePhrases = {
     kExpected,
-    "中国石化工程建设有限公司",
-    "中国石化科技发展有限公司",
+    "云拼示例工程建设有限公司",
+    "云拼示例科技发展有限公司",
 };
 
 std::vector<std::string> Candidates(RimeApi* api, RimeSessionId session) {
@@ -340,10 +340,10 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  bool ok = ExpectFirst(api, session, "zgsh");
+  bool ok = ExpectFirst(api, session, "ypsl");
   ok = ExpectFirst(
            api, session,
-           "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi") &&
+           "yunpinshilikejigufenyouxiangongsixinghexingyunjishufengongsi") &&
        ok;
 
   std::vector<std::string> short_candidates;
@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
   }
 
   std::vector<std::string> initials_candidates;
-  if (!Compose(api, session, "zgsh", &initials_candidates) ||
+  if (!Compose(api, session, "ypsl", &initials_candidates) ||
       CountPrivatePhrases(initials_candidates) != 1) {
     std::cerr << "short initials recalled a non-pinned long private phrase\n";
     PrintCandidates(initials_candidates);
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
   }
 
   std::vector<std::string> capped_candidates;
-  if (!Compose(api, session, "zhongguoshihua", &capped_candidates) ||
+  if (!Compose(api, session, "yunpinshili", &capped_candidates) ||
       CountPrivatePhrases(capped_candidates) != 2) {
     std::cerr << "YunPin did not enforce the two-personal-candidate page cap\n";
     ok = false;
@@ -373,7 +373,7 @@ int main(int argc, char** argv) {
   std::vector<std::string> deduplicated_candidates;
   if (!Compose(
           api, session,
-          "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi",
+          "yunpinshilikejigufenyouxiangongsixinghexingyunjishufengongsi",
           &deduplicated_candidates) ||
       std::count(deduplicated_candidates.begin(),
                  deduplicated_candidates.end(), kExpected) != 1) {
@@ -383,7 +383,7 @@ int main(int argc, char** argv) {
 
   ok = ExpectCommit(
            api, session,
-           "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi") &&
+           "yunpinshilikejigufenyouxiangongsixinghexingyunjishufengongsi") &&
        ok;
 
   // Correct whole-input Pinyin is an absolute no-expansion boundary. These
@@ -493,7 +493,7 @@ int main(int argc, char** argv) {
 
   api->set_option(session, "yunpin_private_mode", True);
   std::vector<std::string> private_candidates;
-  if (!Compose(api, session, "zgsh", &private_candidates) ||
+  if (!Compose(api, session, "ypsl", &private_candidates) ||
       CountPrivatePhrases(private_candidates) != 0) {
     std::cerr << "private mode did not suppress the YunPin fixture\n";
     ok = false;
