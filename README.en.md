@@ -1,6 +1,6 @@
 # YunPin IME
 
-YunPin is a privacy-first Chinese Pinyin input method with optional self-hosted encrypted synchronization. Windows 10/11 and macOS 13+ are the first targets; iOS 17+ is phase two. Its compact, numbered horizontal candidate bar follows familiar IME conventions without copying proprietary branding or assets.
+YunPin is a privacy-first Chinese Pinyin input method with optional self-hosted encrypted synchronization. Windows 10/11 and macOS 13+ are the current targets; a shared candidate core for Android and iOS 17+ has entered phase two. Its compact, numbered horizontal candidate bar follows familiar IME conventions without copying proprietary branding or assets.
 
 This repository is a development preview. It contains a runnable ranking core, offline migration tools, an opaque-envelope sync server, Rime desktop configuration, and CI. Signed native installers are not available yet.
 

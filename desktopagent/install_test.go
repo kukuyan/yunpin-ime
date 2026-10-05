@@ -152,12 +152,56 @@ func TestWindowsInstallerPinsManifestHashAndRestoresOnlyExactPreviousTask(t *tes
 	for _, required := range []string{
 		"expectedsha256", "get-filehash -algorithm sha256",
 		"refusing to replace a different yunpinsyncagent scheduled task",
+		"new-scheduledtaskaction -execute $destination -argument \"run --interval 1m\"",
 		"$previoustaskxml = export-scheduledtask",
 		"register-scheduledtask -taskname $taskname -xml $previoustaskxml",
 		"if ($previoustaskwasrunning)",
+		"[io.file]::replace($temporary, $destination, $replacebackup, $true)",
+		"remove-item -literalpath $temporary, $backup, $replacebackup",
 	} {
 		if !strings.Contains(lower, required) {
 			t.Fatalf("Windows installer transactional boundary lacks %q", required)
+		}
+	}
+	for _, forbidden := range []string{"powershell.exe", "pwsh.exe", "cmd.exe"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("Windows resident task uses a foreground command wrapper %q", forbidden)
+		}
+	}
+	if strings.Contains(lower, "[io.file]::replace($temporary, $destination, $null") {
+		t.Fatal("Windows installer still uses the unsupported null File.Replace backup path")
+	}
+}
+
+func TestWindowsResidentTaskHasNoAutomaticSeventyTwoHourOrBatteryStop(t *testing.T) {
+	checks := map[string][]string{
+		"install/windows/Install-SyncAgent.ps1": {
+			"-executiontimelimit ([timespan]::zero)",
+			"-allowstartifonbatteries",
+			"-dontstopifgoingonbatteries",
+			"[string]$registered.settings.executiontimelimit -cne \"pt0s\"",
+		},
+		"install/windows/Verify-SyncAgent.ps1": {
+			"[string]$registered.settings.executiontimelimit -cne \"pt0s\"",
+			"$registered.settings.disallowstartifonbatteries",
+			"$registered.settings.stopifgoingonbatteries",
+		},
+		"install/windows/Enable-SyncAgent.ps1": {
+			"[string]$registered.settings.executiontimelimit -cne \"pt0s\"",
+			"$registered.settings.disallowstartifonbatteries",
+			"$registered.settings.stopifgoingonbatteries",
+		},
+	}
+	for path, requiredValues := range checks {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(contents))
+		for _, required := range requiredValues {
+			if !strings.Contains(lower, required) {
+				t.Fatalf("Windows resident task %s can still stop automatically; missing %q", path, required)
+			}
 		}
 	}
 }

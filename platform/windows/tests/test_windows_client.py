@@ -146,6 +146,16 @@ class WindowsClientTests(unittest.TestCase):
                 "YunPinStartDefaultNativeSelectionSpoolerV1()",
                 rime_with_weasel,
             )
+            capability = 'rime_api->set_option(session_id, "yunpin_learning_allowed", True);'
+            self.assertEqual(1, rime_with_weasel.count(capability))
+            client_info = rime_with_weasel[
+                rime_with_weasel.index("void RimeWithWeaselHandler::_ReadClientInfo") :
+                rime_with_weasel.index("void RimeWithWeaselHandler::_GetCandidateInfo")
+            ]
+            self.assertLess(
+                client_info.index(capability),
+                client_info.index("// set app specific options"),
+            )
             self.assertNotIn("LOCALAPPDATA", rime_with_weasel)
             self.assertNotIn("_wdupenv_s", rime_with_weasel)
             self.assertLess(
@@ -429,6 +439,22 @@ class WindowsClientTests(unittest.TestCase):
         self.assertIn('"Verify-SyncAgent.ps1"', installer)
         self.assertIn("-ExpectedSha256 $bundleManifest[$syncManifestPath]", installer)
         self.assertIn('syncAgentRegistration = "disabled"', installer)
+        for marker in (
+            "function Get-YunPinBooleanOptIn",
+            "function Preserve-YunPinBooleanOptIns",
+            "$preservePrivateCandidates = Get-YunPinBooleanOptIn",
+            "$preserveSessionLearning = Get-YunPinBooleanOptIn",
+            "[IO.File]::Replace($temporary, $Path, $metadataBackup, $true)",
+        ):
+            self.assertIn(marker, installer)
+        self.assertLess(
+            installer.index("$preservePrivateCandidates = Get-YunPinBooleanOptIn"),
+            installer.index("Copy-OverlayWithBackup -SourceRoot"),
+        )
+        self.assertLess(
+            installer.index("Copy-OverlayWithBackup -SourceRoot"),
+            installer.index("Preserve-YunPinBooleanOptIns -Path"),
+        )
         self.assertNotIn('Enable-SyncAgent.ps1")', installer)
         self.assertIn('"support\\sync-agent\\Uninstall-SyncAgent.ps1"', uninstaller)
 

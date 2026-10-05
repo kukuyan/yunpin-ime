@@ -12,7 +12,8 @@ Implemented policy:
 1. an exact full-pinyin match expresses the strongest input intent;
 2. manually pinned personal phrases precede other sources;
 3. personal, migrated, and locally extracted history phrases are ranked by
-   device-merged usage count and then static weight;
+   the latest merged use day, device-merged usage count, and then static
+   weight; exact input and explicit corrections remain stronger signals;
 4. reviewed public phrases precede the Rime base layer;
 5. the first eight candidates contain no more than two personal items;
 6. a pinned phrase with four or more syllables is treated as long and recalled
@@ -22,7 +23,8 @@ Implemented policy:
    full-pinyin syllables and are not injected by short initials (`he` therefore
    cannot inject `合并为`); a single incomplete letter also cannot inject a
    multi-syllable personal/history/import phrase;
-8. an automatically learned phrase stays ineligible until its second use;
+8. an automatically learned phrase becomes eligible after its first committed
+   selection, matching the background sync threshold;
 9. tombstones suppress deleted phrases before ranking.
 
 Input lookup uses sorted full-pinyin and initials indexes. A query allocates only

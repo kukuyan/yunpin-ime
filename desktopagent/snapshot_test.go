@@ -109,11 +109,26 @@ func TestRebuildDoesNotReplaceMalformedExistingSnapshot(t *testing.T) {
 
 func TestMergeCanonicalizesLearnedPinyinAndDropsUnsafeRemoteRows(t *testing.T) {
 	rows, learned := mergeSnapshotRows(nil, []localstore.Phrase{
-		{Text: "测试", Pinyin: "CÈ---SHI4", UseCount: 3},
+		{Text: "测试", Pinyin: "CÈ---SHI4", UseCount: 3, LastUsedDay: 21000},
 		{Text: "方向\u202e词", Pinyin: "fang xiang ci", UseCount: 9},
 		{Text: "空拼音", Pinyin: "---", UseCount: 9},
 	})
-	if learned != 1 || len(rows) != 1 || rows[0].Phrase != "测试" || rows[0].Pinyin != "ce shi" {
+	if learned != 1 || len(rows) != 1 || rows[0].Phrase != "测试" || rows[0].Pinyin != "ce shi" || rows[0].LastUsedDay != 21000 {
 		t.Fatalf("unsafe or noncanonical learned rows reached snapshot: learned=%d rows=%#v", learned, rows)
+	}
+}
+
+func TestEncodeSnapshotCarriesBackwardCompatibleRecencyMetadata(t *testing.T) {
+	encoded, err := encodeSnapshot([]snapshotRow{{
+		Phrase: "刚选一次", Pinyin: "gang xuan yi ci", Source: "synced_learning",
+		UseCount: 1, LastUsedDay: 21000,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := privateSnapshotHeader +
+		"刚选一次\tgang xuan yi ci\tsynced_learning@21000\t1\tfalse\n"
+	if string(encoded) != expected {
+		t.Fatalf("generated snapshot lost recency: %q", encoded)
 	}
 }
