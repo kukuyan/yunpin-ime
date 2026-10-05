@@ -64,7 +64,7 @@ MAX_SECRET_SCAN_BYTES = 8 * 1024 * 1024
 # match alone is never sufficient.
 ALLOWED_LOCKED_FIXTURE_SHA256 = {
     "/platform/macos/tests/fixtures/private.tsv":
-        "b0e81e6a2b933ae9b2638c2527747b11af2d023c53c48b7514623fa24740c44c",
+        "640ab51a5aa725245b50c992833a7ebd34be85e7fa173be17a1f16e9cd2c7f35",
     "/third_party/rime-ice/lua/lunar.db":
         "30e66ebc3c7223397f2d98368e159ae6d636571056bbe6885f1fcafad56ad1c9",
     "/rime-data/lua/lunar.db":
