@@ -5,11 +5,13 @@
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -344,34 +346,82 @@ SnapshotLoadResult ParsePrivateSnapshot(std::istream& input) {
   return result;
 }
 
+struct SnapshotStore::Snapshot {
+  using PinnedTextIndex = std::unordered_multimap<std::size_t, std::string>;
+
+  static PinnedTextIndex BuildPinnedIndex(
+      const std::vector<PhraseEntry>& entries) {
+    PinnedTextIndex pinned;
+    for (const auto& entry : entries) {
+      if (!entry.pinned || entry.tombstoned || entry.text.empty()) {
+        continue;
+      }
+      // Store the original string alongside its hash: collision checks below
+      // are exact, and lookups do not allocate a temporary std::string.
+      pinned.emplace(std::hash<std::string_view>{}(entry.text), entry.text);
+    }
+    return pinned;
+  }
+
+  explicit Snapshot(std::vector<PhraseEntry> entries)
+      : pinned_texts(BuildPinnedIndex(entries)), index(std::move(entries)) {}
+
+  const PinnedTextIndex pinned_texts;
+  const PhraseIndex index;
+};
+
 SnapshotStore::SnapshotStore()
-    : index_(std::make_shared<const PhraseIndex>(
+    : snapshot_(std::make_shared<const Snapshot>(
           std::vector<PhraseEntry>{})) {}
 
 void SnapshotStore::Replace(std::vector<PhraseEntry> entries) {
   if (entries.size() > kMaxPrivateSnapshotEntries) {
     entries.resize(kMaxPrivateSnapshotEntries);
   }
-  auto replacement =
-      std::make_shared<const PhraseIndex>(std::move(entries));
-  std::atomic_store_explicit(&index_, std::move(replacement),
+  auto replacement = std::make_shared<const Snapshot>(std::move(entries));
+  std::atomic_store_explicit(&snapshot_, std::move(replacement),
                              std::memory_order_release);
 }
 
 std::vector<Candidate> SnapshotStore::Query(std::string_view input,
                                             std::size_t limit) const {
   const auto snapshot =
-      std::atomic_load_explicit(&index_, std::memory_order_acquire);
+      std::atomic_load_explicit(&snapshot_, std::memory_order_acquire);
   if (!snapshot || limit == 0) {
     return {};
   }
-  return snapshot->Query(input, std::min<std::size_t>(limit, 2));
+  return snapshot->index.Query(input, std::min<std::size_t>(limit, 2));
+}
+
+bool SnapshotStore::HasPinned() const noexcept {
+  const auto snapshot =
+      std::atomic_load_explicit(&snapshot_, std::memory_order_acquire);
+  return snapshot && !snapshot->pinned_texts.empty();
+}
+
+bool SnapshotStore::IsPinnedText(std::string_view text) const noexcept {
+  if (text.empty()) {
+    return false;
+  }
+  const auto snapshot =
+      std::atomic_load_explicit(&snapshot_, std::memory_order_acquire);
+  if (!snapshot) {
+    return false;
+  }
+  const auto matches = snapshot->pinned_texts.equal_range(
+      std::hash<std::string_view>{}(text));
+  for (auto it = matches.first; it != matches.second; ++it) {
+    if (std::string_view(it->second) == text) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::size_t SnapshotStore::size() const noexcept {
   const auto snapshot =
-      std::atomic_load_explicit(&index_, std::memory_order_acquire);
-  return snapshot ? snapshot->size() : 0;
+      std::atomic_load_explicit(&snapshot_, std::memory_order_acquire);
+  return snapshot ? snapshot->index.size() : 0;
 }
 
 }  // namespace yunpin

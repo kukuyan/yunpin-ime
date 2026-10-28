@@ -42,6 +42,11 @@ const std::string kPhrase = "你好世界";
 const std::string kLongPrivatePhrase = "长期个人候选";
 const std::string kPrivateFirst = "双个人候选一";
 const std::string kPrivateSecond = "双个人候选二";
+const std::string kData = "数据";
+const std::string kPinnedDataFirst = "数据平台测试候选";
+const std::string kPinnedDataSecond = "数据合成候选条目";
+const std::string kPinnedDataThird = "数据第三模拟候选";
+const std::string kPinnedExtra = "合成额外标星候选";
 const std::string kOffice = "办公室";
 const std::string kOfficeWrong = "办公是";
 const std::string kSearchLikeText = "yunpin-search:nihaoshijie";
@@ -146,6 +151,16 @@ void WriteSnapshot(const std::filesystem::path& user_data_dir,
       << "\tshuang ge ren hou xuan\tcodex_history\t10\ttrue\t0\t0\n";
   out << kPrivateSecond
       << "\tshuang ge ren hou xuan\tcodex_history\t9\ttrue\t0\t0\n";
+  out << kPinnedDataFirst
+      << "\tshu ju ping tai ce shi hou xuan\tsynthetic_fixture\t10\ttrue\t0\t0\n";
+  out << kPinnedDataSecond
+      << "\tshu ju he cheng hou xuan tiao mu\tsynthetic_fixture\t9\ttrue\t0\t0\n";
+  out << kPinnedDataThird
+      << "\tshu ju di san mo ni hou xuan\tsynthetic_fixture\t8\ttrue\t0\t0\n";
+  out << kPinnedExtra
+      << "\the cheng e wai biao xing hou xuan\tsynthetic_fixture\t1\ttrue\t0\t0\n";
+  out << "测试标题固定长句\tce shi biao ti gu ding chang ju\tcodex_history\t10\ttrue\t0\t0\n";
+  out << "测试结果\tce shi jie guo\tcodex_history\t9\tfalse\t0\t0\n";
   out << kOfficeWrong
       << "\tban gong shi\tsynced_learning@20679\t5\tfalse\t20679\t"
       << office_wrong_score << "\n";
@@ -359,7 +374,7 @@ void TestShippedDefaultHasNoActionCandidates() {
   YunPinFilter filter(harness.ticket());
   // yunpin/expression_search is absent, exactly as in a stock overlay.
   Expect("shipped default", Run(filter, harness, "nihaoshijie", 9),
-         {kPhrase, "u0", "u1", "u2", "u3", "u4", "u5", "u6"});
+         {"u0", kPhrase, "u1", "u2", "u3", "u4", "u5", "u6"});
 }
 
 void TestExpressionConfigCannotArmActions() {
@@ -367,7 +382,7 @@ void TestExpressionConfigCannotArmActions() {
   harness.config.bools_["yunpin/expression_search"] = true;
   YunPinFilter filter(harness.ticket());
   Expect("unarmed expression config", Run(filter, harness, "nihaoshijie", 9),
-         {kPhrase, "u0", "u1", "u2", "u3", "u4", "u5", "u6"});
+         {"u0", kPhrase, "u1", "u2", "u3", "u4", "u5", "u6"});
 }
 
 void TestExpressionConfigCannotArmActionsWithShortUpstream() {
@@ -382,11 +397,11 @@ void TestExpressionConfigCannotArmActionsWithShortUpstream() {
          RunWithUpstream(filter, harness, "nihaoshijie", {}, 8), {kPhrase});
   Expect("one upstream",
          RunWithUpstream(filter, harness, "nihaoshijie", {"u0"}, 8),
-         {kPhrase, "u0"});
+         {"u0", kPhrase});
   Expect("short upstream",
          RunWithUpstream(filter, harness, "nihaoshijie",
                          {"u0", "u1", "u2", "u3"}, 8),
-         {kPhrase, "u0", "u1", "u2", "u3"});
+         {"u0", kPhrase, "u1", "u2", "u3"});
 }
 
 void TestCommandLikeOrdinaryTextStaysOrdinary() {
@@ -396,7 +411,7 @@ void TestCommandLikeOrdinaryTextStaysOrdinary() {
   Expect("command-like text is data",
          RunWithUpstream(filter, harness, "nihaoshijie",
                          {kSearchLikeText, kFavoriteLikeText}, 4),
-         {kPhrase, kSearchLikeText, kFavoriteLikeText});
+         {kSearchLikeText, kPhrase, kFavoriteLikeText});
 }
 
 void TestShortPinyinSuppressesOnlyLongPureCjkUpstream() {
@@ -430,7 +445,139 @@ void TestLongerInputAndPrivateDedupStayUnchanged() {
   Expect("private candidate still deduplicates upstream",
          RunWithUpstream(filter, harness, "nihaoshijie",
                          {kPhrase, "中国石化", "tail"}, 5),
-         {kPhrase, "中国石化", "tail"});
+         {"中国石化", kPhrase, "tail"});
+}
+
+void TestPinnedCandidatesYieldFirstPlaceToOrdinaryText() {
+  Harness harness;
+  YunPinFilter filter(harness.ticket());
+  const std::vector<std::string> upstream = {kData, "数据集", "尾项"};
+
+  // Both pinned long phrases match two typed syllables; committing the first
+  // candidate must still select the ordinary short word the user typed.
+  Expect("data before starred completions",
+         RunWithUpstream(filter, harness, "shuju", upstream, 6),
+         {kData, kPinnedDataFirst, kPinnedDataSecond, "数据集", "尾项"});
+  assert(SelectVisibleCandidateByText(filter, harness, "shuju",
+                                      kPinnedDataFirst, upstream));
+  Expect("starred selection does not steal first place",
+         RunWithUpstream(filter, harness, "shuju", upstream, 6),
+         {kData, kPinnedDataFirst, kPinnedDataSecond, "数据集", "尾项"});
+
+  Expect("duplicate starred upstream is not emitted twice",
+         RunWithUpstream(filter, harness, "shuju",
+                         {kPinnedDataFirst, kData, "尾项"}, 6),
+         {kData, kPinnedDataFirst, kPinnedDataSecond, "尾项"});
+  Expect("starred candidate stays usable with no ordinary candidate",
+         RunWithUpstream(filter, harness, "nihaoshijie", {}, 4), {kPhrase});
+  Expect("only duplicate upstream keeps starred candidate usable",
+         RunWithUpstream(filter, harness, "nihaoshijie", {kPhrase}, 4),
+         {kPhrase});
+  Expect("correction alone does not displace pinned fallback",
+         RunWithTaggedUpstream(filter, harness, "nihaoshijie",
+                               {Correction("纠错")}, 4),
+         {kPhrase, "纠错"});
+  Expect("unstarred private phrase can retain first place",
+         RunWithUpstream(filter, harness, "ceshi", {"测试", "尾项"}, 5),
+         {"测试结果", "测试标题固定长句", "测试", "尾项"});
+
+  const auto correction_first = RunWithTaggedUpstream(
+      filter, harness, "shuju", {Correction("纠错"), Ordinary(kData)}, 6);
+  assert(correction_first.size() >= 2 && correction_first[0] == kData &&
+         correction_first[1] == kPinnedDataFirst &&
+         "a correction must not occupy the ordinary first slot");
+}
+
+void TestPinnedCandidateReplayMatchesVisibleOrder() {
+  auto& producer = yunpin::GlobalReplayNativeProducer();
+  producer.SetEnabled(true);
+  (void)producer.DiscardAll();
+  Harness harness;
+  YunPinFilter filter(harness.ticket());
+  Expect("visible starred order", RunWithUpstream(filter, harness, "shuju",
+          {kData, "尾项"}, 4),
+         {kData, kPinnedDataFirst, kPinnedDataSecond, "尾项"});
+  const auto captured = DrainReplayEvents();
+  assert(captured.size() == 1);
+  const auto data = captured[0].find(
+      "\"text\":\"数据\",\"is_correction\":false,\"highlighted\":true");
+  const auto pinned = captured[0].find(
+      "\"text\":\"数据平台测试候选\"");
+  assert(data != std::string::npos && pinned != std::string::npos &&
+         data < pinned && "Replay Lab did not observe the visible order");
+  producer.SetEnabled(false);
+  (void)producer.DiscardAll();
+}
+
+void TestNonInjectedPinnedCandidateCannotStealFirstPlace() {
+  Harness harness;
+  YunPinFilter filter(harness.ticket());
+  // The first two pinned candidates occupy the private injection quota. A
+  // third pinned text may independently arrive through Rime's upstream menu
+  // and must not be treated as an ordinary eligible first candidate.
+  Expect("non-injected pinned upstream follows ordinary data",
+         RunWithUpstream(filter, harness, "shuju",
+                         {kPinnedDataThird, kData, "尾项"}, 6),
+         {kData, kPinnedDataFirst, kPinnedDataSecond, kPinnedDataThird,
+          "尾项"});
+}
+
+void TestProtectedContextDoesNotUsePrivatePinInformation() {
+  Harness harness;
+  harness.context.options_["yunpin_private_mode"] = true;
+  YunPinFilter filter(harness.ticket());
+  // In a protected context the same bytes supplied independently by Rime are
+  // ordinary upstream candidates; private snapshot membership must not be
+  // consulted or alter their original order.
+  Expect("protected context preserves upstream order",
+         RunWithUpstream(filter, harness, "shuju",
+                         {kPinnedDataThird, kData, "尾项"}, 6),
+         {kPinnedDataThird, kData, "尾项"});
+}
+
+void TestPinnedNativeCandidateWithoutPrivateQueryMatch() {
+  Harness harness;
+  harness.config.bools_["yunpin/session_learning"] = false;
+  harness.config.bools_["yunpin/long_correction_guard"] = false;
+  YunPinFilter filter(harness.ticket());
+  // The query matches none of the private pinyin keys, yet Rime can supply
+  // text whose exact bytes are pinned. The pinned-text index still applies.
+  Expect("no private query match still reserves ordinary first",
+         RunWithUpstream(filter, harness, "wuxiangguan",
+                         {kPinnedDataThird, kData, "尾项"}, 4),
+         {kData, kPinnedDataThird, "尾项"});
+
+  Harness protected_harness;
+  protected_harness.config.bools_["yunpin/session_learning"] = false;
+  protected_harness.config.bools_["yunpin/long_correction_guard"] = false;
+  protected_harness.context.options_["yunpin_private_mode"] = true;
+  YunPinFilter protected_filter(protected_harness.ticket());
+  Expect("protected no-match path does not consult pin index",
+         RunWithUpstream(protected_filter, protected_harness, "wuxiangguan",
+                         {kPinnedDataThird, kData, "尾项"}, 4),
+         {kPinnedDataThird, kData, "尾项"});
+}
+
+void TestOrdinaryCandidateBeyondPinnedFirstPagePreservesReadItems() {
+  Harness harness;
+  harness.config.bools_["yunpin/session_learning"] = false;
+  harness.config.bools_["yunpin/long_correction_guard"] = false;
+  YunPinFilter filter(harness.ticket());
+  // All eight first-page entries are in the pin index. The following
+  // correction must keep its order while the next ordinary choice is pulled
+  // forward; no candidates consumed while looking ahead may be lost.
+  Expect("second-page ordinary choice preserves read candidates",
+         RunWithTaggedUpstream(
+             filter, harness, "wuxiangguan",
+             {Ordinary(kPhrase), Ordinary(kLongPrivatePhrase),
+              Ordinary(kPrivateFirst), Ordinary(kPrivateSecond),
+              Ordinary(kPinnedDataFirst), Ordinary(kPinnedDataSecond),
+              Ordinary(kPinnedDataThird), Ordinary(kPinnedExtra),
+              Correction("合成纠错"), Ordinary(kData), Ordinary("尾项")},
+             12),
+         {kData, kPhrase, kLongPrivatePhrase, kPrivateFirst, kPrivateSecond,
+          kPinnedDataFirst, kPinnedDataSecond, kPinnedDataThird, kPinnedExtra,
+          "合成纠错", "尾项"});
 }
 
 void TestLongCorrectionGuardIsConservativeAndPageBounded() {
@@ -454,7 +601,7 @@ void TestLongCorrectionGuardIsConservativeAndPageBounded() {
                {Correction("c0"), Ordinary("o0"), Correction("c1"),
                 Ordinary("o1")},
                8),
-           {kLongPrivatePhrase, "o0", "c0", "o1"});
+           {"o0", kLongPrivatePhrase, "c0", "o1"});
   }
   {
     Harness harness;
@@ -463,7 +610,7 @@ void TestLongCorrectionGuardIsConservativeAndPageBounded() {
            RunWithTaggedUpstream(
                filter, harness, "shuanggerenhouxuan",
                {Correction("c0"), Ordinary("o0"), Ordinary("o1")}, 8),
-           {kPrivateFirst, kPrivateSecond, "o0", "o1"});
+           {"o0", kPrivateFirst, kPrivateSecond, "o1"});
   }
   {
     Harness harness;
@@ -921,8 +1068,8 @@ void TestPrivateCandidatesStayBounded() {
   YunPinFilter filter(harness.ticket());
   const auto texts = Run(filter, harness, "nihaoshijie", 3);
   assert(texts.size() == 3);
-  assert(texts[0] == kPhrase);
-  assert(texts[1] == "u0");  // the clamp to two is still in force
+  assert(texts[0] == "u0");
+  assert(texts[1] == kPhrase);  // starred phrases start from second place
 }
 
 class NativeUpstream : public Translation {
@@ -1031,7 +1178,8 @@ void TestFreshNativePhraseOutranksAutomaticSnapshotButPreservesPin() {
     EmitCommit(harness, "nihaoshijie", "新选的你好世界");
     const auto menu = NativeMenu(filter, harness, "nihaoshijie",
                                  {learned("新选的你好世界", 11), learned(kPhrase, 11)});
-    assert(menu.front()->text() == kPhrase);  // explicit pin
+    assert(menu.front()->text() == "新选的你好世界");
+    assert(menu.size() == 2 && menu[1]->text() == kPhrase);  // explicit pin
   }
   {
     Harness harness; configure(harness); YunPinFilter filter(harness.ticket());
@@ -1195,6 +1343,12 @@ int main() {
   TestCommandLikeOrdinaryTextStaysOrdinary();
   TestShortPinyinSuppressesOnlyLongPureCjkUpstream();
   TestLongerInputAndPrivateDedupStayUnchanged();
+  TestPinnedCandidatesYieldFirstPlaceToOrdinaryText();
+  TestPinnedCandidateReplayMatchesVisibleOrder();
+  TestNonInjectedPinnedCandidateCannotStealFirstPlace();
+  TestProtectedContextDoesNotUsePrivatePinInformation();
+  TestPinnedNativeCandidateWithoutPrivateQueryMatch();
+  TestOrdinaryCandidateBeyondPinnedFirstPagePreservesReadItems();
   TestLongCorrectionGuardIsConservativeAndPageBounded();
   TestSessionCorrectionReranksBoundedUpstreamWindow();
   TestPersistentRimeHomophoneOrderOverridesStaleSnapshotOrder();

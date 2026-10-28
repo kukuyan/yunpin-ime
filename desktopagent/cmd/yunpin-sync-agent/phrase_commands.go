@@ -83,7 +83,7 @@ func commandPhraseAdd(ctx context.Context, defaults desktopagent.Paths, argument
 	set := flag.NewFlagSet("phrase add", flag.ContinueOnError)
 	common := addCommonFlags(set, defaults)
 	text, pinyin := phraseTarget(set)
-	pin := set.Bool("pin", false, "keep this phrase ahead of ordinary candidates")
+	pin := set.Bool("pin", false, "keep this phrase near the top, after an available unpinned candidate")
 	if err := parse(set, arguments); err != nil {
 		return err
 	}

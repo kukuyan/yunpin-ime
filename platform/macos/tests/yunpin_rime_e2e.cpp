@@ -12,6 +12,7 @@
 
 namespace {
 
+constexpr const char* kSyntheticDataPhrase = "数据平台测试候选";
 constexpr const char* kExpected =
     "中国石化销售股份有限公司河北石家庄石油分公司";
 constexpr std::array<const char*, 3> kPrivatePhrases = {
@@ -67,13 +68,14 @@ bool Compose(RimeApi* api,
   return true;
 }
 
-bool ExpectFirst(RimeApi* api, RimeSessionId session, const char* input) {
+bool ExpectPinnedSecond(RimeApi* api, RimeSessionId session, const char* input) {
   std::vector<std::string> candidates;
   if (!Compose(api, session, input, &candidates)) {
     return false;
   }
-  if (candidates.empty() || candidates.front() != kExpected) {
-    std::cerr << "YunPin fixture phrase was not the first candidate\n";
+  if (candidates.size() < 2 || candidates[0] == kExpected ||
+      candidates[1] != kExpected) {
+    std::cerr << "YunPin pinned fixture was not second after an ordinary candidate\n";
     return false;
   }
   return true;
@@ -104,8 +106,9 @@ void PrintCandidates(const std::vector<std::string>& candidates) {
 bool ExpectCommit(RimeApi* api, RimeSessionId session, const char* input) {
   std::vector<std::string> candidates;
   if (!Compose(api, session, input, &candidates) || candidates.empty() ||
-      candidates.front() != kExpected || !api->select_candidate(session, 0)) {
-    std::cerr << "failed to select the first YunPin candidate\n";
+      candidates.size() < 2 || candidates[1] != kExpected ||
+      !api->select_candidate(session, 1)) {
+    std::cerr << "failed to select the second YunPin candidate\n";
     return false;
   }
   RIME_STRUCT(RimeCommit, commit);
@@ -387,11 +390,23 @@ int main(int argc, char** argv) {
   // the filter's safe default.
   api->set_option(session, "yunpin_learning_allowed", True);
 
-  bool ok = ExpectFirst(api, session, "zgsh");
-  ok = ExpectFirst(
+  bool ok = ExpectPinnedSecond(api, session, "zgsh");
+  ok = ExpectPinnedSecond(
            api, session,
            "zhongguoshihuaxiaoshougufenyouxiangongsihebeishijiazhuangshiyoufengongsi") &&
        ok;
+
+  // A pinned long phrase recalled by a short prefix must remain available
+  // without taking Enter's ordinary first choice.
+  std::vector<std::string> data_candidates;
+  if (!Compose(api, session, "shuju", &data_candidates) ||
+      data_candidates.size() < 2 || data_candidates[0] != "数据" ||
+      data_candidates[1] != kSyntheticDataPhrase ||
+      !SelectAndDrain(api, session, data_candidates, kSyntheticDataPhrase)) {
+    std::cerr << "ordinary/pinned order or pinned commit failed for shuju:";
+    PrintCandidates(data_candidates);
+    ok = false;
+  }
 
   std::vector<std::string> short_candidates;
   if (!Compose(api, session, "he", &short_candidates) ||

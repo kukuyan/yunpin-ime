@@ -259,6 +259,66 @@ void TestRowsBeyondLegacyFiftyThousandLimitAreRetained() {
   assert(parsed.entries.size() == kRows);
 }
 
+yunpin::PhraseEntry PinnedFixture(std::string id, std::string text,
+                                  bool pinned, bool tombstoned = false) {
+  yunpin::PhraseEntry entry;
+  entry.id = std::move(id);
+  entry.text = std::move(text);
+  entry.syllables = {"yun", "pin"};
+  entry.origin = yunpin::PhraseOrigin::kPersonal;
+  entry.use_count = 1;
+  entry.pinned = pinned;
+  entry.tombstoned = tombstoned;
+  return entry;
+}
+
+void TestPinnedTextIndexTracksWholeSnapshot() {
+  yunpin::SnapshotStore store;
+  assert(!store.HasPinned());
+  assert(!store.IsPinnedText(""));
+
+  std::vector<yunpin::PhraseEntry> entries;
+  entries.push_back(PinnedFixture("one", "synthetic-pin-one", true));
+  entries.push_back(PinnedFixture("two", "synthetic-pin-two", true));
+  entries.push_back(PinnedFixture("three", "synthetic-pin-three", true));
+  // Distinct dictionary entries can have the same text. Any live pinned row
+  // makes that text pinned; a tombstoned pinned row does not.
+  entries.push_back(PinnedFixture("duplicate", "synthetic-pin-three", false));
+  entries.push_back(PinnedFixture("deleted", "synthetic-deleted", true, true));
+  entries.push_back(PinnedFixture("normal", "synthetic-normal", false));
+  store.Replace(entries);
+  assert(store.HasPinned());
+  assert(store.IsPinnedText("synthetic-pin-one"));
+  assert(store.IsPinnedText("synthetic-pin-two"));
+  assert(store.IsPinnedText("synthetic-pin-three"));
+  assert(!store.IsPinnedText("synthetic-deleted"));
+  assert(!store.IsPinnedText("synthetic-normal"));
+  assert(!store.IsPinnedText("synthetic-pin"));
+  assert(!store.IsPinnedText(""));
+  assert(store.Query("yunpin", 99).size() == 2);
+
+  // A failed index build must not publish either half of a new snapshot.
+  auto invalid = entries;
+  invalid.push_back(PinnedFixture("one", "synthetic-invalid", true));
+  bool rejected = false;
+  try {
+    store.Replace(std::move(invalid));
+  } catch (const std::invalid_argument&) {
+    rejected = true;
+  }
+  assert(rejected);
+  assert(store.IsPinnedText("synthetic-pin-three"));
+  assert(!store.IsPinnedText("synthetic-invalid"));
+
+  store.Replace({PinnedFixture("three", "synthetic-pin-three", false)});
+  assert(!store.HasPinned());
+  assert(!store.IsPinnedText("synthetic-pin-three"));
+  assert(!store.IsPinnedText("synthetic-pin-one"));
+  store.Replace({});
+  assert(store.size() == 0);
+  assert(!store.HasPinned());
+}
+
 void TestAtomicReplacementDuringQueries() {
   yunpin::SnapshotStore store;
   std::vector<yunpin::PhraseEntry> first{{
@@ -278,6 +338,27 @@ void TestAtomicReplacementDuringQueries() {
   store.Replace(std::move(second));
   reader.join();
   assert(store.size() == 1);
+
+  // Each published snapshot contains the sentinel, while the other pinned
+  // text changes. Readers must never see an empty or partially built index.
+  const std::vector<yunpin::PhraseEntry> first_snapshot{
+      PinnedFixture("stable", "synthetic-stable", true),
+      PinnedFixture("one", "synthetic-first", true)};
+  const std::vector<yunpin::PhraseEntry> second_snapshot{
+      PinnedFixture("stable", "synthetic-stable", true),
+      PinnedFixture("two", "synthetic-second", true)};
+  store.Replace(first_snapshot);
+  std::thread pinned_reader([&store]() {
+    for (int i = 0; i < 1000; ++i) {
+      assert(store.HasPinned());
+      assert(store.IsPinnedText("synthetic-stable"));
+      assert(!store.IsPinnedText("synthetic-absent"));
+    }
+  });
+  for (int i = 0; i < 30; ++i) {
+    store.Replace(i % 2 ? first_snapshot : second_snapshot);
+  }
+  pinned_reader.join();
 }
 
 }  // namespace
@@ -290,6 +371,7 @@ int main() {
   TestCorrectionScoreColumnPersistsExplicitFeedback();
   TestLegacyPersonalSpellingsStaySnapshotLocal();
   TestRowsBeyondLegacyFiftyThousandLimitAreRetained();
+  TestPinnedTextIndexTracksWholeSnapshot();
   TestAtomicReplacementDuringQueries();
   return 0;
 }

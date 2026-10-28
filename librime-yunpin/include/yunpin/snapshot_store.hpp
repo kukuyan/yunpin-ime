@@ -51,10 +51,15 @@ class SnapshotStore {
   void Replace(std::vector<PhraseEntry> entries);
   [[nodiscard]] std::vector<Candidate> Query(std::string_view input,
                                              std::size_t limit = 2) const;
+  // Both methods are read-only and use the same atomically published snapshot
+  // as Query. Call only when the host permits reading personal data.
+  [[nodiscard]] bool HasPinned() const noexcept;
+  [[nodiscard]] bool IsPinnedText(std::string_view text) const noexcept;
   [[nodiscard]] std::size_t size() const noexcept;
 
  private:
-  std::shared_ptr<const PhraseIndex> index_;
+  struct Snapshot;
+  std::shared_ptr<const Snapshot> snapshot_;
 };
 
 }  // namespace yunpin

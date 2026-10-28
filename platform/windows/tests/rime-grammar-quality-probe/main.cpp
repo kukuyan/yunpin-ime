@@ -214,14 +214,49 @@ bool CandidatePageContains(RimeApi* api,
   return true;
 }
 
+// The fixture is private to the isolated probe user directory.  Use an
+// unrelated synthetic long phrase so the frozen language-model holdouts stay
+// public and unchanged.
+constexpr const char* kSyntheticPinnedPrefix = "shuju";
+constexpr const char* kSyntheticOrdinaryData = "数据";
+constexpr const char* kSyntheticPinnedData = "数据平台测试候选";
+
 bool ProbeSyntheticPrivateFixture(RimeApi* api, RimeSessionId session) {
   api->set_option(session, "yunpin_learning_allowed", True);
-  std::int64_t ignored = 0;
-  const bool passed =
-      FirstCandidate(api, session, kSyntheticPrivateInput, &ignored) ==
-      kSyntheticPrivateExpected;
-  if (!passed) {
-    std::cerr << "synthetic private fixture was not first\n";
+  bool found = false;
+  if (!CandidatePageContains(api, session, kSyntheticPrivateInput,
+                             kSyntheticPrivateExpected, &found) || !found) {
+    std::cerr << "synthetic private fixture was not visible\n";
+    return false;
+  }
+  api->clear_composition(session);
+  if (!api->simulate_key_sequence(session, kSyntheticPinnedPrefix)) {
+    std::cerr << "failed to compose synthetic pinned prefix\n";
+    return false;
+  }
+  RIME_STRUCT(RimeContext, context);
+  if (!api->get_context(session, &context)) {
+    return false;
+  }
+  const bool ordered = context.menu.num_candidates >= 2 &&
+      context.menu.candidates[0].text && context.menu.candidates[1].text &&
+      std::string(context.menu.candidates[0].text) == kSyntheticOrdinaryData &&
+      std::string(context.menu.candidates[1].text) == kSyntheticPinnedData;
+  api->free_context(&context);
+  if (!ordered || !api->select_candidate(session, 1)) {
+    std::cerr << "ordinary/pinned candidate order or selection failed\n";
+    return false;
+  }
+  RIME_STRUCT(RimeCommit, commit);
+  if (!api->get_commit(session, &commit)) {
+    std::cerr << "pinned candidate did not commit\n";
+    return false;
+  }
+  const bool committed = commit.text &&
+      std::string(commit.text) == kSyntheticPinnedData;
+  api->free_commit(&commit);
+  if (!committed) {
+    std::cerr << "pinned candidate committed unexpected text\n";
     return false;
   }
   std::cout << "synthetic_private_fixture=pass\n";

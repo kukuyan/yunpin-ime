@@ -240,10 +240,10 @@ bool IsLearnableCandidate(const an<Candidate>& candidate) {
           static_cast<bool>(As<YunPinCandidate>(candidate)));
 }
 
-// Ordering contract: bounded private phrases take the head of the list, then
-// the ordinary upstream translation. Expression actions are deliberately not
-// injected until a frontend can carry a typed, explicitly armed action without
-// encoding it as ordinary commit text.
+// Ordering contract: bounded private phrases remain prominent, while a pinned
+// phrase follows an available unpinned first candidate. Expression actions
+// are deliberately not injected until a frontend can carry a typed, explicitly
+// armed action without encoding it as ordinary commit text.
 class YunPinMergedTranslation : public Translation {
  public:
   YunPinMergedTranslation(an<Translation> upstream,
@@ -256,7 +256,9 @@ class YunPinMergedTranslation : public Translation {
                               const yunpin::ReplayComposition&)>
                               replay_observer,
                           std::function<SessionRankingKey(std::string_view)>
-                              ranking_key)
+                              ranking_key,
+                          const std::function<bool(std::string_view)>&
+                              is_pinned_text)
       : upstream_(std::move(upstream)),
         front_(std::move(front)),
         suppress_long_cjk_upstream_(suppress_long_cjk_upstream),
@@ -269,6 +271,7 @@ class YunPinMergedTranslation : public Translation {
     AlignInjectedCandidatesWithUpstream();
     PromoteLearnedUpstream();
     PromoteMostRecentSelection(ranking_key);
+    ReserveFirstCandidateForUnpinned(is_pinned_text);
     PublishReplayComposition(replay_raw_input, replay_allowed);
     RefreshExhausted();
   }
@@ -590,6 +593,63 @@ class YunPinMergedTranslation : public Translation {
       front_.insert(front_.begin(), upstream_window_.front());
       upstream_window_.erase(upstream_window_.begin());
     }
+  }
+
+  void ReserveFirstCandidateForUnpinned(
+      const std::function<bool(std::string_view)>& is_pinned_text) {
+    const auto pinned = [&](const of<Candidate>& candidate) {
+      if (!candidate) return false;
+      const auto personal = As<YunPinCandidate>(candidate);
+      return (personal && personal->pinned()) ||
+             (is_pinned_text && is_pinned_text(candidate->text()));
+    };
+    const auto first = !front_.empty() ? front_.front()
+                     : !upstream_window_.empty() ? upstream_window_.front()
+                                                 : of<Candidate>();
+    if (!pinned(first)) return;
+
+    // Preserve the prior order of all other candidates. Non-pinned private
+    // entries already precede the upstream window under the existing rules.
+    const auto unpinned = std::find_if(
+        front_.begin(), front_.end(), [&](const of<Candidate>& candidate) {
+          return candidate && !candidate->is_correction() &&
+                 !pinned(candidate);
+        });
+    if (unpinned != front_.end()) {
+      std::rotate(front_.begin(), unpinned, unpinned + 1);
+      return;
+    }
+
+    const auto ordinary = std::find_if(
+        upstream_window_.begin(), upstream_window_.end(),
+        [&](const of<Candidate>& candidate) {
+          return candidate && !candidate->is_correction() && !pinned(candidate);
+        });
+    if (ordinary != upstream_window_.end()) {
+      front_.insert(front_.begin(), *ordinary);
+      upstream_window_.erase(ordinary);
+      return;
+    }
+    // A page full of pinned choices may hide a later ordinary candidate.
+    // Inspect at most one additional page and retain the existing order of
+    // all skipped candidates. Never read personal data in a private context.
+    constexpr std::size_t kAdditionalCandidateLimit = 8;
+    for (std::size_t checked = 0; upstream_ && !upstream_->exhausted() &&
+                                  checked < kAdditionalCandidateLimit;
+         ++checked) {
+      const auto candidate = upstream_->Peek();
+      if (!candidate) break;
+      upstream_->Next();
+      SkipSuppressedUpstream();
+      if (!candidate->is_correction() && !pinned(candidate)) {
+        front_.insert(front_.begin(), candidate);
+        return;
+      }
+      if (!candidate->is_correction() || !protect_long_corrections_)
+        upstream_window_.push_back(candidate);
+    }
+    // If there is no ordinary candidate, retain the pinned phrase as a usable
+    // fallback; do not promote an automatic correction into the first slot.
   }
 
   void ProtectLongCorrections() {
@@ -1114,7 +1174,7 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   if (active_input_.empty()) {
     return translation;
   }
-  // Private phrases keep the head slots; max_candidates_ already bounds them.
+  // Private phrases remain near the head; max_candidates_ bounds their count.
   const bool suppress_long_cjk_upstream =
       short_input_guard_ && IsShortNormalizedPinyin(active_input_);
   const std::string normalized = yunpin::NormalizePinyin(active_input_);
@@ -1146,8 +1206,12 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
   const bool replay_capture =
       active_personal_data_allowed_ &&
       yunpin::GlobalReplayNativeProducer().enabled();
+  const bool check_pinned_text = enabled_ && max_candidates_ > 0 && private_ready_ &&
+                                 active_personal_data_allowed_ &&
+                                 store_.HasPinned();
   if (front.empty() && !suppress_long_cjk_upstream &&
-      !protect_long_corrections && !rank_by_session && !replay_capture) {
+      !protect_long_corrections && !rank_by_session && !replay_capture &&
+      !check_pinned_text) {
     return translation;
   }
   const auto ranking_key =
@@ -1170,13 +1234,18 @@ an<Translation> YunPinFilter::Apply(an<Translation> translation,
           learning->RememberReplayComposition(composition);
         }
       };
+  const std::function<bool(std::string_view)> is_pinned_text =
+      check_pinned_text
+          ? std::function<bool(std::string_view)>(
+                [this](std::string_view text) { return store_.IsPinnedText(text); })
+          : std::function<bool(std::string_view)>();
   return New<YunPinMergedTranslation>(std::move(translation), std::move(front),
                                       suppress_long_cjk_upstream,
                                       protect_long_corrections,
                                       active_input_,
                                       active_personal_data_allowed_,
                                       replay_observer,
-                                      ranking_key);
+                                      ranking_key, is_pinned_text);
 }
 
 }  // namespace rime

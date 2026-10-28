@@ -102,7 +102,9 @@ translator:
 keep private data and learning disabled while still filtering an implausible
 three-character upstream prediction for a one/two-letter input. Set all four
 filter switches false to make the filter completely inert. `max_candidates`
-bounds the private phrases that may take head slots.
+bounds the private phrases that may take near-head slots. A pinned phrase
+follows an available non-correction, unpinned candidate, and remains selectable
+when no such candidate exists.
 `expression_search` is deliberately inert. The existing Rime commit boundary
 provides plain text but no unforgeable proof that a commit came from an action
 candidate. Until both native frontends provide a typed, explicitly armed
@@ -255,14 +257,15 @@ candidate when Rime itself places that phrase ahead of the injected duplicate.
 If the injected phrase has no local upstream counterpart, a count comparison
 is allowed only for its `synced_learning@<UTC-day>` source: the positive native
 commit count must be at least the injected use count. Imported baseline rows
-and undated manual rows do not qualify for this count fallback. Explicit pins,
-positive correction feedback, and language/code/span boundaries take priority.
+and undated manual rows do not qualify for this count fallback. Explicit pins
+stay prominent behind the first available unpinned candidate; positive
+correction feedback and language/code/span boundaries retain their safeguards.
 Equal counts do not establish a global latest choice; this does not guarantee
 identical unpinned ordering on devices with different native learning history.
 
 To verify learning, use a sentence that has never been pinned, confirm it is
 initially wrong, select the intended segments once, then repeat the input in
-the same and a fresh session. A pinned phrase ranking first cannot distinguish
+the same and a fresh session. A pinned phrase's position cannot distinguish
 this fix from an older library. Isolated native old/new-library comparisons
 and actual frontend keyboard acceptance are separate checks.
 
@@ -285,7 +288,8 @@ sensitive option break the chain.
 
 A completed correction gives the old word `-1` and the replacement `+1`. Only
 the first eight ordinary upstream candidates are prefetched and stable-sorted;
-private candidates remain at the head, duplicates and the short-input guard
+private candidates remain near the head, while pinned candidates follow an
+available unpinned non-correction choice. Duplicates and the short-input guard
 retain their existing behavior, and the remainder stays in upstream order.
 Both habit aggregates and correction scores reject new keys after 50,000 while
 allowing existing keys to update.
