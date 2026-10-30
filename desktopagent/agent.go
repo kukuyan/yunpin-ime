@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/kukuyan/yunpin-ime/localstore"
 	"github.com/kukuyan/yunpin-ime/protocol"
@@ -488,6 +489,31 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 	if err := protectPrivateDatabaseFiles(agent.DatabasePath); err != nil {
 		return SyncSummary{}, fmt.Errorf("protect opened encrypted local database and sidecars: %w", err)
 	}
+	// On Windows, persist a conservative start marker before any part of a
+	// round can run. It bounds automatic retries if this process disappears
+	// before the normal health record can be written. Manual sync remains an
+	// explicit operation and is not subject to the automatic idle gate.
+	if err := recordPlatformSyncStart(ctx, store); err != nil {
+		return SyncSummary{}, fmt.Errorf("record synchronization start: %w", err)
+	}
+	networkStarted, networkCompleted := false, false
+	defer func() {
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		if networkStarted && !networkCompleted {
+			// The remote outcome may be unknown. Bound the next automatic
+			// attempt from this return time without claiming success.
+			if err := recordPlatformNetworkCompleted(finishCtx, store); err != nil {
+				if returnErr == nil {
+					returnErr = fmt.Errorf("record uncertain synchronization: %w", err)
+				}
+				return
+			}
+		}
+		if err := finishPlatformSync(finishCtx, store); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("finish synchronization checkpoint: %w", err)
+		}
+	}()
 	client := syncclient.New(endpoint)
 	// Advance from our protected checkpoint before ingestion or constructing
 	// the worker's verification-key map. Unchanged cycles do not reload secrets.
@@ -495,6 +521,9 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 		return SyncSummary{}, fmt.Errorf("refresh signed device trust: %w", err)
 	}
 	if agent.RimeUserDBRefresh != nil {
+		if err := checkAutomaticIdle(ctx); err != nil {
+			return SyncSummary{}, err
+		}
 		if err := agent.RimeUserDBRefresh(ctx); err != nil {
 			return SyncSummary{}, fmt.Errorf("refresh Rime userdb snapshot: %w", err)
 		}
@@ -543,14 +572,25 @@ func (agent Agent) syncOnceWithBundle(ctx context.Context, bundle *CredentialBun
 	if maxRounds == 0 {
 		maxRounds = defaultSyncMaxRounds
 	}
+	if err := checkAutomaticIdle(ctx); err != nil {
+		return SyncSummary{}, err
+	}
 	if err := client.SealAccount(ctx, bundle.AccountID[:], string(bundle.DeviceToken)); err != nil {
 		return SyncSummary{}, fmt.Errorf("ensure sync account is sealed: %w", err)
 	}
 	worker := syncclient.Worker{Client: client, Store: store, Session: session}
+	if err := checkAutomaticIdle(ctx); err != nil {
+		return SyncSummary{}, err
+	}
+	networkStarted = true
 	results, err := worker.SyncUntilIdle(ctx, maxRounds)
 	if err != nil {
 		return SyncSummary{}, err
 	}
+	if err := recordPlatformNetworkCompleted(ctx, store); err != nil {
+		return SyncSummary{}, fmt.Errorf("record network synchronization completion: %w", err)
+	}
+	networkCompleted = true
 	summary = SyncSummary{
 		Rounds: len(results), NativeEvents: nativeSummary.Consumed,
 		NativeDuplicates: nativeSummary.Duplicate, NativeLocalOnly: nativeSummary.LocalOnly,

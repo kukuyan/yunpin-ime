@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Background synchronization used to expose nothing but "the process exists".
@@ -33,6 +34,9 @@ type SyncHealth struct {
 	Cursor int64 `json:"cursor"`
 	// PendingUploads is how many local mutations were still queued.
 	PendingUploads int64 `json:"pending_uploads"`
+	// Scheduling-only values are read from the separate Windows checkpoint.
+	LastNetworkAt int64 `json:"-"`
+	SyncInFlight  bool  `json:"-"`
 }
 
 // Only these categories may be persisted. A code the runner does not produce is
@@ -42,6 +46,7 @@ type SyncHealth struct {
 // classification below.
 var allowedSyncHealthCodes = map[string]struct{}{
 	"sync_complete":      {},
+	"sync_started":       {},
 	"sync_failed":        {},
 	"sync_deferred_busy": {},
 }
@@ -83,6 +88,23 @@ var ErrUnknownSyncHealthCode = errors.New("unknown sync health code")
 // ErrUnknownSyncFailureClass reports a failure class outside the closed,
 // redacted set above.
 var ErrUnknownSyncFailureClass = errors.New("unknown sync failure class")
+
+// RecordSyncStarted leaves a durable, non-secret indication before a Windows
+// round can touch the network or maintenance. A missing completion afterwards
+// is an unknown outcome, not a successful sync.
+func (store *Store) RecordSyncStarted(ctx context.Context, now time.Time) error {
+	if now.IsZero() || now.UnixMilli() <= 0 {
+		return errors.New("invalid synchronization start time")
+	}
+	health, err := store.LoadSyncHealth(ctx)
+	if err != nil {
+		return err
+	}
+	health.LastEventAt = now.UnixMilli()
+	health.LastEventCode = "sync_started"
+	health.LastFailureClass = SyncFailureNone
+	return store.RecordSyncHealth(ctx, health)
+}
 
 // RecordSyncHealth stores the outcome of one synchronization round.
 //

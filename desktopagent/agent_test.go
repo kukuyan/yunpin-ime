@@ -579,6 +579,31 @@ func TestSyncOnceRecordsNetworkFailureWithoutOverwritingLastSuccess(t *testing.T
 	}
 }
 
+func TestAutomaticRoundRechecksIdleBeforeExistingRimeMaintenance(t *testing.T) {
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	defer relay.Close()
+	root := privateTestPath(t, "idle-recheck")
+	makePrivateTestDirectory(t, root)
+	endpoint := filepath.Join(root, "sync.json")
+	if err := ConfigureEndpoint(endpoint, relay.URL, true); err != nil {
+		t.Fatal(err)
+	}
+	bundle := testCredentials()
+	defer bundle.Zero()
+	database := filepath.Join(root, "private.db")
+	if err := ensureEncryptedStore(context.Background(), database, bundle, nil); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	agent := Agent{Secrets: newMemorySecretStore(), Profile: "default", StateDirectory: root, EndpointConfigPath: endpoint, DatabasePath: database,
+		RimeUserDBExportPath: filepath.Join(root, "synthetic.tsv"), RimeUserDBRefresh: func(context.Context) error { called = true; return nil }}
+	ctx := context.WithValue(context.Background(), windowsIdleContextKey{}, func() bool { return false })
+	_, err := agent.syncOnceWithBundle(ctx, &bundle)
+	if !errors.Is(err, ErrRimeMaintenanceBusy) || called {
+		t.Fatalf("maintenance ran after activity: called=%v err=%v", called, err)
+	}
+}
+
 func TestSyncOnceDefaultRoundsDrainCurrentRimeImportScale(t *testing.T) {
 	const pendingEvents = 641
 	var syncRequests int
