@@ -23,8 +23,8 @@ diff --git a/WeaselServer/WeaselServerApp.cpp b/WeaselServer/WeaselServerApp.cpp
  void WeaselServerApp::SetupMenuHandlers() {
    std::filesystem::path dir = install_dir();
 +  std::filesystem::path yunpin_settings =
-+      dir.parent_path() / L"support" / L"sync-agent" /
-+      L"yunpin-settings.exe";
++      (dir / L".." / L"support" / L"sync-agent" /
++       L"yunpin-settings.exe").lexically_normal();
    m_server.AddMenuHandler(ID_WEASELTRAY_QUIT,
                            [this] { return m_server.Stop() == 0; });
    m_server.AddMenuHandler(ID_WEASELTRAY_DEPLOY,
