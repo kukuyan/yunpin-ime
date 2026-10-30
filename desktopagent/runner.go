@@ -245,9 +245,7 @@ func (agent Agent) Run(ctx context.Context, options RunOptions) error {
 	}
 	defer residentLock.Release()
 	return agent.withResidentBundle(ctx, options, func(bundle *CredentialBundleV1) error {
-		return runLoopWithResidentLock(ctx, func(roundContext context.Context) (SyncSummary, error) {
-			return agent.syncOnceWithBundle(roundContext, bundle)
-		}, options)
+		return agent.runPlatformResident(ctx, bundle, options)
 	})
 }
 

@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
@@ -126,7 +127,7 @@ func (handler *settingsHandler) onboardingView(ctx context.Context) *settingsOnb
 		view.ActivationAvailable && activation.BaselinePresent && activation.PrivateCandidatesEnabled &&
 		activation.SnapshotPresent && activation.SnapshotApplied && activation.BackgroundAvailable &&
 		activation.BackgroundEnabled && activation.BackgroundRunning && activation.LastSuccessAt > 0 &&
-		time.Since(time.UnixMilli(activation.LastSuccessAt)) <= 15*time.Minute &&
+		!syncHealthStale(time.Now(), activation.LastSuccessAt, runtime.GOOS) &&
 		len(view.Baseline.PendingLegacy) == 0 && view.BaselineAvailable && activation.PendingUploads == 0 && view.Problem == ""
 	return view
 }
@@ -160,11 +161,13 @@ func onboardingHealth(view *settingsOnboardingView, now time.Time) string {
 		return "后台同步未运行"
 	case a.LastEventCode == "sync_failed":
 		return "最近一轮同步失败，请检查网络或稍后重试"
+	case a.LastEventCode == "sync_started":
+		return "同步已开始，结果尚未确认"
 	case a.LastEventCode == "sync_deferred_busy":
 		return "输入法忙，请结束当前输入后等待同步或刷新"
 	case a.LastSuccessAt <= 0:
 		return "尚未完成过同步"
-	case now.Sub(time.UnixMilli(a.LastSuccessAt)) > 15*time.Minute:
+	case syncHealthStale(now, a.LastSuccessAt, runtime.GOOS):
 		return "最近成功记录已过期，请检查后台同步"
 	case a.PendingUploads > 0:
 		return "同步已接通，仍有变更等待上传"

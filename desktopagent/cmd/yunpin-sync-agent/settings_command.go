@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -342,6 +343,13 @@ func formatSettingsTime(milliseconds int64) string {
 	return time.UnixMilli(milliseconds).Local().Format("2006-01-02 15:04:05")
 }
 
+func syncHealthStale(now time.Time, last int64, goos string) bool {
+	// Windows waits for both six hours and an idle window; elapsed time alone
+	// cannot establish that its resident has stopped. Its actual state is shown
+	// separately, together with the last successful synchronization time.
+	return goos != "windows" && last > 0 && now.Sub(time.UnixMilli(last)) > 15*time.Minute
+}
+
 func healthSummary(status desktopagent.Status, err error) (bool, string, string, int64, bool) {
 	if err != nil || !status.HealthAvailable {
 		return false, "健康记录不可用", "未知", 0, status.EventLogAvailable
@@ -351,13 +359,14 @@ func healthSummary(status desktopagent.Status, err error) (bool, string, string,
 	}
 	description := map[string]string{
 		"sync_complete":      "最近一轮同步成功",
+		"sync_started":       "同步已开始，结果尚未确认",
 		"sync_deferred_busy": "输入法忙，已自动延后",
 		"sync_failed":        "同步失败（" + status.Health.LastFailureClass + "）",
 	}[status.Health.LastEventCode]
 	if description == "" {
 		description = "状态未知"
 	}
-	if status.Health.LastSuccessAt > 0 && time.Since(time.UnixMilli(status.Health.LastSuccessAt)) > 15*time.Minute {
+	if syncHealthStale(time.Now(), status.Health.LastSuccessAt, runtime.GOOS) {
 		description = "最近成功记录已过期，请检查后台同步"
 	}
 	return true, description, formatSettingsTime(status.Health.LastSuccessAt), status.Health.PendingUploads, status.EventLogAvailable

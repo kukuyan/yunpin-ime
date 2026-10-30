@@ -34,6 +34,17 @@ type fakeSettingsOperations struct {
 	lastPinned   bool
 }
 
+func TestWindowsHealthDoesNotExpireDuringNormalLowFrequencySchedule(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	last := now.Add(-30 * time.Minute).UnixMilli()
+	if syncHealthStale(now, last, "windows") {
+		t.Fatal("normal Windows wait shown as stale")
+	}
+	if !syncHealthStale(now, last, "darwin") {
+		t.Fatal("existing Mac freshness policy changed")
+	}
+}
+
 func (operations *fakeSettingsOperations) LoadGuards(context.Context) (desktopagent.GuardSettings, error) {
 	return operations.guards, nil
 }
