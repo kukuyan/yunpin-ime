@@ -70,9 +70,8 @@ function Export-GitTree {
     Invoke-Checked -FilePath "git" -ArgumentList @(
         "-C", $Checkout, "archive", "--format=tar", "--output=$archive", "HEAD"
     )
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
-        "-xf", $archive, "-C", $Destination,
-        "--options", "hdrcharset=UTF-8"
+    Invoke-Checked -FilePath "python" -ArgumentList @(
+        (Join-Path $PSScriptRoot "extract-git-archive.py"), $archive, $Destination, "0"
     )
     Remove-Item -LiteralPath $archive -Force
 }
@@ -108,10 +107,8 @@ function Export-GitSubtree {
     Invoke-Checked -FilePath "git" -ArgumentList @(
         "-C", $Checkout, "archive", "--format=tar", "--output=$archive", "HEAD", "--", $Tree
     )
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
-        "-xf", $archive, "-C", $Destination,
-        ("--strip-components=" + $treeComponents.Count),
-        "--options", "hdrcharset=UTF-8"
+    Invoke-Checked -FilePath "python" -ArgumentList @(
+        (Join-Path $PSScriptRoot "extract-git-archive.py"), $archive, $Destination, $treeComponents.Count
     )
     Remove-Item -LiteralPath $archive -Force
 }
