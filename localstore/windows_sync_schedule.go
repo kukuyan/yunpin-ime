@@ -7,8 +7,11 @@ import (
 	"time"
 )
 
-// EnsureWindowsSyncSchedule seeds older databases from their last complete
-// round. Call under the same operation lock used by manual synchronization.
+// EnsureWindowsSyncSchedule reconciles checkpoints with health records that
+// may have been written by a version which did not track network completion.
+// An unfinished or failed legacy round may have reached the network, so its
+// event time is a conservative lower bound rather than proof of success.
+// Call under the same operation lock used by manual synchronization.
 func (store *Store) EnsureWindowsSyncSchedule(ctx context.Context) error {
 	store.mutation.Lock()
 	defer store.mutation.Unlock()
@@ -25,6 +28,14 @@ func (store *Store) EnsureWindowsSyncSchedule(ctx context.Context) error {
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO windows_idle_sync(singleton,last_network_at,in_flight)
  VALUES(1,COALESCE((SELECT last_success_at FROM sync_health WHERE singleton=1),0),0)`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE windows_idle_sync SET last_network_at=MAX(
+ last_network_at,
+ COALESCE((SELECT last_success_at FROM sync_health WHERE singleton=1),0),
+ COALESCE((SELECT CASE WHEN last_event_code IN ('sync_started','sync_failed')
+   THEN last_event_at ELSE 0 END FROM sync_health WHERE singleton=1),0)
+) WHERE singleton=1`); err != nil {
 		return err
 	}
 	return tx.Commit()

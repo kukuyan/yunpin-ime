@@ -107,3 +107,47 @@ func TestWindowsScheduleSurvivesNetworkSuccessAndLaterFailure(t *testing.T) {
 		t.Fatalf("manual preflight lost prior unknown: %+v %v", h, err)
 	}
 }
+
+func TestWindowsScheduleReconcilesLegacyHealthConservatively(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		checkpoint bool
+		inFlight   bool
+		health     SyncHealth
+		want       int64
+	}{
+		{"first migration after unknown failure", false, false, SyncHealth{LastSuccessAt: 100, LastEventAt: 200, LastEventCode: "sync_failed", LastFailureClass: SyncFailureNetwork}, 200},
+		{"existing checkpoint after legacy failure", true, false, SyncHealth{LastSuccessAt: 100, LastEventAt: 300, LastEventCode: "sync_failed", LastFailureClass: SyncFailureLocalStore}, 300},
+		{"existing checkpoint after legacy success", true, false, SyncHealth{LastSuccessAt: 400, LastEventAt: 400, LastEventCode: "sync_complete", LastFailureClass: SyncFailureNone}, 400},
+		{"legacy interrupted start retains marker", true, true, SyncHealth{LastSuccessAt: 100, LastEventAt: 500, LastEventCode: "sync_started", LastFailureClass: SyncFailureNone}, 500},
+		{"old health cannot move checkpoint backwards", true, false, SyncHealth{LastSuccessAt: 10, LastEventAt: 20, LastEventCode: "sync_failed", LastFailureClass: SyncFailureNetwork}, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, path := openTestStore(t)
+			if tc.checkpoint {
+				if err := store.RecordSyncHealth(ctx, SyncHealth{LastSuccessAt: 100, LastEventAt: 100, LastEventCode: "sync_complete", LastFailureClass: SyncFailureNone}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.EnsureWindowsSyncSchedule(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.inFlight {
+				if err := store.BeginWindowsSync(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.RecordSyncHealth(ctx, tc.health); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.EnsureWindowsSyncSchedule(ctx); err != nil {
+				t.Fatal(err)
+			}
+			h, err := ReadSyncHealthForSchedule(ctx, path)
+			if err != nil || h.LastNetworkAt != tc.want || h.SyncInFlight != tc.inFlight {
+				t.Fatalf("checkpoint=%+v, want network=%d in-flight=%v; err=%v", h, tc.want, tc.inFlight, err)
+			}
+		})
+	}
+}

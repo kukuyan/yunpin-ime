@@ -26,8 +26,16 @@ func TestWindowsAutomaticDueUsesStrictSixHoursAndFailsClosed(t *testing.T) {
 		{"recovered unknown within six hours", localstore.SyncHealth{LastNetworkAt: now.Add(-time.Hour).UnixMilli(), LastEventAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventCode: "sync_started"}, false},
 		{"recovered unknown after six hours", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventAt: now.Add(-8 * time.Hour).UnixMilli(), LastEventCode: "sync_started"}, true},
 		{"network success then deployment fails", localstore.SyncHealth{LastNetworkAt: now.Add(-time.Hour).UnixMilli(), LastEventAt: now.Add(-time.Hour).UnixMilli(), LastEventCode: "sync_failed"}, false},
+		{"legacy manual success after stale checkpoint", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-time.Minute).UnixMilli(), LastEventAt: now.Add(-time.Minute).UnixMilli(), LastEventCode: "sync_complete"}, false},
+		{"legacy uncertain failure after stale checkpoint", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventAt: now.Add(-time.Minute).UnixMilli(), LastEventCode: "sync_failed"}, false},
+		{"legacy unknown failure at six hours", localstore.SyncHealth{LastNetworkAt: now.Add(-6 * time.Hour).UnixMilli(), LastEventAt: now.Add(-6 * time.Hour).UnixMilli(), LastEventCode: "sync_failed"}, false},
+		{"legacy unknown failure after six hours", localstore.SyncHealth{LastNetworkAt: now.Add(-6*time.Hour - time.Millisecond).UnixMilli(), LastEventAt: now.Add(-6*time.Hour - time.Millisecond).UnixMilli(), LastEventCode: "sync_failed"}, true},
+		{"legacy failure overrides older checkpoint at boundary", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventAt: now.Add(-6 * time.Hour).UnixMilli(), LastEventCode: "sync_failed"}, false},
+		{"legacy failure overrides older checkpoint beyond boundary", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventAt: now.Add(-6*time.Hour - time.Millisecond).UnixMilli(), LastEventCode: "sync_failed"}, true},
+		{"legacy start overrides older checkpoint at boundary", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventAt: now.Add(-6 * time.Hour).UnixMilli(), LastEventCode: "sync_started"}, false},
+		{"legacy start overrides older checkpoint beyond boundary", localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-7 * time.Hour).UnixMilli(), LastEventAt: now.Add(-6*time.Hour - time.Millisecond).UnixMilli(), LastEventCode: "sync_started"}, true},
 		{"failure before retry", localstore.SyncHealth{LastEventAt: now.Add(-14 * time.Minute).UnixMilli(), LastEventCode: "sync_failed"}, false},
-		{"failure after retry", localstore.SyncHealth{LastEventAt: now.Add(-15 * time.Minute).UnixMilli(), LastEventCode: "sync_failed"}, true},
+		{"failure after fifteen minutes still has unknown network outcome", localstore.SyncHealth{LastEventAt: now.Add(-15 * time.Minute).UnixMilli(), LastEventCode: "sync_failed"}, false},
 		{"unknown record", localstore.SyncHealth{LastEventAt: now.Add(-time.Hour).UnixMilli(), LastEventCode: "unknown"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -35,6 +43,48 @@ func TestWindowsAutomaticDueUsesStrictSixHoursAndFailsClosed(t *testing.T) {
 				t.Fatalf("due=%v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWindowsResidentRejectsLegacyFailureWrittenWhileTakingLock(t *testing.T) {
+	start := time.Unix(1800000000, 0)
+	now := start
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var rounds, waits, loads int
+	var health localstore.SyncHealth
+	ops := windowsIdleOperations{
+		session: 1,
+		observe: func() (windowsIdleSample, error) {
+			return windowsIdleSample{valid: true, sessionID: 1, state: windowsIdleActive, lastInputTick: 1, uptimeMS: uint64(now.Sub(start).Milliseconds()) + 1, eventRevision: 1}, nil
+		},
+		locked: func(f func() error) error {
+			if loads == 0 {
+				health = localstore.SyncHealth{
+					LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.Add(-7 * time.Hour).UnixMilli(),
+					LastEventAt: now.Add(-20 * time.Minute).UnixMilli(), LastEventCode: "sync_failed",
+				}
+			}
+			return f()
+		},
+		load: func(context.Context) (localstore.SyncHealth, error) { loads++; return health, nil },
+		sync: func(context.Context) (SyncSummary, error) { rounds++; return SyncSummary{}, nil },
+		now:  func() time.Time { return now },
+		wait: func(context.Context, time.Duration) error {
+			waits++
+			if waits == 18 {
+				cancel()
+				return context.Canceled
+			}
+			now = now.Add(time.Minute)
+			return nil
+		},
+	}
+	if err := runWindowsIdleLoop(ctx, RunOptions{Interval: time.Minute, MinBackoff: time.Second, MaxBackoff: time.Minute}, ops); err != nil {
+		t.Fatal(err)
+	}
+	if loads == 0 || rounds != 0 {
+		t.Fatalf("legacy unknown failure was ignored: loads=%d rounds=%d", loads, rounds)
 	}
 }
 
@@ -54,7 +104,9 @@ func TestWindowsResidentChecksIdleAndReloadsManualSuccessUnderLock(t *testing.T)
 			// First eligible check races a manual completion while acquiring the
 			// shared operation lock; it must not start an automatic round.
 			if loads == 0 {
-				health = localstore.SyncHealth{LastNetworkAt: now.UnixMilli(), LastSuccessAt: now.UnixMilli(), LastEventAt: now.UnixMilli(), LastEventCode: "sync_complete"}
+				// A legacy manual client may leave this Windows-specific
+				// checkpoint stale while updating the shared health record.
+				health = localstore.SyncHealth{LastNetworkAt: now.Add(-7 * time.Hour).UnixMilli(), LastSuccessAt: now.UnixMilli(), LastEventAt: now.UnixMilli(), LastEventCode: "sync_complete"}
 			}
 			return f()
 		},
