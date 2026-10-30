@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -135,7 +136,6 @@ func TestSettingsOnboardingCompletionUsesLiveActivationAndFreshSuccess(t *testin
 	}{
 		{"disabled", "后台同步已停用", func(f *fakeOnboardingUI) { f.activation.BackgroundEnabled = false }},
 		{"stopped", "后台同步未运行", func(f *fakeOnboardingUI) { f.activation.BackgroundRunning = false }},
-		{"stale", "最近成功记录已过期", func(f *fakeOnboardingUI) { f.activation.LastSuccessAt = time.Now().Add(-16 * time.Minute).UnixMilli() }},
 		{"private-disabled", "等待准备本机词库", func(f *fakeOnboardingUI) { f.activation.PrivateCandidatesEnabled = false }},
 		{"not-applied", "词库尚未由输入法确认加载", func(f *fakeOnboardingUI) { f.activation.SnapshotApplied = false }},
 		{"missing-baseline", "等待导入基础词库", func(f *fakeOnboardingUI) { f.activation.BaselinePresent = false }},
@@ -152,6 +152,19 @@ func TestSettingsOnboardingCompletionUsesLiveActivationAndFreshSuccess(t *testin
 				t.Fatalf("incorrect live state for %s", test.name)
 			}
 		})
+	}
+}
+
+func TestSettingsOnboardingFreshnessFollowsPlatformPolicy(t *testing.T) {
+	fake := connectedOnboardingUI()
+	fake.activation.LastSuccessAt = time.Now().Add(-16 * time.Minute).UnixMilli()
+	body := uiResponse(onboardingUIHandler(t, fake), settingsRequest(http.MethodGet, "/fixed-token/", nil)).Body.String()
+	if runtime.GOOS == "windows" {
+		if strings.Contains(body, "最近成功记录已过期") || !strings.Contains(body, "本机接入完成") {
+			t.Fatal("normal Windows low-frequency wait was reported stale")
+		}
+	} else if !strings.Contains(body, "最近成功记录已过期") || strings.Contains(body, "本机接入完成") {
+		t.Fatal("non-Windows stale success was reported complete")
 	}
 }
 
