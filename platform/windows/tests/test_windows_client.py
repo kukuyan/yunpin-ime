@@ -1106,7 +1106,7 @@ class WindowsClientTests(unittest.TestCase):
             "µë⌐σ▒ò-Unicode_compressed.webp"
         )
 
-        self.assertEqual(package.count('"--options", "hdrcharset=UTF-8"'), 2)
+        self.assertEqual(package.count('"extract-git-archive.py"'), 2)
         self.assertIn("[IO.Compression.ZipFile]::CreateFromDirectory(", package)
         self.assertIn("[Text.UTF8Encoding]::new($false, $true)", package)
         self.assertNotIn('"-a", "-c", "-f"', package)
@@ -1257,7 +1257,7 @@ class WindowsClientTests(unittest.TestCase):
             '"archive", "--format=tar", "--output=$archive", "HEAD", "--", $Tree',
             package,
         )
-        self.assertIn('("--strip-components=" + $treeComponents.Count)', package)
+        self.assertIn('$Destination, $treeComponents.Count', package)
         self.assertNotIn('("HEAD:" + $Tree)', package)
 
         archive = subprocess.run(
