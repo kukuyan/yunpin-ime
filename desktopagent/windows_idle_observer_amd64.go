@@ -54,19 +54,19 @@ func observeWindowsIdle(targetSession uint32) (windowsIdleSample, error) {
 	if err != nil || own != targetSession {
 		return sample, errors.New("target is not this process's interactive session")
 	}
-	var ptr uintptr
+	var ptr *byte
 	var size uint32
 	// WTSSessionInfoEx (25), WTS_CURRENT_SERVER_HANDLE (0).
 	ok, _, _ := idleQuerySession.Call(0, uintptr(own), 25, uintptr(unsafe.Pointer(&ptr)), uintptr(unsafe.Pointer(&size)))
-	if ok == 0 || ptr == 0 {
+	if ok == 0 || ptr == nil {
 		return sample, errors.New("session information unavailable")
 	}
-	defer idleFreeMemory.Call(ptr)
+	defer idleFreeMemory.Call(uintptr(unsafe.Pointer(ptr)))
 	// WTSINFOEXW's level-1 union is 8-byte aligned in the x64 ABI.
 	if size < 20 {
 		return sample, errors.New("session information truncated")
 	}
-	data := unsafe.Slice((*byte)(unsafe.Pointer(ptr)), 20)
+	data := unsafe.Slice(ptr, 20)
 	if binary.LittleEndian.Uint32(data[0:4]) != 1 || binary.LittleEndian.Uint32(data[8:12]) != own {
 		return sample, errors.New("session identity or information level mismatch")
 	}
@@ -82,15 +82,15 @@ func observeWindowsIdle(targetSession uint32) (windowsIdleSample, error) {
 	default:
 		return sample, errors.New("interactive session state is unknown")
 	}
-	var entries uintptr
+	var entries *idleSessionInfo
 	var count uint32
 	ok, _, _ = idleEnumerateSessions.Call(0, 0, 1, uintptr(unsafe.Pointer(&entries)), uintptr(unsafe.Pointer(&count)))
-	if ok == 0 || entries == 0 || count == 0 || count > 65536 {
+	if ok == 0 || entries == nil || count == 0 || count > 65536 {
 		return windowsIdleSample{}, errors.New("session enumeration unavailable")
 	}
-	defer idleFreeMemory.Call(entries)
+	defer idleFreeMemory.Call(uintptr(unsafe.Pointer(entries)))
 	found := false
-	for _, e := range unsafe.Slice((*idleSessionInfo)(unsafe.Pointer(entries)), int(count)) {
+	for _, e := range unsafe.Slice(entries, int(count)) {
 		if e.id == own {
 			found = true
 			if e.state != state {
