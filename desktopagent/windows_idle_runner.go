@@ -19,7 +19,21 @@ func windowsAutomaticDue(h localstore.SyncHealth, now time.Time) bool {
 	if now.IsZero() || h.LastSuccessAt < 0 || h.LastEventAt < 0 || h.LastNetworkAt < 0 || h.SyncInFlight {
 		return false
 	}
-	if h.LastNetworkAt > 0 && now.Sub(time.UnixMilli(h.LastNetworkAt)) <= windowsMinimumSyncInterval {
+	// A previous-version manual client may have updated health without
+	// updating the Windows checkpoint while this resident was running. A
+	// failed or unfinished round may also have reached the network. Treat
+	// these timestamps as conservative bounds, not proof of a network success.
+	latestPossible := h.LastNetworkAt
+	if h.LastSuccessAt > latestPossible {
+		latestPossible = h.LastSuccessAt
+	}
+	switch h.LastEventCode {
+	case "sync_complete", "sync_started", "sync_failed":
+		if h.LastEventAt > latestPossible {
+			latestPossible = h.LastEventAt
+		}
+	}
+	if latestPossible > 0 && now.Sub(time.UnixMilli(latestPossible)) <= windowsMinimumSyncInterval {
 		return false
 	}
 	switch h.LastEventCode {
