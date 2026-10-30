@@ -76,7 +76,10 @@ class SettingsServerPathTest(unittest.TestCase):
                 command = [compiler, "-std=c++17", str(program), "-o", str(binary)]
                 if os.name == "nt":
                     command.insert(1, "-municode")
-            subprocess.run(command, cwd=target, check=True, timeout=30)
+            # Cold Windows CI hosts can take over 30 seconds to compile and link
+            # even this small filesystem harness. Keep a bounded failure while
+            # allowing for runner startup and toolchain load.
+            subprocess.run(command, cwd=target, check=True, timeout=120)
             for location in (target / "Preview", target / "custom install" / "Preview", target / "用户目录" / "Preview"):
                 executable = location / "current" / "YunPinServer.exe"
                 expected = location / "support" / "sync-agent" / "yunpin-settings.exe"
