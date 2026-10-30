@@ -54,7 +54,7 @@
       },
       {
         "path": "platform/patches/weasel/0008-yunpin-open-local-settings.patch",
-        "sha256": "1229da54a4279ea990541aaf59b01ee13f54c85c75c4846c5fc74eb8bba3bc82"
+        "sha256": "2f33ef01163211cb0dd0b7709b7c1cd6a28745acb75b23d50411d13090736512"
       },
       {
         "path": "platform/patches/weasel/0009-yunpin-start-replay-lab-spooler.patch",
