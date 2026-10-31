@@ -36,6 +36,24 @@ static BOOL WINAPI BlockDeleteFileW(LPCWSTR) {
 
 namespace fs = std::filesystem;
 
+// Some elevated Windows environments choose Administrators as the default
+// owner even when creating a directory with a security descriptor. Set the
+// owner only on the synthetic directories created by this test.
+static bool SetSyntheticOwner(const fs::path& path) {
+  std::vector<unsigned char> user_storage;
+  PSID user = nullptr;
+  if (!yunpin::GetCurrentUserSid(&user_storage, &user)) return false;
+  HANDLE handle = CreateFileW(path.c_str(), WRITE_OWNER | READ_CONTROL,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      nullptr);
+  if (handle == INVALID_HANDLE_VALUE) return false;
+  const DWORD result = ::SetSecurityInfo(handle, SE_FILE_OBJECT,
+      OWNER_SECURITY_INFORMATION, user, nullptr, nullptr, nullptr);
+  CloseHandle(handle);
+  return result == ERROR_SUCCESS;
+}
+
 static bool AddSyntheticExtraAce(const fs::path& path) {
   HANDLE handle = CreateFileW(path.c_str(), READ_CONTROL | WRITE_DAC,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -84,11 +102,21 @@ int main() {
   for (const wchar_t* part : {L"YunPinIME", L"sync", L"native-events", L"incoming"}) {
     current /= part;
     assert(CreateDirectoryW(current.c_str(), security.attributes(true)));
+    assert(SetSyntheticOwner(current));
   }
   const fs::path incoming = current;
 
   security_sets.store(0);
-  assert(yunpin::EnsurePrivateDirectory(incoming));
+  const bool initial_ready = yunpin::EnsurePrivateDirectory(incoming);
+  if (!initial_ready) {
+    std::vector<yunpin::WindowsPathComponent> chain;
+    std::wcerr << L"synthetic path: " << incoming.native()
+               << L"; path_chain="
+               << yunpin::InspectWindowsPathChain(incoming, true, &chain)
+               << L"; incoming_security="
+               << yunpin::ValidatePrivateWindowsPath(incoming, true) << L'\n';
+  }
+  assert(initial_ready);
   assert(security_sets.load() == 0);  // No redundant recursive ACL update.
   assert(yunpin::ValidatePrivateWindowsPath(incoming, true));
 
