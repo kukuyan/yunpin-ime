@@ -136,7 +136,12 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: .\platform\windows\scripts\Build-Preview.ps1
+        run: |
+          if ($env:GITHUB_REF -eq 'refs/heads/codex/yunpin-r0w-acl-cpu') {
+            .\platform\windows\scripts\Build-Preview.ps1 -SkipPackage
+          } else {
+            .\platform\windows\scripts\Build-Preview.ps1
+          }
       - name: Upload R0W engine candidate only
         if: github.ref == 'refs/heads/codex/yunpin-r0w-acl-cpu'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -145,6 +150,13 @@ jobs:
           path: build/windows/weasel-src/output/rime.dll
           if-no-files-found: error
           retention-days: 3
+      - name: Package Windows preview after isolated engine capture
+        if: github.ref == 'refs/heads/codex/yunpin-r0w-acl-cpu'
+        shell: pwsh
+        run: |
+          .\platform\windows\scripts\Package-Preview.ps1 `
+            -OutputRoot ([IO.Path]::GetFullPath('build/windows')) `
+            -WeaselSource ([IO.Path]::GetFullPath('build/windows/weasel-src'))
       - name: Rebuild extracted Windows source archive offline
         shell: pwsh
         run: |
