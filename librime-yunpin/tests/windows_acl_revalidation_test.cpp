@@ -91,7 +91,10 @@ static bool AddSyntheticExtraAce(const fs::path& path) {
 }
 
 int main() {
-  const fs::path base = fs::temp_directory_path() /
+  // Windows CI may expose TEMP through an 8.3 alias such as RUNNER~1.
+  // Production path checks compare the final long path of each handle, so
+  // use the canonical directory for this synthetic fixture as well.
+  const fs::path base = fs::canonical(fs::temp_directory_path()) /
       (L"yunpin-acl-revalidation-" + std::to_wstring(GetCurrentProcessId()) +
        L"-" + std::to_wstring(GetTickCount64()));
   assert(!fs::exists(base));
