@@ -971,10 +971,14 @@ bool HardenAndValidateOpenedWindowsPath(
   try {
     std::vector<WindowsPathComponent> before;
     WindowsObjectIdentity opened;
+    // Setting an already-correct inheritable DACL can make Windows walk a
+    // large descendant tree. Keep all identity checks, but only harden when
+    // the opened object's existing descriptor fails the same validation.
     if (!InspectWindowsPathChain(path, directory, &before) ||
         !WindowsIdentityForHandle(handle, &opened) ||
         !(opened == before.back().identity) ||
-        !security.HardenHandle(handle, directory, &opened)) {
+        (!security.ValidateHandle(handle, directory, &opened) &&
+         !security.HardenHandle(handle, directory, &opened))) {
       return false;
     }
     std::vector<WindowsPathComponent> after;

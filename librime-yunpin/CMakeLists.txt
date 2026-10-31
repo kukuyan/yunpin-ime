@@ -124,6 +124,24 @@ else()
   add_test(NAME yunpin_native_selection_events_tests
     COMMAND yunpin_native_selection_events_tests)
 
+  if(WIN32)
+    # Compile the production implementation with a counted security API so
+    # the test can detect redundant ACL writes without inspecting user data.
+    add_executable(yunpin_windows_acl_revalidation_tests
+      tests/windows_acl_revalidation_test.cpp
+    )
+    target_include_directories(yunpin_windows_acl_revalidation_tests PRIVATE include)
+    target_compile_features(yunpin_windows_acl_revalidation_tests PRIVATE cxx_std_17)
+    target_link_libraries(yunpin_windows_acl_revalidation_tests PRIVATE
+      Advapi32 Shell32 Ole32 Uuid Threads::Threads)
+    if(MSVC)
+      target_compile_options(yunpin_windows_acl_revalidation_tests PRIVATE
+        /W4 /WX /permissive-)
+    endif()
+    add_test(NAME yunpin_windows_acl_revalidation_tests
+      COMMAND yunpin_windows_acl_revalidation_tests)
+  endif()
+
   add_executable(yunpin_replay_native_tests
     tests/replay_native_test.cpp
   )
