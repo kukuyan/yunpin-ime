@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/kukuyan/yunpin-ime/localstore"
 )
 
 // ResidentOptions configures one background synchronization process.
@@ -22,6 +24,9 @@ type ResidentOptions struct {
 	// Events receives the redacted run events. It is called from the runner
 	// goroutine and must not block for long. A nil value discards them.
 	Events func(RunEvent)
+	// VerifyScheduleOnce runs the Windows startup and schedule read without a
+	// network synchronization, then exits. It is for on-device verification.
+	VerifyScheduleOnce bool
 }
 
 // NewResidentAgent builds the agent the background process uses, wired to the
@@ -57,17 +62,33 @@ func NewResidentAgent(defaults Paths) (Agent, error) {
 // Both the `run` subcommand of the console binary and the windowless resident
 // binary call this, so the two cannot diverge in what they configure.
 func RunResident(ctx context.Context, defaults Paths, options ResidentOptions) error {
-	agent, err := NewResidentAgent(defaults)
-	if err != nil {
-		return err
-	}
 	events, closeLog := residentEventSink(defaults, options.Events)
 	defer closeLog()
-	return agent.Run(ctx, RunOptions{
-		LockPath: defaults.LockPath,
-		Interval: options.Interval,
-		OnEvent:  events,
+	agent, err := NewResidentAgent(defaults)
+	if err != nil {
+		events(residentFailureEvent(err, false))
+		return err
+	}
+	started := false
+	err = agent.Run(ctx, RunOptions{
+		LockPath:           defaults.LockPath,
+		Interval:           options.Interval,
+		OnEvent:            events,
+		OnStarted:          func() { started = true },
+		VerifyScheduleOnce: options.VerifyScheduleOnce,
 	})
+	if err != nil {
+		events(residentFailureEvent(err, started))
+	}
+	return err
+}
+
+func residentFailureEvent(err error, started bool) RunEvent {
+	code := "resident_start_failed"
+	if started {
+		code = "resident_runtime_failed"
+	}
+	return RunEvent{Code: code, FailureClass: classifySyncFailure(err)}
 }
 
 func residentEventSink(defaults Paths, caller func(RunEvent)) (func(RunEvent), func()) {
@@ -79,6 +100,9 @@ func residentEventSink(defaults Paths, caller func(RunEvent)) (func(RunEvent), f
 		log = nil
 	}
 	events := func(event RunEvent) {
+		if event.Code == "sync_failed" && event.FailureClass == localstore.SyncFailurePrivateACL {
+			event.Code = "private_acl_invalid"
+		}
 		if log != nil {
 			log.Write(event)
 		}

@@ -57,6 +57,16 @@ func TestEventLogWritesOneRedactedLinePerEvent(t *testing.T) {
 	}
 }
 
+func TestScheduleCheckIsNotReportedAsSynchronization(t *testing.T) {
+	log, paths := newTestEventLog(t, eventLogMaxBytes)
+	log.Write(RunEvent{Code: "schedule_check_ok", FailureClass: "none"})
+	content, err := os.ReadFile(EventLogPath(paths))
+	if err != nil || !strings.Contains(string(content), `"code":"schedule_check_ok"`) ||
+		!strings.Contains(string(content), `"successful":false`) {
+		t.Fatalf("unexpected schedule check record: %s %v", content, err)
+	}
+}
+
 // The log must stay a numeric health record. If a future change ever widens
 // RunEvent, this catches the first field that could carry user text.
 func TestEventLogCarriesNoFreeText(t *testing.T) {

@@ -518,7 +518,7 @@ func verifyPrivateDatabaseFiles(path string) error {
 			return err
 		}
 		if !privateFilePermissionsOK(candidate, info) {
-			return fmt.Errorf("encrypted SQLite file %q does not have the exact private Windows ACL", candidate)
+			return fmt.Errorf("%w: encrypted SQLite file %q does not have the exact private Windows ACL", ErrPrivateACLInvalid, candidate)
 		}
 	}
 	return nil
@@ -537,7 +537,7 @@ func protectPrivateDatabaseFiles(path string) error {
 			return err
 		}
 		if err := setAndVerifyPrivateWindowsPath(candidate, false); err != nil {
-			return fmt.Errorf("protect encrypted SQLite file %q: %w", candidate, err)
+			return fmt.Errorf("%w: protect encrypted SQLite file %q: %v", ErrPrivateACLInvalid, candidate, err)
 		}
 	}
 	return verifyPrivateDatabaseFiles(path)
