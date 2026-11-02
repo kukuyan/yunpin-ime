@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -1106,7 +1107,8 @@ class WindowsClientTests(unittest.TestCase):
             "µë⌐σ▒ò-Unicode_compressed.webp"
         )
 
-        self.assertEqual(package.count('"--options", "hdrcharset=UTF-8"'), 2)
+        self.assertEqual(package.count('[IO.Compression.ZipFile]::ExtractToDirectory('), 2)
+        self.assertNotIn('-FilePath "tar.exe"', package)
         self.assertIn("[IO.Compression.ZipFile]::CreateFromDirectory(", package)
         self.assertIn("[Text.UTF8Encoding]::new($false, $true)", package)
         self.assertNotIn('"-a", "-c", "-f"', package)
@@ -1248,16 +1250,16 @@ class WindowsClientTests(unittest.TestCase):
         Windows host with ``core.autocrlf=true``, that converted LF-locked patch
         blobs to CRLF and made the source archive fail Build-Preview.ps1's raw
         patch hash gate. Archive with a root-relative pathspec, then strip the
-        retained leading path components during extraction.
+        retained leading path components from the extracted ZIP directory.
         """
         package = (WINDOWS / "scripts" / "Package-Preview.ps1").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            '"archive", "--format=tar", "--output=$archive", "HEAD", "--", $Tree',
+            '"archive", "--format=zip", "--output=$archive", "HEAD", "--", $Tree',
             package,
         )
-        self.assertIn('("--strip-components=" + $treeComponents.Count)', package)
+        self.assertIn('Copy-TreeContent -Source (Join-Path $expanded $Tree)', package)
         self.assertNotIn('("HEAD:" + $Tree)', package)
 
         archive = subprocess.run(
@@ -1266,7 +1268,7 @@ class WindowsClientTests(unittest.TestCase):
                 "-c",
                 "core.autocrlf=true",
                 "archive",
-                "--format=tar",
+                "--format=zip",
                 "HEAD",
                 "--",
                 "platform/patches/weasel",
@@ -1277,21 +1279,18 @@ class WindowsClientTests(unittest.TestCase):
             check=True,
             stdout=subprocess.PIPE,
         ).stdout
-        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as stream:
+        with zipfile.ZipFile(io.BytesIO(archive)) as stream:
             for row in self.lock["weasel"]["patches"] + self.lock["librime"]["patches"]:
-                exported = stream.extractfile(row["path"])
-                self.assertIsNotNone(exported)
+                exported = stream.read(row["path"])
                 self.assertEqual(
-                    hashlib.sha256(exported.read()).hexdigest(), row["sha256"]
+                    hashlib.sha256(exported).hexdigest(), row["sha256"]
                 )
 
             # Do not solve the patch problem with a global LF rewrite: explicit
             # Windows-script CRLF attributes must still be honored.
-            script = stream.extractfile(
+            script_bytes = stream.read(
                 "platform/windows/scripts/Build-Preview.ps1"
             )
-            self.assertIsNotNone(script)
-            script_bytes = script.read()
             self.assertIn(b"\r\n", script_bytes)
             self.assertNotIn(b"\n", script_bytes.replace(b"\r\n", b""))
 

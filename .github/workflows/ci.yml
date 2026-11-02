@@ -117,6 +117,9 @@ jobs:
       - name: Verify installer UTF-8 opt-in preservation
         shell: pwsh
         run: .\platform\windows\tests\Test-Install-Preview-Utf8.ps1
+      - name: Verify Git exports preserve Unicode and root attributes
+        shell: pwsh
+        run: .\platform\windows\tests\Test-Package-Export.ps1
       - name: Verify package transaction rollback with isolated fixtures
         shell: pwsh
         run: .\platform\windows\tests\Test-Install-Preview-Transaction.ps1

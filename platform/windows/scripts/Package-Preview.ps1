@@ -66,13 +66,14 @@ function Export-GitTree {
         }
         return
     }
-    $archive = Join-Path $ScratchRoot (([IO.Path]::GetFileName($Destination)) + "-" + [guid]::NewGuid().ToString("N") + ".tar")
+    $archive = Join-Path $ScratchRoot (([IO.Path]::GetFileName($Destination)) + "-" + [guid]::NewGuid().ToString("N") + ".zip")
     Invoke-Checked -FilePath "git" -ArgumentList @(
-        "-C", $Checkout, "archive", "--format=tar", "--output=$archive", "HEAD"
+        "-C", $Checkout, "archive", "--format=zip", "--output=$archive", "HEAD"
     )
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
-        "-xf", $archive, "-C", $Destination,
-        "--options", "hdrcharset=UTF-8"
+    # Decode Git's UTF-8 paths directly. Windows tar.exe can still reject or
+    # mangle Unicode filenames under a legacy code page with hdrcharset set.
+    [IO.Compression.ZipFile]::ExtractToDirectory(
+        $archive, $Destination, [Text.UTF8Encoding]::new($false, $true)
     )
     Remove-Item -LiteralPath $archive -Force
 }
@@ -100,19 +101,20 @@ function Export-GitSubtree {
         Copy-TreeContent -Source $sourceTree -Destination $Destination
         return
     }
-    $archive = Join-Path $ScratchRoot (([IO.Path]::GetFileName($Destination)) + "-" + [guid]::NewGuid().ToString("N") + ".tar")
+    $archive = Join-Path $ScratchRoot (([IO.Path]::GetFileName($Destination)) + "-" + [guid]::NewGuid().ToString("N") + ".zip")
     # Archive from the repository root so the root .gitattributes remains in
     # scope. Archiving HEAD:$Tree drops those attributes; with core.autocrlf on
     # Windows, that silently rewrites LF-locked patch files to CRLF and makes
     # the corresponding-source archive fail its own dependency hash gate.
     Invoke-Checked -FilePath "git" -ArgumentList @(
-        "-C", $Checkout, "archive", "--format=tar", "--output=$archive", "HEAD", "--", $Tree
+        "-C", $Checkout, "archive", "--format=zip", "--output=$archive", "HEAD", "--", $Tree
     )
-    Invoke-Checked -FilePath "tar.exe" -ArgumentList @(
-        "-xf", $archive, "-C", $Destination,
-        ("--strip-components=" + $treeComponents.Count),
-        "--options", "hdrcharset=UTF-8"
+    $expanded = $archive + ".expanded"
+    [IO.Compression.ZipFile]::ExtractToDirectory(
+        $archive, $expanded, [Text.UTF8Encoding]::new($false, $true)
     )
+    Copy-TreeContent -Source (Join-Path $expanded $Tree) -Destination $Destination
+    Remove-Item -LiteralPath $expanded -Recurse -Force
     Remove-Item -LiteralPath $archive -Force
 }
 
