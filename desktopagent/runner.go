@@ -20,22 +20,31 @@ type RunEvent struct {
 	Summary      SyncSummary
 }
 
+// ErrPrivateACLInvalid identifies private-file permission failures without
+// exposing a path or raw operating-system error in the event log.
+var ErrPrivateACLInvalid = errors.New("private access controls are invalid")
+
 func validateRunEvent(event RunEvent) error {
 	switch event.Code {
 	case "sync_complete":
 		if !event.Successful || event.FailureClass != localstore.SyncFailureNone {
 			return errors.New("successful run event is inconsistent")
 		}
-	case "sync_deferred_busy":
+	case "sync_deferred_busy", "schedule_check_ok":
 		if event.Successful || event.FailureClass != localstore.SyncFailureNone {
 			return errors.New("deferred run event is inconsistent")
 		}
-	case "sync_failed":
+	case "sync_failed", "resident_start_failed", "resident_runtime_failed":
 		if event.Successful || (event.FailureClass != localstore.SyncFailureNetwork &&
 			event.FailureClass != localstore.SyncFailureAuth &&
 			event.FailureClass != localstore.SyncFailureRelayProtocol &&
-			event.FailureClass != localstore.SyncFailureLocalStore) {
+			event.FailureClass != localstore.SyncFailureLocalStore &&
+			event.FailureClass != localstore.SyncFailurePrivateACL) {
 			return errors.New("failed run event is inconsistent")
+		}
+	case "private_acl_invalid":
+		if event.Successful || event.FailureClass != localstore.SyncFailurePrivateACL {
+			return errors.New("private ACL event is inconsistent")
 		}
 	default:
 		return errors.New("unknown run event code")
@@ -51,11 +60,13 @@ type RunOptions struct {
 	// ResidentLockPath keeps exactly one background loop alive. When omitted it
 	// is derived from LockPath, preserving the fixed platform state root without
 	// adding a caller-controlled location.
-	ResidentLockPath string
-	Interval         time.Duration
-	MinBackoff       time.Duration
-	MaxBackoff       time.Duration
-	OnEvent          func(RunEvent)
+	ResidentLockPath   string
+	Interval           time.Duration
+	MinBackoff         time.Duration
+	MaxBackoff         time.Duration
+	OnEvent            func(RunEvent)
+	OnStarted          func()
+	VerifyScheduleOnce bool
 }
 
 // maxIdleSyncInterval is also the healthy resident's remote-change poll-start
@@ -149,6 +160,9 @@ func jitterRunDelay(event RunEvent, delay time.Duration) time.Duration {
 // classifySyncFailure maps errors to a closed, redacted boundary. It never
 // serializes the underlying message, endpoint, token, account or device.
 func classifySyncFailure(syncErr error) string {
+	if errors.Is(syncErr, ErrPrivateACLInvalid) {
+		return localstore.SyncFailurePrivateACL
+	}
 	var apiError *syncclient.APIError
 	if errors.As(syncErr, &apiError) {
 		if apiError.Status == 401 || apiError.Status == 403 {

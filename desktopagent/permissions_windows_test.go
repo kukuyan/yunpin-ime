@@ -4,6 +4,7 @@
 package desktopagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kukuyan/yunpin-ime/localstore"
 	"golang.org/x/sys/windows"
 )
 
@@ -393,6 +395,60 @@ func TestWindowsDatabaseAndSidecarsAreHardenedTogether(t *testing.T) {
 	}
 	if err := verifyPrivateDatabaseFiles(database); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWindowsScheduleReadPreservesPrivateDatabaseSidecars(t *testing.T) {
+	ctx := context.Background()
+	database := filepath.Join(windowsPrivateTestRoot(t), "private.db")
+	store, err := localstore.Open(ctx, database, bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureWindowsSyncSchedule(ctx); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := protectPrivateDatabaseFiles(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPrivateDatabaseFiles(database); err != nil {
+		t.Fatalf("fixture is not private before read: %v", err)
+	}
+	if _, err := readPrivateWindowsScheduleHealth(ctx, database); err != nil {
+		t.Fatalf("read scheduling metadata: %v", err)
+	}
+	if err := verifyPrivateDatabaseFiles(database); err != nil {
+		t.Fatalf("scheduling read left non-private database files: %v", err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		info, err := os.Lstat(database + suffix)
+		if err != nil || !privateFilePermissionsOK(database+suffix, info) {
+			t.Fatalf("scheduling sidecar %s is absent or non-private: %v", suffix, err)
+		}
+	}
+}
+
+func TestWindowsScheduleReadRejectsExistingUnsafeSidecar(t *testing.T) {
+	root := windowsPrivateTestRoot(t)
+	database := filepath.Join(root, "private.db")
+	writeWindowsPrivateTestFile(t, database, []byte("synthetic"))
+	sidecar := database + "-wal"
+	writeWindowsPrivateTestFile(t, sidecar, []byte("synthetic"))
+	user, _, err := currentUserAndSystemSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyUnprotectedWindowsTestDACL(t, sidecar, "D:(A;;FA;;;SY)(A;;FA;;;"+user.String()+")")
+	if _, err := readPrivateWindowsScheduleHealth(context.Background(), database); !errors.Is(err, ErrPrivateACLInvalid) {
+		t.Fatalf("unsafe sidecar was not rejected as an ACL failure: %v", err)
+	}
+	info, err := os.Lstat(sidecar)
+	if err != nil || privateFilePermissionsOK(sidecar, info) {
+		t.Fatalf("pre-existing unsafe sidecar was modified or lost: %v", err)
 	}
 }
 

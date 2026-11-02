@@ -32,6 +32,7 @@ func run(ctx context.Context, arguments []string) error {
 	set := flag.NewFlagSet("yunpin-sync-resident", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
 	interval := set.Duration("interval", time.Minute, "successful synchronization interval")
+	verifySchedule := set.Bool("verify-schedule-once", false, "verify the Windows scheduling read without syncing")
 	if err := set.Parse(arguments); err != nil {
 		return errors.New("usage: yunpin-sync-resident [--interval <duration>]")
 	}
@@ -47,7 +48,7 @@ func run(ctx context.Context, arguments []string) error {
 		return err
 	}
 	return desktopagent.RunResident(ctx, defaults, desktopagent.ResidentOptions{
-		Interval: *interval,
+		Interval: *interval, VerifyScheduleOnce: *verifySchedule,
 	})
 }
 

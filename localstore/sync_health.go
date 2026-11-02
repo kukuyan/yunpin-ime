@@ -57,6 +57,7 @@ const (
 	SyncFailureAuth          = "auth"
 	SyncFailureRelayProtocol = "relay_protocol"
 	SyncFailureLocalStore    = "local_store"
+	SyncFailurePrivateACL    = "private_acl_invalid"
 	// SyncFailureUnknown is used only when migrating a historical
 	// sync_failed row that predates failure classification. New failures must
 	// always choose one of the concrete classes above.
@@ -69,6 +70,7 @@ var allowedSyncFailureClasses = map[string]struct{}{
 	SyncFailureAuth:          {},
 	SyncFailureRelayProtocol: {},
 	SyncFailureLocalStore:    {},
+	SyncFailurePrivateACL:    {},
 }
 
 const syncHealthSchema = `
